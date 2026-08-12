@@ -45,7 +45,7 @@ def write_json_atomic(path: Path, value: Any) -> None:
     temp_path = Path(handle.name)
     try:
         with handle:
-            json.dump(value, handle, indent=2, ensure_ascii=False)
+            json.dump(value, handle, indent=4, ensure_ascii=False)
             handle.write("\n")
         os.replace(temp_path, path)
     finally:

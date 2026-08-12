@@ -77,12 +77,16 @@ class PolarisCoreTests(unittest.TestCase):
         write_json_atomic(path, value)
 
     def test_new_draft_is_valid_and_rebuildable(self) -> None:
+        """新建 DRAFT 任务可校验，并能从事件账本重建完全一致的状态。"""
         result = validate(self.repo, "TASK-0001")
         self.assertEqual(result["state"], "DRAFT")
         rebuilt = rebuild_state_value(self.task / "events.jsonl")
         self.assertEqual(rebuilt, read_json(self.task / "state.json"))
+        state_text = (self.task / "state.json").read_text(encoding="utf-8")
+        self.assertIn('\n    "task_id":', state_text)
 
     def test_legal_and_eight_illegal_work_item_fixtures(self) -> None:
+        """合法 Work Item 通过，八类字段、ID、Revision 和风险格式错误被拒绝。"""
         fixture = read_json(ROOT / "tests" / "fixtures" / "work-item-cases.json")
         schema = read_json(ROOT / "schemas" / "work-item.schema.json")
         self.assertEqual(validate_schema(fixture["legal"], schema), [])
@@ -100,6 +104,7 @@ class PolarisCoreTests(unittest.TestCase):
                 self.assertTrue(validate_schema(value, schema))
 
     def test_qualify_plan_and_reject_illegal_close(self) -> None:
+        """DRAFT 可合法进入 QUALIFIED/PLANNED，但不能越过门禁直接 CLOSED。"""
         self.freeze_work_item()
         qualified = transition(
             self.repo, "TASK-0001", "QUALIFY", [], None, None, None, None, None, None
@@ -125,6 +130,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(validate(self.repo, "TASK-0001")["state"], "PLANNED")
 
     def test_rebuild_repairs_state_projection(self) -> None:
+        """手工伪造 CLOSED 状态会被发现，state 可由 events 恢复为 DRAFT。"""
         state_path = self.task / "state.json"
         state = read_json(state_path)
         state["status"] = "CLOSED"
@@ -135,11 +141,13 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(read_json(state_path)["status"], "DRAFT")
 
     def test_missing_work_item_is_an_input_error(self) -> None:
+        """当前 Revision 的 Work Item 缺失时返回输入错误，不猜测任务合同。"""
         (self.task / "revisions" / "work-item-r001.json").unlink()
         with self.assertRaises(InputFailure):
             validate(self.repo, "TASK-0001")
 
     def test_broken_event_sequence_is_rejected(self) -> None:
+        """Event sequence 断裂时拒绝恢复，避免跳过或重排审计事件。"""
         append_jsonl(
             self.task / "events.jsonl",
             {
@@ -153,6 +161,7 @@ class PolarisCoreTests(unittest.TestCase):
             validate(self.repo, "TASK-0001")
 
     def test_blocked_task_only_resumes_to_blocked_from(self) -> None:
+        """BLOCKED 保存原状态，解除阻塞后只能返回 blocked_from。"""
         blocked = transition(
             self.repo,
             "TASK-0001",
@@ -181,6 +190,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(resumed["to"], "DRAFT")
 
     def test_transition_lock_conflict_is_rejected(self) -> None:
+        """任务锁已占用时拒绝并发状态写入，保护 event/state 一致性。"""
         (self.task / ".transition.lock").write_text("held", encoding="utf-8")
         with self.assertRaises(InputFailure):
             transition(
@@ -188,6 +198,7 @@ class PolarisCoreTests(unittest.TestCase):
             )
 
     def test_project_version_mismatch_is_rejected(self) -> None:
+        """项目与 vendored Polaris 版本不一致时拒绝执行，不进行隐式迁移。"""
         project_path = self.repo / ".polaris" / "project.json"
         project = read_json(project_path)
         project["polaris_version"] = "0.1.9"
@@ -196,6 +207,7 @@ class PolarisCoreTests(unittest.TestCase):
             validate_project(self.repo)
 
     def test_risk_flag_requires_r2(self) -> None:
+        """任一高风险标记为 true 时，非 R2 Work Item 会被机械拒绝。"""
         path = self.task / "revisions" / "work-item-r001.json"
         value = read_json(path)
         value["risk_flags"]["security"] = True
@@ -204,6 +216,7 @@ class PolarisCoreTests(unittest.TestCase):
             validate(self.repo, "TASK-0001")
 
     def test_vendored_target_is_self_contained(self) -> None:
+        """目标仓库 vendoring 后仅凭 Skills、工具、状态和 Python 即可校验。"""
         vendor(ROOT, self.repo, False)
         self.assertTrue(
             (self.repo / ".agents" / "skills" / "engineering-task" / "SKILL.md").is_file()
@@ -213,6 +226,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(result["active_tasks"], 1)
 
     def test_new_revision_is_created_then_explicitly_activated(self) -> None:
+        """需求变化创建不可覆盖的新 Revision，并经 NEW_REVISION 显式激活。"""
         self.freeze_work_item()
         transition(
             self.repo, "TASK-0001", "QUALIFY", [], None, None, None, None, None, None
@@ -239,6 +253,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(read_json(self.task / "state.json")["current_revision"], 2)
 
     def test_implementation_and_documentation_subject_are_bound(self) -> None:
+        """Implementation 与 Knowledge Delta 必须绑定同一 Git subject 和 changed paths。"""
         self.freeze_work_item()
         build_working_set(self.repo, "TASK-0001", True)
         transition(
@@ -323,6 +338,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(validate(self.repo, "TASK-0001")["state"], "DOCS_SYNCED")
 
     def test_stale_documentation_is_rejected(self) -> None:
+        """Knowledge Delta 存在未处置 STALE 时拒绝文档同步通过。"""
         self.test_implementation_and_documentation_subject_are_bound()
         knowledge_path = self.task / "knowledge" / "r001" / "knowledge-delta-001.json"
         knowledge = read_json(knowledge_path)
@@ -332,6 +348,7 @@ class PolarisCoreTests(unittest.TestCase):
             check_docs(self.repo, "TASK-0001", knowledge_path)
 
     def test_full_r1_flow_closes_only_after_review_and_validation(self) -> None:
+        """R1 必须依次通过独立 Review、全部 AC Validation 和 Result 才能 CLOSED。"""
         self.test_implementation_and_documentation_subject_are_bound()
         state = read_json(self.task / "state.json")
         subject = state["subject"]
