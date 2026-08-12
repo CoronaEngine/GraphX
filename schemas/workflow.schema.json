@@ -1,0 +1,53 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris workflow",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "workflow_version",
+        "initial_state",
+        "terminal_states",
+        "states",
+        "transitions",
+        "rigor"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "schema_version": {
+            "type": "string"
+        },
+        "workflow_version": {
+            "type": "string"
+        },
+        "initial_state": {
+            "type": "string"
+        },
+        "terminal_states": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "states": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "transitions": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "rigor": {
+            "type": "object"
+        },
+        "two_reviewer_risk_flags": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        }
+    }
+}

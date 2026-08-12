@@ -1,0 +1,61 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris knowledge delta",
+    "type": "object",
+    "required": [
+        "task_id",
+        "work_item_revision",
+        "artifact_attempt",
+        "entries"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "pattern": "^TASK-[0-9]{4}$"
+        },
+        "work_item_revision": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "artifact_attempt": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "entries": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "status",
+                    "path",
+                    "changed_paths",
+                    "evidence"
+                ],
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "ADD",
+                            "UPDATE",
+                            "STALE",
+                            "NO_CHANGE"
+                        ]
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "changed_paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "evidence": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    }
+}

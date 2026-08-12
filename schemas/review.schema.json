@@ -1,0 +1,111 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris review",
+    "type": "object",
+    "required": [
+        "task_id",
+        "work_item_revision",
+        "artifact_attempt",
+        "implementer_session_id",
+        "reviewer_session_id",
+        "subject_base_commit",
+        "subject_head_commit",
+        "subject_diff_hash",
+        "reviewed_at",
+        "verdict",
+        "findings"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "pattern": "^TASK-[0-9]{4}$"
+        },
+        "work_item_revision": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "artifact_attempt": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "implementer_session_id": {
+            "type": "string"
+        },
+        "reviewer_session_id": {
+            "type": "string"
+        },
+        "subject_base_commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+        },
+        "subject_head_commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+        },
+        "subject_diff_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+        },
+        "reviewed_at": {
+            "type": "string"
+        },
+        "verdict": {
+            "type": "string",
+            "enum": [
+                "ACCEPT",
+                "REJECT"
+            ]
+        },
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "severity",
+                    "location",
+                    "claim",
+                    "evidence",
+                    "required_action",
+                    "status"
+                ],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^F-[0-9]{3}$"
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": [
+                            "critical",
+                            "high",
+                            "medium",
+                            "low"
+                        ]
+                    },
+                    "location": {
+                        "type": "string"
+                    },
+                    "claim": {
+                        "type": "string"
+                    },
+                    "evidence": {
+                        "type": "string"
+                    },
+                    "required_action": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "open",
+                            "resolved",
+                            "accepted_risk"
+                        ]
+                    }
+                }
+            }
+        }
+    }
+}

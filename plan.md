@@ -273,6 +273,7 @@ Skill 描述应按“何时必须触发的行为”编写，而不是做技术�
   "risk_flags": {
     "public_api": false,
     "persistent_format": false,
+    "irreversible_migration": false,
     "architecture_boundary": false,
     "concurrency": false,
     "security": false,
@@ -472,28 +473,28 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 ### M0 — 协议冻结（第 1–2 天）
 
-- [ ] 冻结 ID、状态、revision、attempt、artifact、finding、evidence、event 的 JSON 结构
-- [ ] 写包含前进、返工、阻塞、取消和新 revision 边的 `default-workflow.json`
-- [ ] 冻结三档 rigor、risk flag、Reviewer 数量和 Human Approval 规则
-- [ ] 建立合法/非法 fixture，包括 commit/diff hash 失配和事件/state 不一致
+- [x] 冻结 ID、状态、revision、attempt、artifact、finding、evidence、event 的 JSON 结构
+- [x] 写包含前进、返工、阻塞、取消和新 revision 边的 `default-workflow.json`
+- [x] 冻结三档 rigor、risk flag、Reviewer 数量和 Human Approval 规则
+- [x] 建立合法/非法 fixture，包括 commit/diff hash 失配和事件/state 不一致
 
 完成标准：仅凭 schema 和 fixture 可以明确判断每个状态转换应 PASS 还是 FAIL。
 
 ### M1 — Repo skeleton 与 Skills（第 3–5 天）
 
-- [ ] 建源仓库目录、JSON/Markdown 模板和七个 Skill
-- [ ] 将 Skills vendoring 到 `.agents/skills/`，将版本锁定的脚本/Schema/模板/Workflow vendoring 到 `tools/polaris/`
+- [x] 建源仓库目录、JSON/Markdown 模板和七个 Skill
+- [x] 将 Skills vendoring 到 `.agents/skills/`，将版本锁定的脚本/Schema/模板/Workflow vendoring 到 `tools/polaris/`
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills
-- [ ] `engineering-task` 实现触发、恢复、分派、门禁停止规则
-- [ ] 阶段 Skill 明确输入、输出、owner 和禁止事项
+- [x] `engineering-task` 实现触发、恢复、分派、门禁停止规则
+- [x] 阶段 Skill 明确输入、输出、owner 和禁止事项
 
 完成标准：Codex 接到一个模糊 R1 任务时先建立 Work Item，不直接改代码。
 
 ### M2 — Mechanical core（第 6–9 天）
 
-- [ ] 实现 init、revision、validate、transition、state rebuild、docs check
-- [ ] 所有状态写入经 `transition_task.py`
-- [ ] 单元测试覆盖第 9 节失败场景
+- [x] 实现 init、revision、validate、transition、state rebuild、docs check
+- [x] 所有工作流状态转换经 `transition_task.py`
+- [x] 单元测试覆盖第 9 节失败场景
 
 完成标准：非法跳转、过期 Review、错误 commit/diff、缺 AC 证据、未处置文档漂移和损坏事件序列均被脚本稳定拒绝；合法事件可以重建 `state.json`。
 
