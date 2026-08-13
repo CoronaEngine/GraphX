@@ -1,5 +1,7 @@
 # Polaris
 
+完整的首次接入、日常提需求、独立 Review、恢复与升级流程见 [Polaris 使用说明书](docs/USAGE.md)。
+
 Polaris 是一套运行在 Codex 之上的、以仓库为权威状态的软件工程工作流系统。
 
 它将模糊需求转换为冻结的 Work Item，通过声明式 Workflow、独立对抗审查、可复现验证和文档同步，约束 AI 按可审计、可恢复的工程流程工作。

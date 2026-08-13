@@ -1,0 +1,456 @@
+# Polaris 使用说明书
+
+本文面向希望在 Codex 中使用 Polaris 管理软件工程任务的项目成员。它从首次接入讲到日常提出需求、Review、验证、恢复与升级。
+
+> 当前版本：v0.1.1。Polaris v0.1 是仓库原生的 Skills 与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+
+## 1. 先理解 Polaris 保存什么
+
+Polaris 把项目仓库作为权威事实来源：
+
+- `.agents/skills/` 保存 Codex 可发现的 Polaris 工作流 Skills。
+- `tools/polaris/` 保存当前项目锁定版本的协议、Schema、模板和 Python 脚本。
+- `.polaris/` 保存项目配置、冻结工作流、任务状态、Work Item、计划、Review、Validation 和事件账本。
+- 普通 Git 提交保存实际代码、测试和文档。
+
+这三个目录都应提交 Git。不要把 `.polaris/` 当作缓存，也不要只提交代码而漏掉任务记录。
+
+Polaris 不保存以下瞬时状态：
+
+- 未提交、未推送的文件修改；
+- 编辑器窗口、断点和本地终端历史；
+- Codex 完整聊天记录；
+- 未写入任务产物的口头约定。
+
+因此，“可恢复”是指从 Git 中恢复已提交的项目事实和任务状态，而不是还原另一台电脑上的整个桌面或聊天现场。
+
+## 2. 环境要求
+
+- Git；
+- Python 3.10 或更高版本；
+- 支持仓库级 Skills 的 Codex 宿主；
+- 一个已经初始化 Git 的目标仓库；
+- 能够从目标仓库根目录打开 Codex。
+
+Polaris v0.1 的运行时代码只使用 Python 标准库，不需要额外安装 Python 包。
+
+## 3. 首次接入一个项目
+
+### 3.1 将 Polaris vendoring 到目标仓库
+
+在 Polaris 源仓库根目录运行：
+
+```powershell
+python scripts/vendor_project.py C:\path\to\target-repo
+```
+
+它会生成：
+
+```text
+target-repo/
+├── .agents/skills/        # Polaris Skills
+└── tools/polaris/         # 锁定版本的协议实现
+```
+
+如果目标仓库已经存在 vendored 文件，普通运行会拒绝覆盖。确认要升级后显式使用：
+
+```powershell
+python scripts/vendor_project.py C:\path\to\target-repo --force
+```
+
+`--force` 会更新 vendored 内容。升级前应先确保工作区可识别，并在升级后查看 Git diff 和运行校验。
+
+### 3.2 初始化项目 Authority State
+
+进入目标仓库根目录：
+
+```powershell
+python tools/polaris/scripts/init_project.py my-project --repo .
+```
+
+该命令创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json`、恢复索引等文件；如果仓库没有 `AGENTS.md`，还会创建最小仓库规则。
+
+校验初始化结果：
+
+```powershell
+python tools/polaris/scripts/validate_project.py --repo .
+```
+
+统一退出码为：
+
+- `0`：PASS；
+- `1`：规则或门禁失败；
+- `2`：输入、环境或系统错误。
+
+### 3.3 提交初始化结果
+
+检查将要提交的文件：
+
+```powershell
+git status --short
+```
+
+通常应提交：
+
+- `.agents/skills/`；
+- `tools/polaris/`；
+- `.polaris/`；
+- 初始化生成或更新的 `AGENTS.md`；
+- 为 Polaris 补充的 `.gitignore` 规则。
+
+示例：
+
+```powershell
+git add .agents tools/polaris .polaris AGENTS.md .gitignore
+git commit -m "Bootstrap Polaris workflow"
+git push
+```
+
+如果某个列出的文件原本不存在，按实际情况从命令中删除。不要使用会覆盖未提交工作的清理命令。
+
+建议忽略的只是瞬时文件，例如：
+
+```gitignore
+__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+.pytest_cache/
+.coverage
+.transition.lock
+```
+
+### 3.4 让 Codex 发现 Skills
+
+vendoring 和首次提交完成后，从目标仓库根目录新开一个 Codex 任务。仓库级 Skills 通常在任务启动时发现，因此不要假定一个在 vendoring 之前已打开的旧任务会自动刷新能力列表。
+
+可用一个低风险请求验证发现，例如：
+
+```text
+请使用 engineering-task 检查这个仓库是否已经正确接入 Polaris；只检查，不修改代码。
+```
+
+如果 Codex 能读取 `.agents/skills/engineering-task/SKILL.md` 并按 Polaris 状态恢复或说明当前没有任务，说明发现链路正常。
+
+## 4. Polaris 仓库自举
+
+Polaris 本身也可以用 Polaris 管理。当前仓库已 vendoring 自身，因此在 Polaris 仓库中使用 `tools/polaris/scripts/` 下的脚本，不需要再次把仓库复制给自己。
+
+自举与普通目标项目的差别只有来源位置：
+
+- 开发 vendoring 工具本身时，源文件位于 `skills/`、`scripts/`、`schemas/`、`templates/` 和 `workflow/`；
+- 执行本仓库任务时，使用已锁定的 `.agents/skills/` 与 `tools/polaris/`；
+- 修改源实现后，需要按版本升级流程重新 vendoring，确认两份内容一致。
+
+## 5. 每次提出需求之前
+
+大多数情况下，用户不需要手工创建任务 JSON。先把仓库准备到可判断状态，再用自然语言提出需求即可。
+
+### 5.1 同步仓库
+
+```powershell
+git pull --ff-only
+git status --short
+```
+
+目标不是强求工作区绝对干净，而是确保每一项已有修改都能说明来源：
+
+- 如果是你希望保留的工作，先提交或明确告诉 Codex 这些文件不可覆盖；
+- 如果是另一个任务的工作，不要与新需求混在同一工作区；
+- 如果看到不认识的修改，先停下来确认，不要直接 reset 或删除；
+- 确保当前分支和远端符合你的预期。
+
+### 5.2 校验 Polaris
+
+```powershell
+python tools/polaris/scripts/validate_project.py --repo .
+```
+
+如果已有进行中的任务，再运行：
+
+```powershell
+python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
+```
+
+恢复结果会给出当前 Revision、状态、blocker、最近事件、下一动作和最小 Working Set。先续办已有任务还是创建新任务，应根据恢复结果决定。
+
+### 5.3 从正确位置打开 Codex
+
+- 工作目录应是目标仓库根目录；
+- 最好在 vendoring 后新开的 Codex 任务中工作；
+- 确认 Codex 能发现 `engineering-task` 等仓库 Skills；
+- 如果是 R1/R2 Review，不要复用实现会话，具体见第 9 节。
+
+### 5.4 准备需求信息
+
+提出需求前，尽量想清楚：
+
+- 想得到什么结果，以及为什么；
+- 哪些内容必须做，哪些明确不做；
+- 兼容性、性能、安全、时间或技术限制；
+- 怎样判断完成；
+- 是否允许改公共接口、数据格式、依赖、部署或架构；
+- 哪些产品取舍、风险接受或破坏性操作必须由人决定。
+
+信息不完整也可以提出需求。Polaris 的 `requirement-analysis` 会把未知项显式化；但涉及产品取舍、不可逆迁移、权限扩大、风险接受等 Human-owned 决策时，Codex 不应替用户猜测。
+
+## 6. 如何提出一个好需求
+
+推荐模板：
+
+```text
+请使用 Polaris 完成以下工程任务。
+
+目标：
+背景/动机：
+必须包含：
+明确不包含：
+约束：
+验收方式：
+允许修改的范围：
+需要我决定的事项：
+```
+
+示例：
+
+```text
+请使用 Polaris 为订单查询接口增加分页。
+
+目标：列表接口支持 page 和 page_size，并返回总数。
+背景：当前一次返回全部订单，数据量增长后响应过慢。
+必须包含：参数校验、默认值、接口测试、API 文档更新。
+明确不包含：前端页面和数据库迁移。
+约束：保持现有未传分页参数的调用兼容；page_size 最大为 100。
+验收方式：旧测试通过；新增正常分页、边界值和错误参数测试。
+允许修改的范围：订单 API、查询层、对应测试和文档。
+需要我决定的事项：如果兼容性与性能目标冲突，先让我选择。
+```
+
+不必在需求中手写任务状态、Revision、Review JSON 或 transition 命令。让 `engineering-task` 负责选择相应 Skills 和合法状态转换。
+
+## 7. 提出需求后会发生什么
+
+默认主路径是：
+
+```text
+DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → IMPLEMENTED
+      → DOCS_SYNCED → REVIEWING → REVIEWED
+      → VALIDATING → VERIFIED → CLOSED
+```
+
+各阶段含义：
+
+1. `DRAFT`：把自然语言需求整理成 Work Item。
+2. `QUALIFIED`：目标、范围、约束、验收证据、风险和决策所有者已冻结。
+3. `PLANNED`：形成最小 Working Set、变更计划和验收映射。
+4. `IMPLEMENTING`：在冻结范围内修改并运行局部检查。
+5. `IMPLEMENTED`：已有 subject checkpoint commit 和实现证据。
+6. `DOCS_SYNCED`：文档影响已分类，过时知识已处理。
+7. `REVIEWING`：Reviewer 仅依据冻结 handoff 独立审查。
+8. `REVIEWED`：Review 已接受。
+9. `VALIDATING`：逐条机械验证验收标准。
+10. `VERIFIED`：所有验收项 PASS。
+11. `CLOSED`：结果产物齐全，任务关闭。
+
+任务状态不得直接编辑。状态转换必须通过：
+
+```powershell
+python tools/polaris/scripts/transition_task.py TASK-0001 <EVENT> --repo .
+```
+
+合法事件、依赖产物和门禁以目标仓库冻结的 `.polaris/workflow.json` 为准。
+
+## 8. R0、R1、R2 与用户参与点
+
+Polaris 根据风险选择严谨度：
+
+- `R0`：低风险、小范围、易回退的变更；不要求独立 Reviewer，可在同一会话做明确隔离的审查 pass。
+- `R1`：常规非平凡工程变更；至少一个独立 Reviewer，Review 必须新开会话或使用不继承实现聊天的隔离 reviewer agent。
+- `R2`：高风险变更；要求 Human 预批准和最终批准，并至少一个独立 Reviewer。安全、持久化格式或不可逆迁移等风险还可能要求两个 Reviewer。
+
+用户通常在这些位置参与：
+
+- Work Item 冻结前确认产品目标、范围和验收口径；
+- R2 开始实现前进行预批准；
+- 决定破坏性操作、不可逆迁移、权限扩大和风险接受；
+- 任务进入 `BLOCKED` 时提供决定或外部条件；
+- R2 关闭前进行最终批准；
+- 需要时取消任务或要求新 Revision。
+
+如果实现期间目标或范围改变，不应悄悄修改原 Work Item。应创建新 Revision，并让任务回到 `QUALIFIED` 重新规划。
+
+## 9. 独立 Review：必须注意新会话
+
+实现和 Documentation Sync 完成后，先由实现会话生成冻结 handoff：
+
+```powershell
+python tools/polaris/scripts/build_review_handoff.py TASK-0001 --repo . --implementer-session-id impl-20260813 --isolation fresh_session
+python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . --artifact review_handoff=reviews/r001/handoff-001.json
+```
+
+然后按严谨度处理：
+
+- `R0`：允许同一会话执行明确隔离的审查 pass，handoff 使用 `r0_isolated_same_session`；
+- `R1/R2`：实现会话到这里必须停止 Review 工作；新开 Codex 任务，或者使用不继承实现聊天历史的隔离 reviewer agent；
+- 新 Reviewer 只接收已注册 handoff 路径，使用 `adversarial-review`，先查规格符合性，再查工程质量；
+- Reviewer session ID 必须与实现者不同，并如实记录隔离方式和聊天继承声明。
+
+给新 Review 任务的请求可以是：
+
+```text
+请使用 adversarial-review 独立审查 TASK-0001。
+只依据仓库中已注册的 Review handoff，不继承或假设实现会话中的结论。
+```
+
+Session ID 是审计声明，不是身份认证。如果宿主没有提供 ID，每个会话开始时应生成一个不复用的稳定标识。
+
+如果 Review 拒绝：
+
+1. 任务返回 `IMPLEMENTING`；
+2. 实现者用不可变 `review-response.json` 逐项回应全部 open Finding；
+3. 新 subject 和响应一起注册，再生成下一份 handoff；
+4. Reviewer 保留 Finding ID，复查完整新 patch，并填写 resolution；
+5. 第三次 Review 仍为 `REJECT` 时，状态机会把任务送入 Human-owned `BLOCKED`，不能继续自动循环。
+
+## 10. 恢复工作
+
+### 10.1 同一电脑的新 Codex 任务
+
+在仓库根目录运行：
+
+```powershell
+python tools/polaris/scripts/validate_project.py --repo .
+python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
+```
+
+然后告诉 Codex：
+
+```text
+请使用 engineering-task 从 .polaris 恢复并继续 TASK-0001。
+```
+
+Codex 应根据当前状态加载对应 Skill，而不是从聊天记忆猜测下一步。
+
+### 10.2 换一台电脑
+
+旧电脑离开前：
+
+```powershell
+git status --short
+git add <本次需要保存的代码、文档和 .polaris 产物>
+git commit -m "Checkpoint current Polaris task"
+git push
+```
+
+新电脑上：
+
+```powershell
+git clone <repository-url>
+cd <repository-directory>
+python tools/polaris/scripts/validate_project.py --repo .
+python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
+```
+
+再从仓库根目录新开 Codex 任务并请求恢复。只要 `.agents/skills/`、`tools/polaris/`、`.polaris/` 和 subject commits 都已提交并推送，就能恢复权威工作状态。
+
+无法通过 Git 恢复的内容包括：旧电脑上未提交/未推送的文件、编辑器状态和完整聊天记录。重要决定应写入 Work Item、Plan、Review Response、Knowledge Delta 或 Result，而不是只留在对话里。
+
+## 11. 更新项目中的 Polaris
+
+从新版 Polaris 源仓库运行：
+
+```powershell
+python scripts/vendor_project.py C:\path\to\target-repo --force
+```
+
+然后在目标仓库检查并校验：
+
+```powershell
+git status --short
+git diff -- .agents/skills tools/polaris
+python tools/polaris/scripts/validate_project.py --repo .
+```
+
+确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。
+
+## 12. 失败探索与卡点
+
+如果一个技术方向被证据否定，不要让结论只留在聊天中。记录任务内探索：
+
+```powershell
+python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --module src/module --hypothesis "假设" --attempt "尝试" --evidence "命令与结果" --outcome rejected --failed-because "失败原因" --retry-when "可重试条件"
+```
+
+确认结论可跨任务复用后，再由 Documentation Sync 提升为项目级知识：
+
+```powershell
+python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote EXP-0001
+```
+
+遇到需要用户决策、外部权限或环境变化的卡点时，应记录 blocker 并进入 `BLOCKED`，而不是伪造 PASS 或无限重试。
+
+## 13. 常见问题
+
+### Codex 没有发现 Polaris Skills
+
+1. 确认当前目录是仓库根目录；
+2. 确认 `.agents/skills/engineering-task/SKILL.md` 存在；
+3. 确认这些文件已在当前分支中，而不是只存在于另一台电脑；
+4. vendoring 后新开一个 Codex 任务；
+5. 检查仓库规则是否禁止加载或覆盖 Skills。
+
+### `init_project.py` 报项目已存在
+
+不要重复初始化。先运行 `validate_project.py`；如果项目已经接入，直接恢复或创建任务。
+
+### vendoring 拒绝覆盖
+
+这是防止误覆盖。先提交或备份现有修改、查看来源版本，确认升级后再使用 `--force`。
+
+### 工作区不干净，还能提需求吗
+
+可以，但必须能识别已有修改，并明确哪些属于用户、其他任务或本次任务。Polaris 不要求为了“干净”而删除有价值的工作。
+
+### 可以手改 `.polaris/tasks/.../state.json` 吗
+
+不可以。JSON 是机器权威状态，必须由确定性脚本通过门禁写入。手改会破坏事件账本、产物绑定或恢复能力。
+
+### 为什么已经实现，还不能说完成
+
+`IMPLEMENTED` 只表示实现 checkpoint 已形成。还需 Documentation Sync、Review、Validation 和 Result 门禁，状态机才能写入 `CLOSED`。
+
+### 自动化脚本如何被其他工具读取
+
+所有脚本都支持 `--json`。日志面向人阅读，JSON 结果和退出码用于机械判断。
+
+## 14. 最短日常清单
+
+提出新需求前：
+
+```text
+[ ] 已同步正确分支
+[ ] git status 中每项修改都可解释
+[ ] validate_project PASS
+[ ] 已从仓库根目录打开新的或合适的 Codex 任务
+[ ] Codex 能发现 engineering-task
+[ ] 已说明目标、范围、约束、验收和 Human-owned 决策
+```
+
+暂停或换电脑前：
+
+```text
+[ ] 代码、文档和 .polaris 任务产物已形成一致 checkpoint
+[ ] 重要决定没有只留在聊天中
+[ ] 已提交并推送
+[ ] 新环境可运行 validate_project 和 recover_task
+```
+
+R1/R2 Review 前：
+
+```text
+[ ] Documentation Sync 已完成
+[ ] handoff 已生成并注册
+[ ] 实现会话已停止 Review 工作
+[ ] Reviewer 使用新会话或不继承聊天的隔离 agent
+[ ] Reviewer 只依据 handoff，并使用不同 session ID
+```
