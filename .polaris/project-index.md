@@ -3,12 +3,12 @@
 ## Project
 
 - Project: `Polaris`
-- Active task records: 0
-- Recommended next action: initialize a task
+- Active task records: 1
+- Recommended next action: `TASK-0001@r001` — no action; the task is closed
 
 ## Tasks
 
-- None
+- `TASK-0001@r001` — CLOSED — 编写 Polaris 完整使用说明书
 
 ## Blockers
 

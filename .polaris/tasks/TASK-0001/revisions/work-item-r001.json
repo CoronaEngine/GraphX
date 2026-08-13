@@ -1,0 +1,87 @@
+{
+    "id": "TASK-0001",
+    "revision": 1,
+    "title": "编写 Polaris 完整使用说明书",
+    "rigor": "R0",
+    "goal": "为首次接触 Polaris 的使用者提供一份从项目接入、提出需求前准备、任务执行、独立审查、恢复、升级到排错的完整中文操作手册。",
+    "motivation": "当前 README 主要描述产品与脚本，缺少面向日常使用者的连续操作路径，用户难以判断在提出需求之前要准备什么、Codex 应如何启动以及各门禁需要怎样配合。",
+    "scope": {
+        "in": [
+            "新增 docs/USAGE.md 中文使用手册",
+            "在 README.md 增加使用手册入口",
+            "覆盖全新项目接入、已接入项目使用、自举、需求提出、Review、Recovery、升级和排错"
+        ],
+        "out": [
+            "修改 Polaris 协议、脚本、Schema、Workflow 或 Skills",
+            "新增 CLI、安装器、shell wrapper 或后台服务",
+            "承诺恢复未提交的编辑器状态或聊天历史"
+        ]
+    },
+    "constraints": [
+        "所有命令以当前 v0.1.1 已实现脚本为准",
+        "明确区分必须提交的权威状态与必须忽略的临时文件",
+        "明确 R1/R2 Review 必须使用新会话或隔离 reviewer agent",
+        "手册使用中文并面向不熟悉内部实现的使用者"
+    ],
+    "acceptance": [
+        {
+            "id": "AC-01",
+            "statement": "手册提供全新 Git 项目接入 Polaris 的完整前置条件和命令，并说明三个生成目录需要提交 Git。",
+            "evidence": "检查 docs/USAGE.md 的首次接入和 Git 提交章节"
+        },
+        {
+            "id": "AC-02",
+            "statement": "手册明确说明提出需求前需要同步代码、保持工作区可辨识、从仓库根目录启动 Codex，并确认仓库 Skills 可发现。",
+            "evidence": "检查 docs/USAGE.md 的提出需求前检查清单"
+        },
+        {
+            "id": "AC-03",
+            "statement": "手册提供良好需求描述模板和至少一个完整示例，并说明哪些 Human-owned 决策必须由用户确认。",
+            "evidence": "检查 docs/USAGE.md 的需求模板和示例"
+        },
+        {
+            "id": "AC-04",
+            "statement": "手册解释 R0/R1/R2、任务主路径、各阶段用户需要做什么以及状态不能直接编辑。",
+            "evidence": "检查 docs/USAGE.md 的任务执行章节"
+        },
+        {
+            "id": "AC-05",
+            "statement": "手册明确 R1/R2 的独立 Review 新会话流程、handoff 要求和三次拒绝后的 BLOCKED 行为。",
+            "evidence": "检查 docs/USAGE.md 的独立审查章节"
+        },
+        {
+            "id": "AC-06",
+            "statement": "手册说明本机恢复、跨电脑 Fresh Clone 恢复、可恢复边界和对应命令。",
+            "evidence": "检查 docs/USAGE.md 的恢复与跨电脑章节"
+        },
+        {
+            "id": "AC-07",
+            "statement": "README 提供可发现的使用手册链接，且文档中的命令和路径与当前仓库实现一致。",
+            "evidence": "检查 README 链接并运行文档命令/路径静态校验"
+        }
+    ],
+    "affected_modules": [
+        "docs/USAGE.md",
+        "README.md"
+    ],
+    "base_commit": "3c86b5335d531b662e127bb5da6d8b442bf75af0",
+    "risk_flags": {
+        "public_api": false,
+        "persistent_format": false,
+        "irreversible_migration": false,
+        "architecture_boundary": false,
+        "concurrency": false,
+        "security": false,
+        "resource_lifetime": false,
+        "critical_performance": false
+    },
+    "decision_owners": {
+        "human": [],
+        "agent": [
+            "手册结构、措辞和示例",
+            "基于当前实现选择准确命令"
+        ]
+    },
+    "approval_gates": [],
+    "known_unknowns": []
+}
