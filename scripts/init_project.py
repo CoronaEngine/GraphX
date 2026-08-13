@@ -24,6 +24,9 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
     write_json_atomic(polaris / "project.json", template)
     shutil.copyfile(root / "workflow" / "default-workflow.json", polaris / "workflow.json")
     shutil.copyfile(root / "templates" / "project-index.md", polaris / "project-index.md")
+    agents_path = repo / "AGENTS.md"
+    if not agents_path.exists():
+        shutil.copyfile(root / "templates" / "AGENTS.md", agents_path)
     return {"message": f"initialized Polaris project {project_id}"}
 
 

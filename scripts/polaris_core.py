@@ -53,6 +53,21 @@ def write_json_atomic(path: Path, value: Any) -> None:
             temp_path.unlink()
 
 
+def write_text_atomic(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", newline="\n", delete=False, dir=path.parent
+    )
+    temp_path = Path(handle.name)
+    try:
+        with handle:
+            handle.write(value)
+        os.replace(temp_path, path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
 def append_jsonl(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
@@ -87,6 +102,19 @@ def file_sha256(path: Path) -> str:
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
+    return digest.hexdigest()
+
+
+def directory_sha256(path: Path) -> str:
+    """Hash a directory snapshot by sorted relative path and file content hash."""
+    if not path.is_dir():
+        raise InputFailure(f"not a directory: {path}")
+    digest = hashlib.sha256()
+    for child in sorted(item for item in path.rglob("*") if item.is_file()):
+        relative = child.relative_to(path).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(bytes.fromhex(file_sha256(child)))
     return digest.hexdigest()
 
 

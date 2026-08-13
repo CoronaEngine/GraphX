@@ -1,17 +1,19 @@
 {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "Polaris implementation record",
+    "title": "Polaris review response",
     "type": "object",
     "required": [
         "task_id",
         "work_item_revision",
         "artifact_attempt",
         "implementer_session_id",
+        "prior_review_path",
+        "prior_review_sha256",
         "subject_base_commit",
         "subject_head_commit",
         "subject_diff_hash",
-        "deviations",
-        "checks"
+        "responded_at",
+        "responses"
     ],
     "additionalProperties": false,
     "properties": {
@@ -31,6 +33,13 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$"
         },
+        "prior_review_path": {
+            "type": "string"
+        },
+        "prior_review_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+        },
         "subject_base_commit": {
             "type": "string",
             "pattern": "^[0-9a-f]{40}$"
@@ -43,16 +52,31 @@
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
         },
-        "deviations": {
-            "type": "array",
-            "items": {
-                "type": "string"
-            }
+        "responded_at": {
+            "type": "string"
         },
-        "checks": {
+        "responses": {
             "type": "array",
             "items": {
-                "type": "object"
+                "type": "object",
+                "required": [
+                    "finding_id",
+                    "response",
+                    "evidence"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "finding_id": {
+                        "type": "string",
+                        "pattern": "^F-[0-9]{3}$"
+                    },
+                    "response": {
+                        "type": "string"
+                    },
+                    "evidence": {
+                        "type": "string"
+                    }
+                }
             }
         }
     }

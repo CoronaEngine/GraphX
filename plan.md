@@ -500,9 +500,9 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 ### M3 — Review、Recovery 与 Working Set（第 10–12 天）
 
-- [ ] 实现绑定 revision、commit、diff hash 和 session attestation 的 reviewer handoff 与 finding lifecycle
-- [ ] 实现渐进恢复与 Working Set 刷新
-- [ ] 实现 failed exploration 的任务内记录与项目级提升
+- [x] 实现绑定 revision、commit、diff hash 和 session attestation 的 reviewer handoff 与 finding lifecycle
+- [x] 实现渐进恢复与 Working Set 刷新
+- [x] 实现 failed exploration 的任务内记录与项目级提升
 
 完成标准：全新 Codex 会话不读取旧聊天即可指出当前状态、blocker、next action，并开始正确节点。
 

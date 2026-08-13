@@ -1,0 +1,15 @@
+{
+    "id": "EXP-0001",
+    "scope": "task",
+    "task": "TASK-0001@r001",
+    "module": "TODO",
+    "hypothesis": "TODO",
+    "attempt": "TODO",
+    "evidence": "TODO",
+    "outcome": "inconclusive",
+    "failed_because": "TODO",
+    "retry_when": "TODO",
+    "related": [],
+    "recorded_at": "1970-01-01T00:00:00Z",
+    "promoted_from": null
+}

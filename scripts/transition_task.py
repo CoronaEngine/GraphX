@@ -27,6 +27,14 @@ from polaris_core import (
     validate_json_file,
     write_json_atomic,
 )
+from recovery_protocol import refresh_project_index
+from review_protocol import (
+    MAX_REVIEW_ATTEMPTS,
+    normalized_reference,
+    validate_handoff,
+    validate_review,
+    validate_review_response,
+)
 
 
 def parse_artifacts(values: list[str], directory: Path) -> dict[str, dict[str, str]]:
@@ -126,12 +134,20 @@ def check_gate(
             artifact_file(directory, state, "implementation"),
             root / "schemas" / "implementation.schema.json",
         )
+        if not implementation["implementer_session_id"].strip() or implementation[
+            "implementer_session_id"
+        ].strip() == "TODO":
+            raise RuleFailure("Implementation requires a real implementer session ID")
         check_subject(repo, state.get("subject"))
         if (
             implementation["work_item_revision"] != revision
+            or implementation["task_id"] != state["task_id"]
+            or implementation["subject_base_commit"] != state["subject"]["base_commit"]
+            or implementation["subject_head_commit"] != state["subject"]["head_commit"]
             or implementation["subject_diff_hash"] != state["subject"]["diff_hash"]
         ):
             raise RuleFailure("Implementation targets the wrong revision or subject")
+        validate_review_response(root, directory, state, implementation)
     elif gate == "docs_ready":
         knowledge_path = artifact_file(directory, state, "knowledge_delta")
         knowledge = validate_json_file(
@@ -147,6 +163,7 @@ def check_gate(
     elif gate == "review_package_ready":
         artifact_file(directory, state, "knowledge_delta")
         check_subject(repo, state.get("subject"))
+        validate_handoff(repo, root, directory, state)
     elif gate in {"review_accepted", "review_rejected"}:
         expected = "ACCEPT" if gate == "review_accepted" else "REJECT"
         names = ["review"]
@@ -160,24 +177,10 @@ def check_gate(
         for review in reviews:
             if review["verdict"] != expected:
                 raise RuleFailure(f"Review verdict must be {expected}")
-            if review["work_item_revision"] != revision:
-                raise RuleFailure("Review targets an obsolete Work Item revision")
-            if review["subject_diff_hash"] != state["subject"]["diff_hash"]:
-                raise RuleFailure("Review targets the wrong subject")
-            if state["rigor"] in {"R1", "R2"} and review["implementer_session_id"] == review["reviewer_session_id"]:
-                raise RuleFailure("R1/R2 requires an independent Reviewer session")
+            validate_review(repo, root, directory, state, review, work_item)
             if review["reviewer_session_id"] in reviewer_ids:
                 raise RuleFailure("required Reviews must come from distinct Reviewer sessions")
             reviewer_ids.add(review["reviewer_session_id"])
-            if expected == "ACCEPT":
-                blocking = [
-                    finding
-                    for finding in review["findings"]
-                    if finding["status"] == "open"
-                    and finding["severity"] in {"critical", "high"}
-                ]
-                if blocking:
-                    raise RuleFailure("Review cannot ACCEPT with open blocking findings")
     elif gate == "validation_ready":
         names = ["review"]
         if any(
@@ -186,8 +189,10 @@ def check_gate(
         ):
             names.append("review_2")
         for name in names:
-            if load_review(root, directory, state, name)["verdict"] != "ACCEPT":
+            review = load_review(root, directory, state, name)
+            if review["verdict"] != "ACCEPT":
                 raise RuleFailure("Validation requires all mandated Reviews to ACCEPT")
+            validate_review(repo, root, directory, state, review, work_item)
     elif gate == "validation_passed":
         validation = load_validation(root, directory, state)
         if validation["verdict"] != "PASS":
@@ -206,6 +211,14 @@ def check_gate(
         validation = load_validation(root, directory, state)
         if validation["verdict"] != "FAIL":
             raise RuleFailure("failure transition requires a FAIL Validation")
+        if (
+            validation["task_id"] != state["task_id"]
+            or validation["work_item_revision"] != revision
+            or validation["subject_base_commit"] != state["subject"]["base_commit"]
+            or validation["subject_head_commit"] != state["subject"]["head_commit"]
+            or validation["subject_diff_hash"] != state["subject"]["diff_hash"]
+        ):
+            raise RuleFailure("failed Validation targets the wrong revision or subject")
     elif gate == "closure_ready":
         result = validate_json_file(
             artifact_file(directory, state, "result"), root / "schemas" / "result.schema.json"
@@ -305,12 +318,55 @@ def transition(
             workflow,
         )
 
-        if event_name in {"REJECT_REVIEW", "FAIL_IMPLEMENTATION"}:
+        if event_name == "REJECT_REVIEW":
+            review = load_review(root, directory, next_state)
+            prior_reference = normalized_reference(
+                directory, next_state["artifacts"]["review"]
+            )
+            next_state["artifacts"]["prior_review"] = prior_reference
+            max_attempts = transition_rule.get(
+                "max_attempts", MAX_REVIEW_ATTEMPTS
+            )
+            if review["artifact_attempt"] >= max_attempts:
+                destination = transition_rule.get("on_max_attempts_to", "BLOCKED")
+                next_state["blocked_from"] = state["status"]
+                next_state["blocker"] = {
+                    "type": "review_dispute",
+                    "reason": f"Review remained rejected after {max_attempts} attempts",
+                    "decision_owner": "human",
+                }
+
+        if event_name == "REJECT_REVIEW" and destination == "IMPLEMENTING":
             for key in (
                 "implementation",
                 "knowledge_delta",
                 "review",
                 "review_2",
+                "review_handoff",
+                "review_response",
+                "validation",
+                "result",
+                "final_approval",
+            ):
+                next_state["artifacts"].pop(key, None)
+            next_state["subject"] = None
+        elif event_name == "REJECT_REVIEW":
+            next_state["artifacts"].pop("review", None)
+            next_state["artifacts"].pop("review_2", None)
+            next_state["artifacts"].pop("review_handoff", None)
+        elif event_name == "FAIL_IMPLEMENTATION":
+            prior_review = next_state["artifacts"].get("review")
+            if prior_review is not None:
+                next_state["artifacts"]["prior_review"] = normalized_reference(
+                    directory, prior_review
+                )
+            for key in (
+                "implementation",
+                "knowledge_delta",
+                "review",
+                "review_2",
+                "review_handoff",
+                "review_response",
                 "validation",
                 "result",
                 "final_approval",
@@ -318,11 +374,16 @@ def transition(
                 next_state["artifacts"].pop(key, None)
             next_state["subject"] = None
         elif event_name == "FAIL_PLAN":
+            prior_review = next_state["artifacts"].get("review")
             next_state["artifacts"] = {
                 key: value
                 for key, value in next_state["artifacts"].items()
                 if key in {"plan", "working_set"}
             }
+            if prior_review is not None:
+                next_state["artifacts"]["prior_review"] = normalized_reference(
+                    directory, prior_review
+                )
             next_state["subject"] = None
         elif event_name == "RESOLVE_BLOCK":
             next_state["blocked_from"] = None
@@ -350,6 +411,7 @@ def transition(
         }
         append_jsonl(directory / "events.jsonl", event)
         write_json_atomic(state_path, next_state)
+        refresh_project_index(repo)
         return {
             "message": f"{task_id}: {state['status']} -> {destination}",
             "task": task_id,

@@ -23,6 +23,12 @@ from polaris_core import (
     validate_json_file,
     validate_schema,
 )
+from review_protocol import (
+    normalized_reference,
+    validate_handoff,
+    validate_review,
+    validate_review_response,
+)
 
 
 ORDER = [
@@ -98,6 +104,22 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         raise RuleFailure("a true risk flag requires rigor R2")
     full_commit(repo, work_item["base_commit"])
 
+    exploration_schema = root / "schemas" / "exploration.schema.json"
+    for exploration_path in sorted((directory / "explorations").glob("EXP-*.json")):
+        exploration = validate_json_file(exploration_path, exploration_schema)
+        if exploration["scope"] != "task" or not exploration["task"].startswith(
+            f"{task_id}@"
+        ):
+            raise RuleFailure(f"invalid task exploration scope: {exploration_path}")
+
+    if "prior_review" in state["artifacts"]:
+        prior_reference = normalized_reference(
+            directory, state["artifacts"]["prior_review"]
+        )
+        validate_json_file(
+            directory / prior_reference["path"], root / "schemas" / "review.schema.json"
+        )
+
     status = state["status"]
     if at_least(status, "PLANNED"):
         require_artifact(state, directory, "plan")
@@ -107,6 +129,10 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         implementation = validate_json_file(
             implementation_path, root / "schemas" / "implementation.schema.json"
         )
+        if not implementation["implementer_session_id"].strip() or implementation[
+            "implementer_session_id"
+        ].strip() == "TODO":
+            raise RuleFailure("Implementation requires a real implementer session ID")
         subject = state.get("subject")
         if not isinstance(subject, dict):
             raise RuleFailure(f"state {status} requires a frozen subject")
@@ -118,11 +144,14 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         if subject_diff_hash(repo, base, head) != subject["diff_hash"]:
             raise RuleFailure("subject diff hash does not match Git commits")
         if (
-            implementation["work_item_revision"] != state["current_revision"]
+            implementation["task_id"] != task_id
+            or implementation["work_item_revision"] != state["current_revision"]
+            or implementation["subject_base_commit"] != subject["base_commit"]
             or implementation["subject_head_commit"] != subject["head_commit"]
             or implementation["subject_diff_hash"] != subject["diff_hash"]
         ):
             raise RuleFailure("Implementation artifact targets the wrong revision or subject")
+        validate_review_response(root, directory, state, implementation)
     if at_least(status, "DOCS_SYNCED"):
         knowledge_path = require_artifact(state, directory, "knowledge_delta")
         knowledge = validate_json_file(
@@ -132,6 +161,8 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
             raise RuleFailure("Knowledge Delta targets an obsolete Work Item revision")
         if any(entry["status"] == "STALE" for entry in knowledge["entries"]):
             raise RuleFailure("Knowledge Delta contains unresolved STALE entries")
+    if status == "REVIEWING" or at_least(status, "REVIEWED"):
+        validate_handoff(repo, root, directory, state)
     if at_least(status, "REVIEWED"):
         review_names = ["review"]
         if any(
@@ -145,27 +176,10 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
             review = validate_json_file(review_path, root / "schemas" / "review.schema.json")
             if review["verdict"] != "ACCEPT":
                 raise RuleFailure("REVIEWED requires every mandated Review to ACCEPT")
-            if review["work_item_revision"] != state["current_revision"]:
-                raise RuleFailure("Review targets an obsolete Work Item revision")
-            subject = state["subject"]
-            if (
-                review["subject_head_commit"] != subject["head_commit"]
-                or review["subject_diff_hash"] != subject["diff_hash"]
-            ):
-                raise RuleFailure("Review targets the wrong subject")
-            if state["rigor"] in {"R1", "R2"} and review["implementer_session_id"] == review["reviewer_session_id"]:
-                raise RuleFailure("R1/R2 Review must use an independent session")
+            validate_review(repo, root, directory, state, review, work_item)
             if review["reviewer_session_id"] in reviewer_ids:
                 raise RuleFailure("mandated Reviews must use distinct Reviewer sessions")
             reviewer_ids.add(review["reviewer_session_id"])
-            blocking = [
-                finding
-                for finding in review["findings"]
-                if finding["status"] == "open"
-                and finding["severity"] in {"critical", "high"}
-            ]
-            if blocking:
-                raise RuleFailure("accepted Review still has blocking findings")
     if at_least(status, "VERIFIED"):
         validation_path = require_artifact(state, directory, "validation")
         validation = validate_json_file(

@@ -16,12 +16,14 @@ sys.path.insert(0, str(SCRIPTS))
 from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
 from build_working_set import build as build_working_set  # noqa: E402
+from build_review_handoff import build as build_review_handoff  # noqa: E402
 from check_docs import check as check_docs  # noqa: E402
 from new_revision import create as new_revision  # noqa: E402
 from polaris_core import (  # noqa: E402
     InputFailure,
     RuleFailure,
     append_jsonl,
+    file_sha256,
     read_json,
     rebuild_state_value,
     subject_diff_hash,
@@ -29,6 +31,9 @@ from polaris_core import (  # noqa: E402
     write_json_atomic,
 )
 from rebuild_state import rebuild  # noqa: E402
+from recover_task import recover  # noqa: E402
+from record_exploration import promote as promote_exploration  # noqa: E402
+from record_exploration import record as record_exploration  # noqa: E402
 from transition_task import transition  # noqa: E402
 from validate_task import validate  # noqa: E402
 from validate_project import validate as validate_project  # noqa: E402
@@ -75,6 +80,196 @@ class PolarisCoreTests(unittest.TestCase):
             {"statement": "Task reaches PLANNED", "evidence": "state validation"}
         )
         write_json_atomic(path, value)
+
+    def start_review(
+        self,
+        implementer_session_id: str = "impl-session",
+        isolation: str = "fresh_session",
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        handoff_result = build_review_handoff(
+            self.repo,
+            "TASK-0001",
+            implementer_session_id,
+            isolation,
+        )
+        handoff_path = Path(handoff_result["path"])
+        transition(
+            self.repo,
+            "TASK-0001",
+            "START_REVIEW",
+            [f"review_handoff={handoff_path.relative_to(self.task).as_posix()}"],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        state = read_json(self.task / "state.json")
+        return read_json(handoff_path), state
+
+    def review_value(
+        self,
+        handoff: dict[str, object],
+        state: dict[str, object],
+        reviewer_session_id: str,
+        verdict: str,
+        findings: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        reference = state["artifacts"]["review_handoff"]
+        subject = state["subject"]
+        review = read_json(ROOT / "templates" / "task" / "review.json")
+        review.update(
+            {
+                "work_item_revision": state["current_revision"],
+                "artifact_attempt": handoff["artifact_attempt"],
+                "implementer_session_id": handoff["implementer_session_id"],
+                "reviewer_session_id": reviewer_session_id,
+                "handoff_path": reference["path"],
+                "handoff_sha256": reference["sha256"],
+                "isolation_attestation": {
+                    "mode": handoff["required_isolation"],
+                    "chat_history_inherited": False,
+                    "reviewed_from_handoff_only": True,
+                },
+                "supersedes_review": handoff["previous_review"],
+                "subject_base_commit": subject["base_commit"],
+                "subject_head_commit": subject["head_commit"],
+                "subject_diff_hash": subject["diff_hash"],
+                "reviewed_at": "2026-08-13T00:00:00Z",
+                "verdict": verdict,
+                "findings": findings or [],
+            }
+        )
+        return review
+
+    def finish_and_reject_attempt(
+        self,
+        attempt: int,
+        base: str,
+        implementer_session_id: str,
+        reviewer_session_id: str,
+        finding: dict[str, object],
+    ) -> dict[str, object]:
+        (self.repo / "subject.txt").write_text(
+            f"review attempt {attempt}\n", encoding="utf-8"
+        )
+        run_git(self.repo, "add", "subject.txt")
+        run_git(self.repo, "commit", "-q", "-m", f"review attempt {attempt}")
+        head = run_git(self.repo, "rev-parse", "HEAD")
+        diff_hash = subject_diff_hash(self.repo, base, head)
+        implementation_path = (
+            self.task / "implementations" / "r001" / f"attempt-{attempt:03d}.json"
+        )
+        implementation = read_json(ROOT / "templates" / "task" / "implementation.json")
+        implementation.update(
+            {
+                "artifact_attempt": attempt,
+                "implementer_session_id": implementer_session_id,
+                "subject_base_commit": base,
+                "subject_head_commit": head,
+                "subject_diff_hash": diff_hash,
+            }
+        )
+        write_json_atomic(implementation_path, implementation)
+        artifacts = [
+            f"implementation=implementations/r001/attempt-{attempt:03d}.json"
+        ]
+        if attempt > 1:
+            prior_reference = read_json(self.task / "state.json")["artifacts"][
+                "prior_review"
+            ]
+            response_path = (
+                self.task / "reviews" / "r001" / f"response-{attempt:03d}.json"
+            )
+            response = read_json(ROOT / "templates" / "task" / "review-response.json")
+            response.update(
+                {
+                    "artifact_attempt": attempt,
+                    "implementer_session_id": implementer_session_id,
+                    "prior_review_path": prior_reference["path"],
+                    "prior_review_sha256": prior_reference["sha256"],
+                    "subject_base_commit": base,
+                    "subject_head_commit": head,
+                    "subject_diff_hash": diff_hash,
+                    "responded_at": f"2026-08-13T00:0{attempt}:00Z",
+                    "responses": [
+                        {
+                            "finding_id": finding["id"],
+                            "response": f"Reworked the subject for attempt {attempt}",
+                            "evidence": f"Complete subject diff for attempt {attempt}",
+                        }
+                    ],
+                }
+            )
+            write_json_atomic(response_path, response)
+            artifacts.append(f"review_response=reviews/r001/response-{attempt:03d}.json")
+        transition(
+            self.repo,
+            "TASK-0001",
+            "FINISH_IMPLEMENTATION",
+            artifacts,
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        knowledge_path = (
+            self.task
+            / "knowledge"
+            / "r001"
+            / f"knowledge-delta-{attempt:03d}.json"
+        )
+        knowledge = read_json(ROOT / "templates" / "task" / "knowledge-delta.json")
+        knowledge["artifact_attempt"] = attempt
+        knowledge["entries"][0].update(
+            {"changed_paths": ["subject.txt"], "evidence": "No documentation impact"}
+        )
+        write_json_atomic(knowledge_path, knowledge)
+        transition(
+            self.repo,
+            "TASK-0001",
+            "SYNC_DOCS",
+            [f"knowledge_delta=knowledge/r001/knowledge-delta-{attempt:03d}.json"],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        handoff, state = self.start_review(implementer_session_id)
+        current_finding = copy.deepcopy(finding)
+        if attempt > 1:
+            current_finding["evidence"] = f"Counterexample remains in attempt {attempt}"
+            current_finding["reviewer_resolution"] = (
+                f"Author response checked; defect remains in attempt {attempt}"
+            )
+        review_path = self.task / "reviews" / "r001" / f"review-{attempt:03d}.json"
+        write_json_atomic(
+            review_path,
+            self.review_value(
+                handoff,
+                state,
+                reviewer_session_id,
+                "REJECT",
+                [current_finding],
+            ),
+        )
+        return transition(
+            self.repo,
+            "TASK-0001",
+            "REJECT_REVIEW",
+            [f"review=reviews/r001/review-{attempt:03d}.json"],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
     def test_new_draft_is_valid_and_rebuildable(self) -> None:
         """新建 DRAFT 任务可校验，并能从事件账本重建完全一致的状态。"""
@@ -225,6 +420,41 @@ class PolarisCoreTests(unittest.TestCase):
         result = validate_project(self.repo)
         self.assertEqual(result["active_tasks"], 1)
 
+    def test_fresh_clone_recovers_the_committed_task_boundary(self) -> None:
+        """Fresh Clone 仅凭已提交的 vendored 协议和仓库状态恢复最近阶段边界。"""
+        vendor(ROOT, self.repo, False)
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-q", "-m", "Polaris checkpoint")
+        with tempfile.TemporaryDirectory(prefix="polaris-clone-") as clone_temp:
+            clone = Path(clone_temp) / "repo"
+            subprocess.run(
+                ["git", "clone", "-q", str(self.repo), str(clone)],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(clone / "tools" / "polaris" / "scripts" / "recover_task.py"),
+                    "TASK-0001",
+                    "--repo",
+                    str(clone),
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+            )
+            recovered = json.loads(completed.stdout)
+        self.assertEqual(recovered["status"], "PASS")
+        self.assertEqual(recovered["task"]["work_item_revision"], 1)
+        self.assertEqual(recovered["state"]["status"], "DRAFT")
+        self.assertIn("AGENTS.md", {
+            item["path"] for item in recovered["minimum_working_set"]["entries"]
+        })
+
     def test_new_revision_is_created_then_explicitly_activated(self) -> None:
         """需求变化创建不可覆盖的新 Revision，并经 NEW_REVISION 显式激活。"""
         self.freeze_work_item()
@@ -360,7 +590,14 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             "START_REVIEW",
-            [],
+            [
+                "review_handoff="
+                + Path(
+                    build_review_handoff(
+                        self.repo, "TASK-0001", "impl-session", "fresh_session"
+                    )["path"]
+                ).relative_to(self.task).as_posix()
+            ],
             None,
             None,
             None,
@@ -370,11 +607,16 @@ class PolarisCoreTests(unittest.TestCase):
         )
         review_path = self.task / "reviews" / "r001" / "review-001.json"
         review = read_json(ROOT / "templates" / "task" / "review.json")
+        handoff_reference = read_json(self.task / "state.json")["artifacts"][
+            "review_handoff"
+        ]
         review.update(
             {
                 "work_item_revision": 2,
                 "implementer_session_id": "impl-session",
                 "reviewer_session_id": "review-session",
+                "handoff_path": handoff_reference["path"],
+                "handoff_sha256": handoff_reference["sha256"],
                 "subject_base_commit": subject["base_commit"],
                 "subject_head_commit": subject["head_commit"],
                 "subject_diff_hash": subject["diff_hash"],
@@ -514,6 +756,482 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(closed["to"], "CLOSED")
         self.assertEqual(validate(self.repo, "TASK-0001")["state"], "CLOSED")
+
+    def test_r1_review_requires_a_bound_independent_session_attestation(self) -> None:
+        """R1 Review 即使 session 字段不同，也必须绑定 handoff 且声明未继承实现聊天。"""
+        self.test_implementation_and_documentation_subject_are_bound()
+        handoff, state = self.start_review()
+        review_path = self.task / "reviews" / "r001" / "review-001.json"
+        review = self.review_value(
+            handoff, state, "impl-session", "ACCEPT"
+        )
+        write_json_atomic(review_path, review)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "ACCEPT_REVIEW",
+                ["review=reviews/r001/review-001.json"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        review["reviewer_session_id"] = "review-session"
+        review["isolation_attestation"]["chat_history_inherited"] = True
+        write_json_atomic(review_path, review)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "ACCEPT_REVIEW",
+                ["review=reviews/r001/review-001.json"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+    def test_review_handoff_freezes_evidence_directory(self) -> None:
+        """Reviewer handoff 对证据目录做内容快照，生成后新增或修改证据会被拒绝。"""
+        self.test_implementation_and_documentation_subject_are_bound()
+        evidence = self.task / "evidence" / "r001" / "checks.txt"
+        evidence.write_text("original evidence\n", encoding="utf-8")
+        handoff_path = Path(
+            build_review_handoff(
+                self.repo, "TASK-0001", "impl-session", "fresh_session"
+            )["path"]
+        )
+        evidence.write_text("mutated evidence\n", encoding="utf-8")
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "START_REVIEW",
+                [f"review_handoff={handoff_path.relative_to(self.task).as_posix()}"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+    def test_validation_rework_supersedes_the_accepted_review(self) -> None:
+        """Validation 返工保留已接受 Review，下一 handoff 递增 attempt 且无需伪造 Review Response。"""
+        self.test_implementation_and_documentation_subject_are_bound()
+        handoff_1, state = self.start_review()
+        review_path = self.task / "reviews" / "r001" / "review-001.json"
+        write_json_atomic(
+            review_path,
+            self.review_value(handoff_1, state, "review-session-1", "ACCEPT"),
+        )
+        transition(
+            self.repo,
+            "TASK-0001",
+            "ACCEPT_REVIEW",
+            ["review=reviews/r001/review-001.json"],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        transition(
+            self.repo,
+            "TASK-0001",
+            "START_VALIDATION",
+            [],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        subject_1 = read_json(self.task / "state.json")["subject"]
+        validation_path = self.task / "validations" / "r001" / "validation-001.json"
+        validation = read_json(ROOT / "templates" / "task" / "validation.json")
+        validation.update(
+            {
+                "subject_base_commit": subject_1["base_commit"],
+                "subject_head_commit": subject_1["head_commit"],
+                "subject_diff_hash": subject_1["diff_hash"],
+                "validated_at": "2026-08-13T00:10:00Z",
+                "verdict": "FAIL",
+                "acceptance_results": [
+                    {
+                        "acceptance_id": "AC-01",
+                        "command_or_check": "counterexample",
+                        "cwd": ".",
+                        "environment_summary": "test",
+                        "started_at": "2026-08-13T00:10:00Z",
+                        "exit_code": 1,
+                        "result": "FAIL",
+                        "output_path_or_hash": "inline:failure",
+                    }
+                ],
+            }
+        )
+        write_json_atomic(validation_path, validation)
+        failed = transition(
+            self.repo,
+            "TASK-0001",
+            "FAIL_IMPLEMENTATION",
+            ["validation=validations/r001/validation-001.json"],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(failed["to"], "IMPLEMENTING")
+        state = read_json(self.task / "state.json")
+        self.assertEqual(state["artifacts"]["prior_review"]["path"], "reviews/r001/review-001.json")
+
+        base = subject_1["base_commit"]
+        (self.repo / "subject.txt").write_text("validation fix\n", encoding="utf-8")
+        run_git(self.repo, "add", "subject.txt")
+        run_git(self.repo, "commit", "-q", "-m", "fix validation failure")
+        head = run_git(self.repo, "rev-parse", "HEAD")
+        diff_hash = subject_diff_hash(self.repo, base, head)
+        implementation_path = self.task / "implementations" / "r001" / "attempt-002.json"
+        implementation = read_json(ROOT / "templates" / "task" / "implementation.json")
+        implementation.update(
+            {
+                "artifact_attempt": 2,
+                "implementer_session_id": "impl-session-2",
+                "subject_base_commit": base,
+                "subject_head_commit": head,
+                "subject_diff_hash": diff_hash,
+            }
+        )
+        write_json_atomic(implementation_path, implementation)
+        transition(
+            self.repo,
+            "TASK-0001",
+            "FINISH_IMPLEMENTATION",
+            ["implementation=implementations/r001/attempt-002.json"],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        knowledge_path = self.task / "knowledge" / "r001" / "knowledge-delta-002.json"
+        knowledge = read_json(ROOT / "templates" / "task" / "knowledge-delta.json")
+        knowledge["artifact_attempt"] = 2
+        knowledge["entries"][0].update(
+            {"changed_paths": ["subject.txt"], "evidence": "No documentation impact"}
+        )
+        write_json_atomic(knowledge_path, knowledge)
+        transition(
+            self.repo,
+            "TASK-0001",
+            "SYNC_DOCS",
+            ["knowledge_delta=knowledge/r001/knowledge-delta-002.json"],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        handoff_2, state = self.start_review("impl-session-2")
+        self.assertEqual(handoff_2["artifact_attempt"], 2)
+        self.assertEqual(
+            handoff_2["previous_review"]["path"], "reviews/r001/review-001.json"
+        )
+        self.assertNotIn("review_response", state["artifacts"])
+
+    def test_rejected_finding_requires_response_and_stable_follow_up(self) -> None:
+        """Review 返工必须逐项回复，后续 Reviewer 保留稳定 Finding ID 并重新裁定。"""
+        self.test_implementation_and_documentation_subject_are_bound()
+        handoff_1, state = self.start_review()
+        finding = {
+            "id": "F-001",
+            "introduced_in_attempt": 1,
+            "category": "specification",
+            "acceptance_id": "AC-01",
+            "scope_violation": False,
+            "blocking": True,
+            "severity": "high",
+            "location": "subject.txt:1",
+            "claim": "The subject does not satisfy AC-01",
+            "evidence": "Counterexample from the frozen patch",
+            "required_action": "Correct subject.txt and provide evidence",
+            "status": "open",
+            "reviewer_resolution": None,
+        }
+        review_1_path = self.task / "reviews" / "r001" / "review-001.json"
+        write_json_atomic(
+            review_1_path,
+            self.review_value(
+                handoff_1, state, "review-session-1", "REJECT", [finding]
+            ),
+        )
+        rejected = transition(
+            self.repo,
+            "TASK-0001",
+            "REJECT_REVIEW",
+            ["review=reviews/r001/review-001.json"],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(rejected["to"], "IMPLEMENTING")
+
+        base = handoff_1["subject_base_commit"]
+        (self.repo / "subject.txt").write_text("subject fixed\n", encoding="utf-8")
+        run_git(self.repo, "add", "subject.txt")
+        run_git(self.repo, "commit", "-q", "-m", "fix review finding")
+        head = run_git(self.repo, "rev-parse", "HEAD")
+        diff_hash = subject_diff_hash(self.repo, base, head)
+        implementation_path = self.task / "implementations" / "r001" / "attempt-002.json"
+        implementation = read_json(ROOT / "templates" / "task" / "implementation.json")
+        implementation.update(
+            {
+                "artifact_attempt": 2,
+                "implementer_session_id": "impl-session-2",
+                "subject_base_commit": base,
+                "subject_head_commit": head,
+                "subject_diff_hash": diff_hash,
+            }
+        )
+        write_json_atomic(implementation_path, implementation)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "FINISH_IMPLEMENTATION",
+                ["implementation=implementations/r001/attempt-002.json"],
+                None,
+                base,
+                head,
+                None,
+                None,
+                None,
+            )
+
+        prior_reference = read_json(self.task / "state.json")["artifacts"]["prior_review"]
+        response_path = self.task / "reviews" / "r001" / "response-002.json"
+        response = read_json(ROOT / "templates" / "task" / "review-response.json")
+        response.update(
+            {
+                "implementer_session_id": "impl-session-2",
+                "prior_review_path": prior_reference["path"],
+                "prior_review_sha256": prior_reference["sha256"],
+                "subject_base_commit": base,
+                "subject_head_commit": head,
+                "subject_diff_hash": diff_hash,
+                "responded_at": "2026-08-13T00:01:00Z",
+                "responses": [
+                    {
+                        "finding_id": "F-001",
+                        "response": "Corrected the acceptance behavior",
+                        "evidence": "subject.txt at the new subject head",
+                    }
+                ],
+            }
+        )
+        write_json_atomic(response_path, response)
+        transition(
+            self.repo,
+            "TASK-0001",
+            "FINISH_IMPLEMENTATION",
+            [
+                "implementation=implementations/r001/attempt-002.json",
+                "review_response=reviews/r001/response-002.json",
+            ],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        knowledge_path = self.task / "knowledge" / "r001" / "knowledge-delta-002.json"
+        knowledge = read_json(ROOT / "templates" / "task" / "knowledge-delta.json")
+        knowledge["artifact_attempt"] = 2
+        knowledge["entries"][0].update(
+            {
+                "changed_paths": ["subject.txt"],
+                "evidence": "No project documentation describes subject.txt",
+            }
+        )
+        write_json_atomic(knowledge_path, knowledge)
+        transition(
+            self.repo,
+            "TASK-0001",
+            "SYNC_DOCS",
+            ["knowledge_delta=knowledge/r001/knowledge-delta-002.json"],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        handoff_2, state = self.start_review("impl-session-2")
+        review_2_path = self.task / "reviews" / "r001" / "review-002.json"
+        write_json_atomic(
+            review_2_path,
+            self.review_value(handoff_2, state, "review-session-2", "ACCEPT"),
+        )
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "ACCEPT_REVIEW",
+                ["review=reviews/r001/review-002.json"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        resolved = copy.deepcopy(finding)
+        resolved.update(
+            {
+                "location": "subject.txt:1",
+                "evidence": "Rechecked the complete new patch",
+                "status": "resolved",
+                "reviewer_resolution": "The new subject satisfies AC-01",
+            }
+        )
+        write_json_atomic(
+            review_2_path,
+            self.review_value(
+                handoff_2, state, "review-session-2", "ACCEPT", [resolved]
+            ),
+        )
+        accepted = transition(
+            self.repo,
+            "TASK-0001",
+            "ACCEPT_REVIEW",
+            ["review=reviews/r001/review-002.json"],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(accepted["to"], "REVIEWED")
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "REVIEWED")
+
+    def test_third_rejected_review_enters_human_blocked_state(self) -> None:
+        """第三次 Review 仍 REJECT 时不再自动返工，而是进入 Human-owned BLOCKED。"""
+        self.freeze_work_item()
+        build_working_set(self.repo, "TASK-0001", True)
+        transition(self.repo, "TASK-0001", "QUALIFY", [], None, None, None, None, None, None)
+        transition(
+            self.repo,
+            "TASK-0001",
+            "PLAN",
+            ["plan=PLAN.md", "working_set=WORKING_SET.md"],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        transition(
+            self.repo, "TASK-0001", "START_IMPLEMENTATION", [], None, None, None, None, None, None
+        )
+        base = run_git(self.repo, "rev-parse", "HEAD")
+        finding = {
+            "id": "F-001",
+            "introduced_in_attempt": 1,
+            "category": "engineering",
+            "acceptance_id": None,
+            "scope_violation": False,
+            "blocking": True,
+            "severity": "high",
+            "location": "subject.txt:1",
+            "claim": "A blocking defect remains",
+            "evidence": "The patch fails the counterexample",
+            "required_action": "Escalate the disputed boundary",
+            "status": "open",
+            "reviewer_resolution": None,
+        }
+        self.assertEqual(
+            self.finish_and_reject_attempt(
+                1, base, "impl-session-1", "review-session-1", finding
+            )["to"],
+            "IMPLEMENTING",
+        )
+        self.assertEqual(
+            self.finish_and_reject_attempt(
+                2, base, "impl-session-2", "review-session-2", finding
+            )["to"],
+            "IMPLEMENTING",
+        )
+        result = self.finish_and_reject_attempt(
+            3, base, "impl-session-3", "review-session-3", finding
+        )
+        self.assertEqual(result["to"], "BLOCKED")
+        state = read_json(self.task / "state.json")
+        self.assertEqual(state["blocker"]["type"], "review_dispute")
+
+    def test_recovery_working_set_and_exploration_promotion(self) -> None:
+        """Fresh-session Recovery 只输出四类最小信息，并检索匹配模块的失败探索。"""
+        work_item_path = self.task / "revisions" / "work-item-r001.json"
+        work_item = read_json(work_item_path)
+        work_item["affected_modules"] = ["scripts"]
+        write_json_atomic(work_item_path, work_item)
+        recorded = record_exploration(
+            self.repo,
+            "TASK-0001",
+            "scripts",
+            "A direct state edit might be safe",
+            "Edited a disposable projection",
+            "validate_task rejected the projection",
+            "rejected",
+            "events.jsonl remained authoritative",
+            "Retry only if the state protocol changes",
+            [],
+        )
+        promoted = promote_exploration(
+            self.repo, "TASK-0001", recorded["exploration_id"]
+        )
+        self.assertTrue(Path(promoted["path"]).is_file())
+        with self.assertRaises(InputFailure):
+            promote_exploration(self.repo, "TASK-0001", recorded["exploration_id"])
+        build_working_set(
+            self.repo,
+            "TASK-0001",
+            True,
+            [
+                "Code|scripts/recover_task.py|recovery entry point|M3 implementation"
+            ],
+            [],
+        )
+        recovered = recover(self.repo, "TASK-0001")
+        self.assertEqual(recovered["task"]["work_item_revision"], 1)
+        self.assertEqual(recovered["state"]["status"], "DRAFT")
+        self.assertIn("Work Item", recovered["recommended_next_action"])
+        paths = {
+            item["path"] for item in recovered["minimum_working_set"]["entries"]
+        }
+        self.assertIn("scripts/recover_task.py", paths)
+        self.assertIn("AGENTS.md", paths)
+        self.assertIn(".polaris/project-index.md", paths)
+        self.assertIn(
+            f".polaris/explorations/{recorded['exploration_id']}.json", paths
+        )
 
 
 if __name__ == "__main__":

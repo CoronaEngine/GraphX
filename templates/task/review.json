@@ -4,6 +4,14 @@
     "artifact_attempt": 1,
     "implementer_session_id": "TODO",
     "reviewer_session_id": "TODO",
+    "handoff_path": "reviews/r001/handoff-001.json",
+    "handoff_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "isolation_attestation": {
+        "mode": "fresh_session",
+        "chat_history_inherited": false,
+        "reviewed_from_handoff_only": true
+    },
+    "supersedes_review": null,
     "subject_base_commit": "0000000000000000000000000000000000000000",
     "subject_head_commit": "0000000000000000000000000000000000000000",
     "subject_diff_hash": "0000000000000000000000000000000000000000000000000000000000000000",

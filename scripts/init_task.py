@@ -19,6 +19,7 @@ from polaris_core import (
     utc_now,
     write_json_atomic,
 )
+from recovery_protocol import refresh_project_index
 
 
 def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
@@ -66,6 +67,7 @@ def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
     append_jsonl(directory / "events.jsonl", event)
     project.setdefault("active_tasks", []).append(task_id)
     write_json_atomic(project_path, project)
+    refresh_project_index(repo)
     return {"message": f"initialized {task_id} at DRAFT", "task": task_id}
 
 

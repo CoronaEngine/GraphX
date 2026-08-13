@@ -4,7 +4,7 @@ Polaris 是一套运行在 Codex 之上的、以仓库为权威状态的软件�
 
 它将模糊需求转换为冻结的 Work Item，通过声明式 Workflow、独立对抗审查、可复现验证和文档同步，约束 AI 按可审计、可恢复的工程流程工作。
 
-> 当前版本：`0.1.0`（开发中）
+> 当前版本：`0.1.1`（开发中）
 
 ## 核心目标
 
@@ -65,14 +65,15 @@ v0.1 明确不实现：
 - Git subject commit/diff hash 绑定
 - Documentation impact 检查
 - R1 Review → Validation → Result → CLOSED 的机械闭环
-- 15 个带场景日志的自动化测试
+- 不可变 Reviewer handoff、独立会话声明和三轮 Review 上限
+- Review Response 与跨 Attempt 的稳定 Finding 生命周期
+- Fresh-session Recovery、项目索引和可刷新 Working Set
+- Failed Exploration 的任务内记录、项目级提升和按模块检索
+- 22 个带场景日志的自动化测试
 
 仍在建设：
 
 - Codex 宿主对 vendored Skills 的实际发现验证
-- 完整 Review handoff 与 Finding 生命周期
-- 渐进式 Recovery 输出和项目索引刷新
-- Failed Exploration 的创建、提升与检索
 - Horizon 和 Vision 真实项目试点
 - Adversarial Review Yield 评估
 
@@ -167,7 +168,7 @@ python scripts/vendor_project.py C:\path\to\target-repo --force
 python tools/polaris/scripts/init_project.py my-project --repo .
 ```
 
-这会创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json`、恢复索引和任务目录。
+这会创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 时还会创建最小仓库规则。
 
 ### 3. 初始化任务
 
@@ -192,6 +193,47 @@ python tools/polaris/scripts/validate_task.py TASK-0001 --repo .
 
 所有脚本都支持 `--json`，便于由 Agent 或自动化程序读取结果。
 
+### 5. 从新会话恢复
+
+```powershell
+python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
+```
+
+恢复脚本先校验项目和任务，再只返回当前 Revision、状态与 blocker、最后事件、下一动作和最小 Working Set。它不读取聊天历史。
+
+刷新 Working Set 时可以保留已有条目，或用 `--force` 重建自动条目：
+
+```powershell
+python tools/polaris/scripts/build_working_set.py TASK-0001 --repo . --entry "Code|src/module.py|affected entry point|dependency from AC-01"
+```
+
+### 6. 交接独立 Review
+
+完成 Documentation Sync 后，在实现者会话中生成 handoff：
+
+```powershell
+python tools/polaris/scripts/build_review_handoff.py TASK-0001 --repo . --implementer-session-id impl-20260813 --isolation fresh_session
+python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . --artifact review_handoff=reviews/r001/handoff-001.json
+```
+
+R1/R2 到这里必须停止实现者会话。新建 Codex 会话，或启动不继承实现聊天的隔离 reviewer agent，只向它提供已注册的 handoff 路径，再使用 `$adversarial-review`。Review JSON 必须绑定 handoff，并如实记录隔离模式、聊天继承声明和不同的 Reviewer session ID。
+
+Review 被拒绝后，实现者必须使用 `review-response.json` 模板逐项回复所有 open Finding，并在下一次 `FINISH_IMPLEMENTATION` 同时注册该响应。后续 Reviewer 必须保留 Finding ID、复查完整新 Patch 并填写 Reviewer resolution。第三次 Review 仍为 `REJECT` 时，任务自动进入 Human-owned `BLOCKED`。
+
+Session ID 是审计声明，不是身份认证。如果宿主没有公开 ID，应在每个会话开始时生成一个不复用的稳定标识。
+
+### 7. 记录失败探索
+
+```powershell
+python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --module src/module --hypothesis "假设" --attempt "尝试" --evidence "命令与结果" --outcome rejected --failed-because "原因" --retry-when "重试条件"
+```
+
+任务内结论默认保留在任务目录。确认可跨任务复用后，由 Documentation Sync 提升到项目级：
+
+```powershell
+python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote EXP-0001
+```
+
 ## 任务生命周期
 
 默认主路径：
@@ -205,6 +247,7 @@ DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → IMPLEMENTED
 同时支持：
 
 - Review Reject 返回 `IMPLEMENTING`
+- 第三次 Review Reject 进入 Human-owned `BLOCKED`
 - Validation 实现失败返回 `IMPLEMENTING`
 - Validation 计划失败返回 `PLANNED`
 - 需求变化通过新 Revision 返回 `QUALIFIED`

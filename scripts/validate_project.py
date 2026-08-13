@@ -53,6 +53,27 @@ def validate(repo: Path) -> dict[str, object]:
         raise RuleFailure("project Polaris version does not match vendored protocol")
     if project["workflow_version"] != workflow["workflow_version"]:
         raise RuleFailure("project and workflow versions do not match")
+    index_path = polaris / "project-index.md"
+    if not index_path.is_file():
+        raise RuleFailure("missing project recovery map: .polaris/project-index.md")
+    index_text = index_path.read_text(encoding="utf-8")
+    for required_link in ("AGENTS.md", ".polaris/project.json", ".polaris/workflow.json"):
+        if required_link not in index_text:
+            raise RuleFailure(f"project recovery map lacks required link: {required_link}")
+
+    for transition in workflow["transitions"]:
+        alternate = transition.get("on_max_attempts_to")
+        if alternate is not None and alternate not in states:
+            raise RuleFailure(
+                f"workflow transition has unknown max-attempt destination: {transition['event']}"
+            )
+        max_attempts = transition.get("max_attempts")
+        if max_attempts is not None and (
+            not isinstance(max_attempts, int) or max_attempts < 1
+        ):
+            raise RuleFailure(
+                f"workflow transition has invalid max_attempts: {transition['event']}"
+            )
 
     vendored_skills = repo / ".agents" / "skills"
     if root == repo / "tools" / "polaris":
@@ -73,6 +94,28 @@ def validate(repo: Path) -> dict[str, object]:
         )
     for task_id in sorted(listed):
         validate_task(repo, task_id)
+    exploration_schema = root / "schemas" / "exploration.schema.json"
+    for exploration_path in sorted((polaris / "explorations").glob("EXP-*.json")):
+        exploration = validate_json_file(exploration_path, exploration_schema)
+        if exploration["scope"] != "project" or not exploration["promoted_from"]:
+            raise RuleFailure(f"invalid project exploration scope: {exploration_path}")
+        source_path = (repo / exploration["promoted_from"]).resolve()
+        try:
+            source_path.relative_to(repo.resolve())
+        except ValueError as exc:
+            raise RuleFailure(
+                f"project exploration source escapes repository: {exploration_path}"
+            ) from exc
+        if not source_path.is_file():
+            raise RuleFailure(f"project exploration source is missing: {source_path}")
+        source = validate_json_file(source_path, exploration_schema)
+        expected = dict(source)
+        expected["scope"] = "project"
+        expected["promoted_from"] = exploration["promoted_from"]
+        if exploration != expected:
+            raise RuleFailure(
+                f"project exploration differs from its promoted source: {exploration_path}"
+            )
     return {
         "message": f"project {project['project_id']} is valid",
         "project": project["project_id"],
