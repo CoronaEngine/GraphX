@@ -1,0 +1,13 @@
+{
+    "task_id": "TASK-0001",
+    "work_item_revision": 1,
+    "artifact_attempt": 2,
+    "implementer_session_id": "TODO",
+    "prior_review_path": "reviews/r001/review-001.json",
+    "prior_review_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "subject_base_commit": "0000000000000000000000000000000000000000",
+    "subject_head_commit": "0000000000000000000000000000000000000000",
+    "subject_diff_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "responded_at": "1970-01-01T00:00:00Z",
+    "responses": []
+}

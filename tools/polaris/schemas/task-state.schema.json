@@ -1,0 +1,85 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris task state projection",
+    "type": "object",
+    "required": [
+        "task_id",
+        "polaris_version",
+        "workflow_version",
+        "current_revision",
+        "status",
+        "rigor",
+        "sequence",
+        "artifacts"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "pattern": "^TASK-[0-9]{4}$"
+        },
+        "polaris_version": {
+            "type": "string",
+            "pattern": "^0\\.1\\.[0-9]+$"
+        },
+        "workflow_version": {
+            "type": "string",
+            "pattern": "^0\\.1\\.[0-9]+$"
+        },
+        "current_revision": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "status": {
+            "type": "string",
+            "enum": [
+                "DRAFT",
+                "QUALIFIED",
+                "PLANNED",
+                "IMPLEMENTING",
+                "IMPLEMENTED",
+                "DOCS_SYNCED",
+                "REVIEWING",
+                "REVIEWED",
+                "VALIDATING",
+                "VERIFIED",
+                "BLOCKED",
+                "CLOSED",
+                "CANCELLED"
+            ]
+        },
+        "rigor": {
+            "type": "string",
+            "enum": [
+                "R0",
+                "R1",
+                "R2"
+            ]
+        },
+        "sequence": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "blocked_from": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "blocker": {
+            "type": [
+                "object",
+                "null"
+            ]
+        },
+        "artifacts": {
+            "type": "object"
+        },
+        "subject": {
+            "type": [
+                "object",
+                "null"
+            ]
+        }
+    }
+}

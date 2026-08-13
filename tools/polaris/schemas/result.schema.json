@@ -1,0 +1,39 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris task result",
+    "type": "object",
+    "required": [
+        "task_id",
+        "work_item_revision",
+        "subject_base_commit",
+        "subject_head_commit",
+        "subject_diff_hash",
+        "summary"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "pattern": "^TASK-[0-9]{4}$"
+        },
+        "work_item_revision": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "subject_base_commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+        },
+        "subject_head_commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+        },
+        "subject_diff_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+        },
+        "summary": {
+            "type": "string"
+        }
+    }
+}

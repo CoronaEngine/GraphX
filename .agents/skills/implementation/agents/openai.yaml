@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementation"
+  short_description: "Implement a frozen work item"
+  default_prompt: "Use $implementation to implement the current frozen Polaris Work Item."

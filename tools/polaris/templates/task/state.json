@@ -1,0 +1,13 @@
+{
+    "task_id": "TASK-0001",
+    "polaris_version": "0.1.1",
+    "workflow_version": "0.1.1",
+    "current_revision": 1,
+    "status": "DRAFT",
+    "rigor": "R1",
+    "sequence": 0,
+    "blocked_from": null,
+    "blocker": null,
+    "artifacts": {},
+    "subject": null
+}

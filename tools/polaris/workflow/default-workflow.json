@@ -1,0 +1,215 @@
+{
+    "schema_version": "0.1.1",
+    "workflow_version": "0.1.1",
+    "initial_state": "DRAFT",
+    "terminal_states": [
+        "CLOSED",
+        "CANCELLED"
+    ],
+    "states": [
+        "DRAFT",
+        "QUALIFIED",
+        "PLANNED",
+        "IMPLEMENTING",
+        "IMPLEMENTED",
+        "DOCS_SYNCED",
+        "REVIEWING",
+        "REVIEWED",
+        "VALIDATING",
+        "VERIFIED",
+        "BLOCKED",
+        "CLOSED",
+        "CANCELLED"
+    ],
+    "transitions": [
+        {
+            "event": "QUALIFY",
+            "from": [
+                "DRAFT"
+            ],
+            "to": "QUALIFIED",
+            "gate": "work_item_ready"
+        },
+        {
+            "event": "PLAN",
+            "from": [
+                "QUALIFIED",
+                "PLANNED"
+            ],
+            "to": "PLANNED",
+            "gate": "plan_ready"
+        },
+        {
+            "event": "START_IMPLEMENTATION",
+            "from": [
+                "PLANNED"
+            ],
+            "to": "IMPLEMENTING",
+            "gate": "implementation_approved"
+        },
+        {
+            "event": "FINISH_IMPLEMENTATION",
+            "from": [
+                "IMPLEMENTING"
+            ],
+            "to": "IMPLEMENTED",
+            "gate": "implementation_ready"
+        },
+        {
+            "event": "SYNC_DOCS",
+            "from": [
+                "IMPLEMENTED"
+            ],
+            "to": "DOCS_SYNCED",
+            "gate": "docs_ready"
+        },
+        {
+            "event": "START_REVIEW",
+            "from": [
+                "DOCS_SYNCED"
+            ],
+            "to": "REVIEWING",
+            "gate": "review_package_ready"
+        },
+        {
+            "event": "ACCEPT_REVIEW",
+            "from": [
+                "REVIEWING"
+            ],
+            "to": "REVIEWED",
+            "gate": "review_accepted"
+        },
+        {
+            "event": "REJECT_REVIEW",
+            "from": [
+                "REVIEWING"
+            ],
+            "to": "IMPLEMENTING",
+            "gate": "review_rejected",
+            "max_attempts": 3,
+            "on_max_attempts_to": "BLOCKED"
+        },
+        {
+            "event": "START_VALIDATION",
+            "from": [
+                "REVIEWED"
+            ],
+            "to": "VALIDATING",
+            "gate": "validation_ready"
+        },
+        {
+            "event": "PASS_VALIDATION",
+            "from": [
+                "VALIDATING"
+            ],
+            "to": "VERIFIED",
+            "gate": "validation_passed"
+        },
+        {
+            "event": "FAIL_IMPLEMENTATION",
+            "from": [
+                "VALIDATING"
+            ],
+            "to": "IMPLEMENTING",
+            "gate": "validation_failed_implementation"
+        },
+        {
+            "event": "FAIL_PLAN",
+            "from": [
+                "VALIDATING"
+            ],
+            "to": "PLANNED",
+            "gate": "validation_failed_plan"
+        },
+        {
+            "event": "CLOSE",
+            "from": [
+                "VERIFIED"
+            ],
+            "to": "CLOSED",
+            "gate": "closure_ready"
+        },
+        {
+            "event": "NEW_REVISION",
+            "from": [
+                "QUALIFIED",
+                "PLANNED",
+                "IMPLEMENTING",
+                "IMPLEMENTED",
+                "DOCS_SYNCED",
+                "REVIEWING",
+                "REVIEWED",
+                "VALIDATING",
+                "VERIFIED",
+                "BLOCKED"
+            ],
+            "to": "QUALIFIED",
+            "gate": "new_revision_ready"
+        },
+        {
+            "event": "BLOCK",
+            "from": [
+                "DRAFT",
+                "QUALIFIED",
+                "PLANNED",
+                "IMPLEMENTING",
+                "IMPLEMENTED",
+                "DOCS_SYNCED",
+                "REVIEWING",
+                "REVIEWED",
+                "VALIDATING",
+                "VERIFIED"
+            ],
+            "to": "BLOCKED",
+            "gate": "blocker_recorded"
+        },
+        {
+            "event": "RESOLVE_BLOCK",
+            "from": [
+                "BLOCKED"
+            ],
+            "to": "$blocked_from",
+            "gate": "blocker_resolved"
+        },
+        {
+            "event": "CANCEL",
+            "from": [
+                "DRAFT",
+                "QUALIFIED",
+                "PLANNED",
+                "IMPLEMENTING",
+                "IMPLEMENTED",
+                "DOCS_SYNCED",
+                "REVIEWING",
+                "REVIEWED",
+                "VALIDATING",
+                "VERIFIED",
+                "BLOCKED"
+            ],
+            "to": "CANCELLED",
+            "gate": "human_cancelled"
+        }
+    ],
+    "rigor": {
+        "R0": {
+            "independent_reviewers": 0,
+            "human_pre_approval": false,
+            "human_final_approval": false
+        },
+        "R1": {
+            "independent_reviewers": 1,
+            "human_pre_approval": false,
+            "human_final_approval": false
+        },
+        "R2": {
+            "independent_reviewers": 1,
+            "human_pre_approval": true,
+            "human_final_approval": true
+        }
+    },
+    "two_reviewer_risk_flags": [
+        "security",
+        "persistent_format",
+        "irreversible_migration"
+    ]
+}

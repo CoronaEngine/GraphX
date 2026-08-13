@@ -1,0 +1,192 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris review",
+    "type": "object",
+    "required": [
+        "task_id",
+        "work_item_revision",
+        "artifact_attempt",
+        "implementer_session_id",
+        "reviewer_session_id",
+        "handoff_path",
+        "handoff_sha256",
+        "isolation_attestation",
+        "supersedes_review",
+        "subject_base_commit",
+        "subject_head_commit",
+        "subject_diff_hash",
+        "reviewed_at",
+        "verdict",
+        "findings"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "pattern": "^TASK-[0-9]{4}$"
+        },
+        "work_item_revision": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "artifact_attempt": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "implementer_session_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$"
+        },
+        "reviewer_session_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$"
+        },
+        "handoff_path": {
+            "type": "string"
+        },
+        "handoff_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+        },
+        "isolation_attestation": {
+            "type": "object",
+            "required": [
+                "mode",
+                "chat_history_inherited",
+                "reviewed_from_handoff_only"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "fresh_session",
+                        "isolated_reviewer_agent",
+                        "r0_isolated_same_session"
+                    ]
+                },
+                "chat_history_inherited": {
+                    "type": "boolean"
+                },
+                "reviewed_from_handoff_only": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "supersedes_review": {
+            "type": [
+                "object",
+                "null"
+            ]
+        },
+        "subject_base_commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+        },
+        "subject_head_commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+        },
+        "subject_diff_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+        },
+        "reviewed_at": {
+            "type": "string"
+        },
+        "verdict": {
+            "type": "string",
+            "enum": [
+                "ACCEPT",
+                "REJECT"
+            ]
+        },
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "introduced_in_attempt",
+                    "category",
+                    "acceptance_id",
+                    "scope_violation",
+                    "blocking",
+                    "severity",
+                    "location",
+                    "claim",
+                    "evidence",
+                    "required_action",
+                    "status",
+                    "reviewer_resolution"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^F-[0-9]{3}$"
+                    },
+                    "introduced_in_attempt": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "specification",
+                            "engineering"
+                        ]
+                    },
+                    "acceptance_id": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "pattern": "^AC-[0-9]{2}$"
+                    },
+                    "scope_violation": {
+                        "type": "boolean"
+                    },
+                    "blocking": {
+                        "type": "boolean"
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": [
+                            "critical",
+                            "high",
+                            "medium",
+                            "low"
+                        ]
+                    },
+                    "location": {
+                        "type": "string"
+                    },
+                    "claim": {
+                        "type": "string"
+                    },
+                    "evidence": {
+                        "type": "string"
+                    },
+                    "required_action": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "open",
+                            "resolved",
+                            "accepted_risk"
+                        ]
+                    },
+                    "reviewer_resolution": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                }
+            }
+        }
+    }
+}
