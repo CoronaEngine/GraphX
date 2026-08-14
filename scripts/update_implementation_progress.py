@@ -20,6 +20,7 @@ from polaris_core import (
     utc_now,
     write_json_atomic,
 )
+from task_layout import state_path, task_root_relative_path
 
 
 PHASES = (
@@ -46,7 +47,9 @@ def _base_progress(
         "artifact_attempt": handoff["artifact_attempt"],
         "implementation_task": implementation_task,
         "implementer_session_id": "Pending",
-        "handoff_path": f".polaris/tasks/{task_id}/{reference['path']}",
+        "handoff_path": (
+            task_root_relative_path(task_id) / reference["path"]
+        ).as_posix(),
         "handoff_sha256": reference["sha256"],
         "phase": "QUEUED",
         "current_step_id": None,
@@ -107,7 +110,7 @@ def update(
 ) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     if state["status"] not in {"IMPLEMENTING", "IMPLEMENTED"}:
         raise RuleFailure("Implementation progress can only update while IMPLEMENTING or IMPLEMENTED")
     handoff, reference = validate_handoff(repo, root, directory, state)

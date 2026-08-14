@@ -18,6 +18,7 @@ from polaris_core import (
     task_dir,
     validate_json_file,
 )
+from task_layout import state_path
 
 
 def check(
@@ -29,7 +30,7 @@ def check(
 ) -> dict[str, object]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     if knowledge_path is None:
         reference = state["artifacts"].get("knowledge_delta")
         if not reference:

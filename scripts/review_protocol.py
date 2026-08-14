@@ -13,6 +13,7 @@ from polaris_core import (
     read_json,
     validate_json_file,
 )
+from task_layout import evidence_dir
 
 
 MAX_REVIEW_ATTEMPTS = 3
@@ -273,8 +274,8 @@ def validate_handoff(
         "knowledge_delta": (
             directory / knowledge_reference["path"]
         ).relative_to(repo).as_posix(),
-        "evidence": (
-            directory / "evidence" / f"r{state['current_revision']:03d}"
+        "evidence": evidence_dir(
+            directory, state["current_revision"]
         ).relative_to(repo).as_posix(),
     }
     if prior_reference is not None:

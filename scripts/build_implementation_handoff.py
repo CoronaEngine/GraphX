@@ -24,6 +24,12 @@ from polaris_core import (
     write_json_atomic,
 )
 from review_protocol import normalized_reference
+from task_layout import (
+    implementation_handoff_path,
+    implementation_relative_path,
+    state_path,
+    task_repo_relative_path,
+)
 from working_set_protocol import validate_working_set
 
 
@@ -47,7 +53,7 @@ def _entry(repo: Path, role: str, path: Path) -> dict[str, Any]:
 def build(repo: Path, task_id: str) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     if state["status"] != "IMPLEMENTING":
         raise RuleFailure("Implementation handoff can only be built from IMPLEMENTING")
     revision = state["current_revision"]
@@ -94,16 +100,13 @@ def build(repo: Path, task_id: str) -> dict[str, Any]:
         "preferred_isolation": "fresh_session",
         "subject_base_commit": base_commit,
         "previous_review": previous_review,
-        "output_path": f"implementations/r{revision:03d}/attempt-{attempt:03d}.json",
-        "progress_json_path": f".polaris/tasks/{task_id}/runtime/progress.json",
+        "output_path": implementation_relative_path(revision, attempt).as_posix(),
+        "progress_json_path": task_repo_relative_path(
+            task_id, "progress"
+        ).as_posix(),
         "package": package,
     }
-    path = (
-        directory
-        / "implementations"
-        / f"r{revision:03d}"
-        / f"handoff-{attempt:03d}.json"
-    )
+    path = implementation_handoff_path(directory, revision, attempt)
     if path.exists():
         existing = validate_json_file(
             path, root / "schemas" / "implementation-handoff.schema.json"

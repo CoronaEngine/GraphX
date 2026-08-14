@@ -38,6 +38,12 @@ from record_exploration import record as record_exploration  # noqa: E402
 from transition_task import transition  # noqa: E402
 from update_implementation_progress import update as update_implementation_progress  # noqa: E402
 from implementation_protocol import step_results, validate_progress  # noqa: E402
+from task_layout import (  # noqa: E402
+    TEMPLATE_SAMPLE_PATHS,
+    task_repo_relative_path,
+    task_relative_path,
+    template_path,
+)
 from validate_task import validate  # noqa: E402
 from validate_project import validate as validate_project  # noqa: E402
 from vendor_project import SKILLS, vendor  # noqa: E402
@@ -179,9 +185,7 @@ class PolarisCoreTests(unittest.TestCase):
                 phase="CHECKPOINTING",
             )
         progress = validate_progress(self.repo, "TASK-0001")
-        value = read_json(
-            ROOT / "templates" / "task" / "implementations" / "r001" / "attempt-001.json"
-        )
+        value = read_json(template_path(ROOT, "implementation"))
         value.update(
             {
                 "artifact_attempt": handoff["artifact_attempt"],
@@ -199,9 +203,7 @@ class PolarisCoreTests(unittest.TestCase):
     def knowledge_value(
         self, attempt: int, base: str, head: str
     ) -> dict[str, object]:
-        value = read_json(
-            ROOT / "templates" / "task" / "knowledge" / "r001" / "knowledge-delta-001.json"
-        )
+        value = read_json(template_path(ROOT, "knowledge_delta"))
         value.update(
             {
                 "artifact_attempt": attempt,
@@ -249,9 +251,7 @@ class PolarisCoreTests(unittest.TestCase):
     ) -> dict[str, object]:
         reference = state["artifacts"]["review_handoff"]
         subject = state["subject"]
-        review = read_json(
-            ROOT / "templates" / "task" / "reviews" / "r001" / "review-001.json"
-        )
+        review = read_json(template_path(ROOT, "review"))
         review.update(
             {
                 "work_item_revision": state["current_revision"],
@@ -307,9 +307,7 @@ class PolarisCoreTests(unittest.TestCase):
             response_path = (
                 self.task / "reviews" / "r001" / f"response-{attempt:03d}.json"
             )
-            response = read_json(
-                ROOT / "templates" / "task" / "reviews" / "r001" / "response-002.json"
-            )
+            response = read_json(template_path(ROOT, "review_response"))
             response.update(
                 {
                     "artifact_attempt": attempt,
@@ -404,31 +402,48 @@ class PolarisCoreTests(unittest.TestCase):
         rebuilt = rebuild_state_value(self.task / "events.jsonl")
         self.assertEqual(rebuilt, read_json(self.task / "state.json"))
 
-    def test_task_templates_mirror_generated_task_layout(self) -> None:
-        """每个任务模板的相对路径都直接对应 TASK-0001 中的实际样例落点。"""
+    def test_task_layout_is_single_source_and_templates_mirror_it(self) -> None:
+        """任务路径只在 task_layout 定义，模板树机械投影同一组规则。"""
         template_root = ROOT / "templates" / "task"
         actual = {
             path.relative_to(template_root).as_posix()
             for path in template_root.rglob("*")
             if path.is_file()
         }
-        expected = {
-            "PLAN.md",
-            "state.json",
-            "working-set.json",
-            "runtime/progress.json",
-            "revisions/work-item-r001.json",
-            "implementations/r001/handoff-001.json",
-            "implementations/r001/attempt-001.json",
-            "knowledge/r001/knowledge-delta-001.json",
-            "reviews/r001/handoff-001.json",
-            "reviews/r001/review-001.json",
-            "reviews/r001/response-002.json",
-            "validations/r001/validation-001.json",
-            "results/r001/result-001.json",
-            "explorations/EXP-0001.json",
-        }
+        expected = {path.as_posix() for path in TEMPLATE_SAMPLE_PATHS.values()}
         self.assertEqual(actual, expected)
+        self.assertEqual(
+            task_relative_path("implementation", revision=12, attempt=3).as_posix(),
+            "implementations/r012/attempt-003.json",
+        )
+        self.assertEqual(
+            task_relative_path("review", revision=12, attempt=3, reviewer=2).as_posix(),
+            "reviews/r012/review-003-2.json",
+        )
+        self.assertEqual(
+            task_repo_relative_path("TASK-0042", "progress").as_posix(),
+            ".polaris/tasks/TASK-0042/runtime/progress.json",
+        )
+        forbidden = (
+            'directory / "state.json"',
+            'directory / "events.jsonl"',
+            'directory / "working-set.json"',
+            'directory / "PLAN.md"',
+            'directory / "runtime"',
+            'directory / "revisions"',
+            'directory / "implementations"',
+            'directory / "knowledge"',
+            'directory / "reviews"',
+            'directory / "validations"',
+            'directory / "results"',
+            'directory / "evidence"',
+        )
+        for script in (ROOT / "scripts").glob("*.py"):
+            if script.name == "task_layout.py":
+                continue
+            source = script.read_text(encoding="utf-8")
+            for fragment in forbidden:
+                self.assertNotIn(fragment, source, f"task path escaped task_layout.py: {script}")
         state_text = (self.task / "state.json").read_text(encoding="utf-8")
         self.assertIn('\n    "task_id":', state_text)
 
@@ -1155,9 +1170,7 @@ class PolarisCoreTests(unittest.TestCase):
         run_git(self.repo, "add", "freeze.txt")
         run_git(self.repo, "commit", "-q", "-m", "freeze implementation")
         head = run_git(self.repo, "rev-parse", "HEAD")
-        implementation = read_json(
-            ROOT / "templates" / "task" / "implementations" / "r001" / "attempt-001.json"
-        )
+        implementation = read_json(template_path(ROOT, "implementation"))
         implementation.update({
             "artifact_attempt": handoff["artifact_attempt"],
             "implementer_session_id": "impl-freeze-session",
@@ -1286,7 +1299,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn("Dispatch required Reviewers sequentially", entry_text)
         self.assertIn("slot 2 as `review_2`", entry_text)
         self.assertIn("Reviewer session IDs must be distinct", entry_text)
-        self.assertIn("review-<attempt>-2.json", review_text)
+        self.assertIn("task_layout.review_path", review_text)
 
     def test_review_dispatch_falls_back_without_blocking(self) -> None:
         """宿主自动派发不可用时保持 REVIEWING 并回退手动提示。"""
@@ -1533,9 +1546,7 @@ class PolarisCoreTests(unittest.TestCase):
             None,
         )
         review_path = self.task / "reviews" / "r001" / "review-001.json"
-        review = read_json(
-            ROOT / "templates" / "task" / "reviews" / "r001" / "review-001.json"
-        )
+        review = read_json(template_path(ROOT, "review"))
         handoff_reference = read_json(self.task / "state.json")["artifacts"][
             "review_handoff"
         ]
@@ -1610,9 +1621,7 @@ class PolarisCoreTests(unittest.TestCase):
             None,
         )
         validation_path = self.task / "validations" / "r001" / "validation-001.json"
-        validation = read_json(
-            ROOT / "templates" / "task" / "validations" / "r001" / "validation-001.json"
-        )
+        validation = read_json(template_path(ROOT, "validation"))
         validation.update(
             {
                 "subject_base_commit": subject["base_commit"],
@@ -1663,9 +1672,7 @@ class PolarisCoreTests(unittest.TestCase):
             None,
         )
         result_path = self.task / "results" / "r001" / "result-001.json"
-        result = read_json(
-            ROOT / "templates" / "task" / "results" / "r001" / "result-001.json"
-        )
+        result = read_json(template_path(ROOT, "result"))
         result.update(
             {
                 "subject_base_commit": subject["base_commit"],
@@ -1789,9 +1796,7 @@ class PolarisCoreTests(unittest.TestCase):
         )
         subject_1 = read_json(self.task / "state.json")["subject"]
         validation_path = self.task / "validations" / "r001" / "validation-001.json"
-        validation = read_json(
-            ROOT / "templates" / "task" / "validations" / "r001" / "validation-001.json"
-        )
+        validation = read_json(template_path(ROOT, "validation"))
         validation.update(
             {
                 "subject_base_commit": subject_1["base_commit"],
@@ -1944,9 +1949,7 @@ class PolarisCoreTests(unittest.TestCase):
 
         prior_reference = read_json(self.task / "state.json")["artifacts"]["prior_review"]
         response_path = self.task / "reviews" / "r001" / "response-002.json"
-        response = read_json(
-            ROOT / "templates" / "task" / "reviews" / "r001" / "response-002.json"
-        )
+        response = read_json(template_path(ROOT, "review_response"))
         response.update(
             {
                 "implementer_session_id": "impl-session-2",

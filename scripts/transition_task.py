@@ -41,6 +41,8 @@ from review_protocol import (
     validate_review_response,
 )
 from working_set_protocol import validate_working_set
+from task_layout import events_path as task_events_path
+from task_layout import state_path as task_state_path
 
 
 def parse_artifacts(values: list[str], directory: Path) -> dict[str, dict[str, str]]:
@@ -313,9 +315,9 @@ def transition(
     lock_path = directory / ".transition.lock"
     descriptor = acquire_lock(lock_path)
     try:
-        state_path = directory / "state.json"
+        state_path = task_state_path(directory)
         state = read_json(state_path)
-        if rebuild_state_value(directory / "events.jsonl") != state:
+        if rebuild_state_value(task_events_path(directory)) != state:
             raise RuleFailure("state.json differs from events.jsonl; rebuild before transition")
         workflow = read_json(repo / ".polaris" / "workflow.json")
         candidates = [item for item in workflow["transitions"] if item["event"] == event_name]
@@ -468,7 +470,7 @@ def transition(
             "subject": next_state["subject"],
             "submitted_artifacts": submitted_artifacts,
         }
-        append_jsonl(directory / "events.jsonl", event)
+        append_jsonl(task_events_path(directory), event)
         write_json_atomic(state_path, next_state)
         refresh_project_index(repo)
         return {

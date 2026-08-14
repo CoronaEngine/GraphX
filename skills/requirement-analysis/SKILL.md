@@ -31,7 +31,7 @@ Ask the user to explicitly confirm this preview. Prefer the structured choice UI
 5. Set every risk flag explicitly. Any true risk flag requires at least R2.
 6. Assign Human and Agent decision owners. Do not decide Human-owned boundaries.
 7. Bind `base_commit` to a full Git SHA.
-8. Write the next `revisions/work-item-rNNN.json` draft. Do not create a duplicate Markdown Work Item. The JSON becomes immutable when qualification succeeds.
+8. Use `new_revision.py` for a subsequent revision and use the path it returns; never assemble a task-relative path independently. Do not create a duplicate Markdown Work Item. The JSON becomes immutable when qualification succeeds.
 9. Present `WORK_ITEM_PREVIEW` and wait for explicit Human confirmation.
 10. Validate the JSON, then use `transition_task.py ... QUALIFY` or `NEW_REVISION` and report `WORK_ITEM_QUALIFIED`.
 

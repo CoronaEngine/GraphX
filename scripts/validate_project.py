@@ -9,6 +9,7 @@ from pathlib import Path
 
 from polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
 from recovery_protocol import project_index_value
+from task_layout import TASKS_ROOT
 from validate_task import validate as validate_task
 
 
@@ -84,7 +85,7 @@ def validate(repo: Path) -> dict[str, object]:
         if missing:
             raise RuleFailure(f"missing vendored Skills: {', '.join(missing)}")
 
-    task_root = polaris / "tasks"
+    task_root = repo / TASKS_ROOT
     listed = set(project["active_tasks"])
     actual = {path.name for path in task_root.glob("TASK-[0-9][0-9][0-9][0-9]") if path.is_dir()}
     orphaned = actual - listed

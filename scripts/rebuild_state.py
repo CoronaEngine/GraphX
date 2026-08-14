@@ -9,14 +9,15 @@ from pathlib import Path
 
 from polaris_core import rebuild_state_value, run_main, task_dir, write_json_atomic
 from recovery_protocol import refresh_project_index
+from task_layout import events_path, state_path
 
 
 def rebuild(repo: Path, task_id: str, check_only: bool) -> dict[str, object]:
     directory = task_dir(repo, task_id)
-    state = rebuild_state_value(directory / "events.jsonl")
-    state_path = directory / "state.json"
+    state = rebuild_state_value(events_path(directory))
+    destination = state_path(directory)
     if not check_only:
-        write_json_atomic(state_path, state)
+        write_json_atomic(destination, state)
         refresh_project_index(repo)
     return {
         "message": f"{task_id} state {'checked' if check_only else 'rebuilt'} at sequence {state['sequence']}",

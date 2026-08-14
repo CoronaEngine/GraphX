@@ -31,6 +31,8 @@ from review_protocol import (
     validate_review_response,
 )
 from working_set_protocol import validate_working_set
+from task_layout import events_path, explorations_dir
+from task_layout import state_path as task_state_path
 
 
 ORDER = [
@@ -75,17 +77,17 @@ def require_artifact(state: dict[str, Any], directory: Path, name: str) -> Path:
 def validate(repo: Path, task_id: str) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    state_path = directory / "state.json"
-    state = validate_json_file(state_path, root / "schemas" / "task-state.schema.json")
+    state_file = task_state_path(directory)
+    state = validate_json_file(state_file, root / "schemas" / "task-state.schema.json")
     event_schema = read_json(root / "schemas" / "event.schema.json")
-    for event in load_events_checked(directory / "events.jsonl"):
+    for event in load_events_checked(events_path(directory)):
         errors = validate_schema(event, event_schema)
         if errors:
             raise RuleFailure(
                 f"event {event.get('sequence')} failed schema validation:\n- "
                 + "\n- ".join(errors)
             )
-    rebuilt = rebuild_state_value(directory / "events.jsonl")
+    rebuilt = rebuild_state_value(events_path(directory))
     if rebuilt != state:
         raise RuleFailure("state.json does not match the state reconstructed from events.jsonl")
 
@@ -107,7 +109,7 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
     full_commit(repo, work_item["base_commit"])
 
     exploration_schema = root / "schemas" / "exploration.schema.json"
-    for exploration_path in sorted((directory / "explorations").glob("EXP-*.json")):
+    for exploration_path in sorted(explorations_dir(directory).glob("EXP-*.json")):
         exploration = validate_json_file(exploration_path, exploration_schema)
         if exploration["scope"] != "task" or not exploration["task"].startswith(
             f"{task_id}@"

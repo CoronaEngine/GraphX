@@ -18,6 +18,12 @@ from polaris_core import (
     validate_schema,
 )
 from review_protocol import normalized_reference
+from task_layout import (
+    implementation_relative_path,
+    state_path,
+    task_repo_relative_path,
+    task_root_relative_path,
+)
 
 
 REQUIRED_PACKAGE_ROLES = {
@@ -102,12 +108,13 @@ def validate_handoff_value(
         raise RuleFailure("Implementation handoff has the wrong subject base commit")
     if handoff["previous_review"] != previous_review:
         raise RuleFailure("Implementation handoff does not bind the current prior Review")
-    expected_output = f"implementations/r{revision:03d}/attempt-{attempt:03d}.json"
+    expected_output = implementation_relative_path(revision, attempt).as_posix()
     if handoff["output_path"] != expected_output:
         raise RuleFailure("Implementation handoff has a non-deterministic output path")
-    if handoff["progress_json_path"] != (
-        f".polaris/tasks/{state['task_id']}/runtime/progress.json"
-    ):
+    expected_progress = task_repo_relative_path(
+        state["task_id"], "progress"
+    ).as_posix()
+    if handoff["progress_json_path"] != expected_progress:
         raise RuleFailure("Implementation handoff has the wrong progress JSON path")
     roles = {entry["role"] for entry in handoff["package"]}
     missing = REQUIRED_PACKAGE_ROLES - roles
@@ -179,7 +186,7 @@ def validate_progress_value(
         or progress["work_item_revision"] != state["current_revision"]
         or progress["artifact_attempt"] != handoff["artifact_attempt"]
         or progress["handoff_path"]
-        != f".polaris/tasks/{task_id}/{reference['path']}"
+        != (task_root_relative_path(task_id) / reference["path"]).as_posix()
         or progress["handoff_sha256"] != reference["sha256"]
     ):
         raise RuleFailure("Live progress targets the wrong Implementation handoff")
@@ -267,7 +274,7 @@ def step_results(progress: dict[str, Any]) -> list[dict[str, str]]:
 def validate_progress(repo: Path, task_id: str) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     if state["status"] not in {"IMPLEMENTING", "IMPLEMENTED"}:
         raise RuleFailure(
             "Live implementation progress is valid only while IMPLEMENTING or IMPLEMENTED"

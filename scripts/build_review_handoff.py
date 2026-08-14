@@ -23,6 +23,7 @@ from polaris_core import (
     write_json_atomic,
 )
 from review_protocol import MAX_REVIEW_ATTEMPTS, normalized_reference
+from task_layout import evidence_dir, review_handoff_path, state_path
 from working_set_protocol import validate_working_set
 
 
@@ -74,7 +75,7 @@ def build(
 ) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     if state["status"] != "DOCS_SYNCED":
         raise RuleFailure("review handoff can only be built from DOCS_SYNCED")
     implementation_reference = normalized_reference(
@@ -135,7 +136,7 @@ def build(
         _entry(repo, "working_set", working_set),
         _artifact_entry(repo, directory, state, "implementation", "implementation"),
         _artifact_entry(repo, directory, state, "knowledge_delta", "knowledge_delta"),
-        _entry(repo, "evidence", directory / "evidence" / f"r{revision:03d}"),
+        _entry(repo, "evidence", evidence_dir(directory, revision)),
     ]
     if previous_review is not None:
         package.append(_entry(repo, "previous_review", directory / previous_review["path"]))
@@ -174,7 +175,7 @@ def build(
         "previous_review": previous_review,
         "package": package,
     }
-    path = directory / "reviews" / f"r{revision:03d}" / f"handoff-{attempt:03d}.json"
+    path = review_handoff_path(directory, revision, attempt)
     if path.exists():
         raise InputFailure(f"review handoff is immutable and already exists: {path}")
     write_json_atomic(path, handoff)

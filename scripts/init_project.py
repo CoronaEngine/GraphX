@@ -16,6 +16,7 @@ from polaris_core import (
     run_main,
     write_json_atomic,
 )
+from task_layout import RUNTIME_IGNORE_PATTERN, TASKS_ROOT
 
 
 def initialize(repo: Path, project_id: str) -> dict[str, str]:
@@ -23,7 +24,7 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
     polaris = repo / ".polaris"
     if polaris.exists():
         raise InputFailure(f"project is already initialized: {polaris}")
-    (polaris / "tasks").mkdir(parents=True)
+    (repo / TASKS_ROOT).mkdir(parents=True)
     (polaris / "decisions").mkdir()
     (polaris / "explorations").mkdir()
     template = read_json(root / "templates" / "project.json")
@@ -36,7 +37,7 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
     agents_path = repo / "AGENTS.md"
     if not agents_path.exists():
         shutil.copyfile(root / "templates" / "AGENTS.md", agents_path)
-    ensure_gitignore_rule(repo, ".polaris/tasks/*/runtime/")
+    ensure_gitignore_rule(repo, RUNTIME_IGNORE_PATTERN)
     return {"message": f"initialized Polaris project {project_id}"}
 
 

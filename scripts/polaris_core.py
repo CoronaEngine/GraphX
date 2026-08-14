@@ -12,6 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from task_layout import task_root_relative_path
+from task_layout import work_item_path as current_work_item_path
+
 
 class RuleFailure(Exception):
     """The input is readable but violates a Polaris rule (exit 1)."""
@@ -177,11 +180,7 @@ def workflow_path(repo: Path) -> Path:
 def task_dir(repo: Path, task_id: str) -> Path:
     if not re.fullmatch(r"TASK-[0-9]{4}", task_id):
         raise InputFailure(f"invalid task id: {task_id}")
-    return repo / ".polaris" / "tasks" / task_id
-
-
-def current_work_item_path(directory: Path, revision: int) -> Path:
-    return directory / "revisions" / f"work-item-r{revision:03d}.json"
+    return repo / task_root_relative_path(task_id)
 
 
 def _matches_type(value: Any, expected: str) -> bool:

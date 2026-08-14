@@ -17,11 +17,12 @@ from polaris_core import (
     task_dir,
     write_json_atomic,
 )
+from task_layout import state_path
 
 
 def create(repo: Path, task_id: str) -> dict[str, object]:
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     revision = state["current_revision"] + 1
     destination = current_work_item_path(directory, revision)
     if destination.exists():

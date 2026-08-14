@@ -20,6 +20,7 @@ from polaris_core import (
     validate_json_file,
     write_json_atomic,
 )
+from task_layout import TASKS_ROOT, exploration_path, state_path, task_relative_path
 
 
 EXPLORATION_ID = re.compile(r"^EXP-([0-9]{4})\.json$")
@@ -28,7 +29,11 @@ EXPLORATION_ID = re.compile(r"^EXP-([0-9]{4})\.json$")
 def _next_id(repo: Path) -> str:
     numbers: list[int] = []
     roots = [repo / ".polaris" / "explorations"]
-    roots.extend((repo / ".polaris" / "tasks").glob("TASK-*/explorations"))
+    roots.extend(
+        (repo / TASKS_ROOT).glob(
+            f"TASK-*/{task_relative_path('explorations').as_posix()}"
+        )
+    )
     for root in roots:
         if not root.is_dir():
             continue
@@ -65,7 +70,7 @@ def record(
     if missing:
         raise RuleFailure(f"exploration requires non-empty fields: {missing}")
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     exploration_id = _next_id(repo)
     value = {
         "id": exploration_id,
@@ -82,7 +87,7 @@ def record(
         "recorded_at": utc_now(),
         "promoted_from": None,
     }
-    path = directory / "explorations" / f"{exploration_id}.json"
+    path = exploration_path(directory, exploration_id)
     if path.exists():
         raise InputFailure(f"exploration is immutable and already exists: {path}")
     write_json_atomic(path, value)
@@ -101,7 +106,7 @@ def promote(repo: Path, task_id: str, exploration_id: str) -> dict[str, Any]:
         raise InputFailure(f"invalid exploration ID: {exploration_id}")
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    source = directory / "explorations" / f"{exploration_id}.json"
+    source = exploration_path(directory, exploration_id)
     value = validate_json_file(source, root / "schemas" / "exploration.schema.json")
     if value["scope"] != "task" or not value["task"].startswith(f"{task_id}@"):
         raise RuleFailure("only a task-local exploration can be promoted by its task")

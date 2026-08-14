@@ -19,6 +19,7 @@ from polaris_core import (
     write_json_atomic,
 )
 from working_set_protocol import SECTIONS, validate_working_set_value
+from task_layout import explorations_dir, plan_path, state_path, working_set_path
 
 
 def _existing(
@@ -83,10 +84,10 @@ def build(
     drop_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     work_item_path = current_work_item_path(directory, state["current_revision"])
     work_item = read_json(work_item_path)
-    destination = directory / "working-set.json"
+    destination = working_set_path(directory)
     entries = (
         {section: {} for section in SECTIONS}
         if force
@@ -111,7 +112,7 @@ def build(
     _add(
         entries,
         "Documents",
-        directory.joinpath("PLAN.md").relative_to(repo).as_posix(),
+        plan_path(directory).relative_to(repo).as_posix(),
         "delta plan and acceptance mapping",
         "task state",
     )
@@ -134,7 +135,7 @@ def build(
             "work-item.known_unknowns",
         )
 
-    for path in sorted((directory / "explorations").glob("EXP-*.json")):
+    for path in sorted(explorations_dir(directory).glob("EXP-*.json")):
         _add(
             entries,
             "Explorations",

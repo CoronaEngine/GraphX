@@ -57,12 +57,10 @@
             ]
         },
         "output_path": {
-            "type": "string",
-            "pattern": "^implementations/r[0-9]{3}/attempt-[0-9]{3}\\.json$"
+            "type": "string"
         },
         "progress_json_path": {
-            "type": "string",
-            "pattern": "^\\.polaris/tasks/TASK-[0-9]{4}/runtime/progress\\.json$"
+            "type": "string"
         },
         "package": {
             "type": "array",

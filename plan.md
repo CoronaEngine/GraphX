@@ -36,6 +36,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 10. **Failed exploration is durable knowledge.** 失败尝试必须记录原因、证据和重试条件，避免跨会话重复踩坑。
 11. **Rigor is progressive.** 风险越高，所需产物、独立审查和人工门禁越严格。
 12. **Machine validation wins format decisions.** 同一内容同时需要机械校验和人类阅读时，默认只保存四格缩进 JSON，并在展示时按需格式化；只有独立自然语言内容无法用结构化字段清晰表达时才使用 Markdown。
+13. **Task layout has one source.** `scripts/task_layout.py` 是任务相对路径的唯一权威；初始化、构建器、校验器和模板样例都从同一组路径模式生成，Schema 不重复硬编码目录正则。
 
 ## 2. MVP 范围
 
@@ -417,6 +418,7 @@ AGENTS.md
 | `build_working_set.py` | 根据 Work Item、模块索引和显式引用生成/刷新结构化工作集 |
 | `refresh_project_index.py` | 从项目和任务 Authority 原子刷新结构化恢复索引 |
 | `build_implementation_handoff.py` | 从当前 revision、Plan、Working Set 与 prior Review 构造不可变 Implementer 输入包 |
+| `task_layout.py` | 集中定义所有任务相对路径、动态 revision/attempt 渲染和模板样例投影 |
 | `update_implementation_progress.py` | 通过明确事件原子更新 ignored 的线性步骤进度；拒绝 session 接管、跳步、回退、未知验收 ID 和非法 blocker |
 | `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |

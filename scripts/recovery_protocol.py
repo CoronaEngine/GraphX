@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from polaris_core import read_json, task_dir, write_json_atomic
+from polaris_core import current_work_item_path, read_json, task_dir, write_json_atomic
+from task_layout import state_path
 
 
 NEXT_ACTIONS = {
@@ -34,12 +35,8 @@ def project_index_value(repo: Path) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for task_id in sorted(project["active_tasks"]):
         directory = task_dir(repo, task_id)
-        state = read_json(directory / "state.json")
-        work_item = read_json(
-            directory
-            / "revisions"
-            / f"work-item-r{state['current_revision']:03d}.json"
-        )
+        state = read_json(state_path(directory))
+        work_item = read_json(current_work_item_path(directory, state["current_revision"]))
         rows.append(
             {
                 "task_id": task_id,

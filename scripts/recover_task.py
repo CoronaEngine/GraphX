@@ -25,6 +25,7 @@ from recovery_protocol import (
 from working_set_protocol import validate_working_set, working_set_entries
 from validate_project import validate as validate_project
 from validate_task import validate as validate_task
+from task_layout import events_path, progress_path, state_path, working_set_path
 
 
 def recover(repo: Path, task_id: str) -> dict[str, Any]:
@@ -32,16 +33,16 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
     validate_project(repo)
     validate_task(repo, task_id)
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     work_item = read_json(current_work_item_path(directory, state["current_revision"]))
-    events_path = directory / "events.jsonl"
+    task_events_path = events_path(directory)
     last_event = None
-    for line in events_path.read_text(encoding="utf-8").splitlines():
+    for line in task_events_path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             last_event = json.loads(line)
     blocker = state.get("blocker")
     work_item_path = current_work_item_path(directory, state["current_revision"])
-    working_set_path = directory / "working-set.json"
+    task_working_set_path = working_set_path(directory)
     minimum_entries = [
         {
             "section": "Bootstrap",
@@ -57,7 +58,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
         },
         {
             "section": "Bootstrap",
-            "path": (directory / "state.json").relative_to(repo).as_posix(),
+            "path": state_path(directory).relative_to(repo).as_posix(),
             "reason": "current authority projection",
             "discovered_from": "active task index",
         },
@@ -69,7 +70,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
         },
         {
             "section": "Bootstrap",
-            "path": working_set_path.relative_to(repo).as_posix(),
+            "path": task_working_set_path.relative_to(repo).as_posix(),
             "reason": "bounded task context cache",
             "discovered_from": "fixed recovery order",
         },
@@ -77,7 +78,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
     known_paths = {item["path"] for item in minimum_entries}
     working_set_status: dict[str, Any]
     try:
-        working_set = validate_working_set(repo, task_id, working_set_path)
+        working_set = validate_working_set(repo, task_id, task_working_set_path)
         minimum_entries.extend(
             item
             for item in working_set_entries(working_set)
@@ -88,19 +89,19 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
         working_set_status = {"available": False, "reason": str(exc)}
     live_progress: dict[str, Any] | None = None
     if state["status"] in {"IMPLEMENTING", "IMPLEMENTED"}:
-        progress_path = directory / "runtime" / "progress.json"
-        if progress_path.is_file():
+        task_progress_path = progress_path(directory)
+        if task_progress_path.is_file():
             try:
                 progress = validate_progress(repo, task_id)
                 live_progress = {
                     "available": True,
-                    "path": progress_path.relative_to(repo).as_posix(),
+                    "path": task_progress_path.relative_to(repo).as_posix(),
                     "value": progress,
                 }
             except (RuleFailure, InputFailure) as exc:
                 live_progress = {
                     "available": False,
-                    "path": progress_path.relative_to(repo).as_posix(),
+                    "path": task_progress_path.relative_to(repo).as_posix(),
                     "reason": str(exc),
                 }
     return {
@@ -124,7 +125,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
         "recommended_next_action": recommended_action(state),
         "live_implementation_progress": live_progress,
         "minimum_working_set": {
-            "path": str(working_set_path),
+            "path": str(task_working_set_path),
             **working_set_status,
             "entries": minimum_entries,
         },

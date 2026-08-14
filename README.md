@@ -8,7 +8,7 @@ Polaris 是一套运行在 Codex 之上的、以仓库为权威状态的软件�
 
 Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须在请求中主动调用 `$engineering-task`。其他阶段 Skills 同样禁止隐式调用，只能由已启动的工作流在合法节点分派。
 
-> 当前版本：`0.1.5`（开发中）
+> 当前版本：`0.1.6`（开发中）
 
 ## 核心目标
 
@@ -70,6 +70,7 @@ v0.1 明确不实现：
 - 状态转换、项目/任务校验、事件账本和状态重建
 - Git subject commit/diff hash 绑定
 - 可恢复、验收标准绑定的线性 `implementation_steps`，以及冻结到 Implementation artifact 的 `step_results`
+- 由 `scripts/task_layout.py` 统一生成运行时路径和模板样例，避免目录规则形成多个真源
 - Documentation impact 检查
 - R1 Review → Validation → Result → CLOSED 的机械闭环
 - 不可变 Reviewer handoff、独立会话声明和三轮 Review 上限
@@ -174,7 +175,7 @@ python scripts/vendor_project.py C:\path\to\target-repo
 python scripts/vendor_project.py C:\path\to\target-repo --force
 ```
 
-`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤，并把终态步骤结果冻结进 Implementation artifact；`0.1.5` 让任务模板目录镜像实际生成目录。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
+`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤，并把终态步骤结果冻结进 Implementation artifact；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将所有任务路径集中到 `task_layout.py` 单一真源。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
 
 ### 2. 初始化项目状态
 

@@ -12,6 +12,7 @@ from polaris_core import (
     task_dir,
     validate_schema,
 )
+from task_layout import state_path, working_set_path
 
 
 SECTIONS = ["Documents", "Code", "Tests", "Decisions", "Explorations", "Unknowns"]
@@ -55,9 +56,9 @@ def validate_working_set(
     path: Path | None = None,
 ) -> dict[str, Any]:
     directory = task_dir(repo, task_id)
-    state = read_json(directory / "state.json")
+    state = read_json(state_path(directory))
     if path is None:
-        path = directory / "working-set.json"
+        path = working_set_path(directory)
     elif not path.is_absolute():
         path = directory / path
     return validate_working_set_value(repo, task_id, state, read_json(path))

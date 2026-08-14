@@ -5,7 +5,7 @@ description: Internal Polaris worker stage for an explicitly started `$engineeri
 
 # Implementation
 
-1. Require the task ID and registered `implementations/rNNN/handoff-NNN.json`. Load only that handoff and its package as task context; read `state.json` only to verify registration. Do not read the main conversation or infer unstated requirements.
+1. Require the task ID and registered Implementation handoff path returned by the main task. Load only that handoff and its package as task context; read `state.json` only to verify registration. Use paths carried by the handoff or resolved by `task_layout.py`; never reconstruct them from prose. Do not read the main conversation or infer unstated requirements.
 2. Confirm state is `IMPLEMENTING`, the handoff hash matches `state.json`, and `artifact_attempt`, revision, base commit, output path, and progress paths are current.
 3. Generate one stable Implementer session ID for this conversation. Before changing code, use the initialized live snapshot's `DEFINE_STEPS` event to create a non-empty ordered `implementation_steps` list. Every step receives the next `STEP-NNN` ID and must reference one or more acceptance IDs from the frozen Work Item.
 4. Execute steps linearly with `START_STEP`, then `COMPLETE_STEP`, `BLOCK_STEP`, or `RESUME_STEP`; use `SKIP_STEP` only with an explicit reason. Existing step identity, title, order, and acceptance bindings are immutable. Newly discovered work may only be added at the end with `APPEND_STEP`. Never edit `progress.json` directly.
