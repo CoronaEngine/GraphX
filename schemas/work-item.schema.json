@@ -172,6 +172,33 @@
                 "type": "string"
             }
         },
+        "review_dispatch": {
+            "type": "object",
+            "required": [
+                "mode",
+                "fallback",
+                "same_local_project",
+                "authorized"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "const": "auto_new_task"
+                },
+                "fallback": {
+                    "type": "string",
+                    "const": "manual_handoff"
+                },
+                "same_local_project": {
+                    "type": "boolean",
+                    "const": true
+                },
+                "authorized": {
+                    "type": "boolean"
+                }
+            }
+        },
         "known_unknowns": {
             "type": "array",
             "items": {

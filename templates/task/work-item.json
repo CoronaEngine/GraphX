@@ -34,5 +34,11 @@
         "agent": []
     },
     "approval_gates": [],
+    "review_dispatch": {
+        "mode": "auto_new_task",
+        "fallback": "manual_handoff",
+        "same_local_project": true,
+        "authorized": false
+    },
     "known_unknowns": []
 }

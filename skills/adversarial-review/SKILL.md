@@ -8,16 +8,16 @@ description: Internal Polaris review stage for an explicitly started `$engineeri
 For R1/R2, run only in a fresh Codex session or an isolated reviewer agent created without implementation chat history. If this context implemented the subject or inherited that conversation, stop without reviewing. R0 may use the same session only as an explicit isolated pass.
 
 1. Run `recover_task.py <task-id> --repo . --json` and require state `REVIEWING`.
-2. Load the registered `review_handoff` and only its package paths. Do not use implementer explanations or prior chat.
+2. Require an explicit Reviewer slot and registered `review_handoff` path from the dispatcher. Load only that handoff and its package paths. Do not use implementer explanations, prior chat, another Reviewer's artifact, or an expected verdict.
 3. Verify handoff hashes, task revision, Review attempt, exact subject commits/diff hash, and the required isolation mode.
 4. Assign a reviewer session ID distinct from the implementer for R1/R2. Attest truthfully to isolation and chat-history inheritance; do not fabricate independence.
 5. Check specification compliance first: correct problem, scope, exclusions, constraints, and every acceptance criterion.
 6. Check engineering quality second: correctness, failure paths, lifetime, concurrency, security, performance, compatibility, maintainability, test gaps, and counterexamples.
 7. Preserve every prior Finding ID in a follow-up Review. Read the registered author response, recheck the entire new patch, and record a concrete `reviewer_resolution` for each carried Finding.
 8. Give new Findings monotonic IDs and mark critical/high, acceptance failures, and scope violations as blocking.
-9. Write a new immutable Review JSON bound to the handoff and session attestation. Reject while any blocking Finding remains open.
-10. Use `ACCEPT_REVIEW` or `REJECT_REVIEW`; never modify implementation code during Review. A third rejection enters Human-owned `BLOCKED`.
+9. Write a new immutable Review JSON bound to the handoff, Reviewer slot, and session attestation. Use `reviews/<revision>/review-<attempt>.json` for slot 1 and `reviews/<revision>/review-<attempt>-2.json` for slot 2. Never overwrite an existing artifact. Reject while any blocking Finding remains open.
+10. Return the verdict and exact Review path to the dispatching `$engineering-task` context. Do not run `ACCEPT_REVIEW` or `REJECT_REVIEW`; the dispatcher validates and registers all required Review artifacts before applying the graph transition. Never modify implementation code or start another Reviewer task during Review.
 
-After the transition succeeds, reload state and emit `[POLARIS:REVIEW_ACCEPTED]` or `[POLARIS:REVIEW_REJECTED]` with the nine fixed `$engineering-task` status fields. Include Review attempt, reviewer session ID, subject commits/diff hash, every Finding ID and status, and the immutable Review path. If isolation or handoff validation prevents review, emit `[POLARIS:TASK_BLOCKED]` instead and name the exact required fresh-session or handoff action.
+Return a concise structured result to the dispatcher with verdict, Review attempt, Reviewer slot, reviewer session ID, subject commits/diff hash, every Finding ID and status, and the immutable Review path. Do not emit a Polaris checkpoint marker from the child task. The dispatching context emits `[POLARIS:REVIEW_ACCEPTED]` or `[POLARIS:REVIEW_REJECTED]` with the nine fixed fields only after the corresponding transition succeeds. If isolation or handoff validation prevents review, do not write a Review; report the exact required fresh-session or handoff action to the dispatcher.
 
 Only the Reviewer context may write `ACCEPT`.

@@ -79,6 +79,7 @@ class PolarisCoreTests(unittest.TestCase):
         value["acceptance"][0].update(
             {"statement": "Task reaches PLANNED", "evidence": "state validation"}
         )
+        value["review_dispatch"]["authorized"] = True
         write_json_atomic(path, value)
 
     def start_review(
@@ -481,6 +482,9 @@ class PolarisCoreTests(unittest.TestCase):
         expected_markers = {
             "engineering-task": [
                 "POLARIS_STARTED",
+                "REVIEW_SESSION_STARTED",
+                "REVIEW_ACCEPTED",
+                "REVIEW_REJECTED",
                 "TASK_BLOCKED",
                 "TASK_CANCELLED",
                 "TASK_CLOSED",
@@ -493,7 +497,7 @@ class PolarisCoreTests(unittest.TestCase):
             "architecture-planning": ["PLAN_READY"],
             "implementation": ["IMPLEMENTATION_FINISHED"],
             "documentation-sync": ["DOCS_SYNCED"],
-            "adversarial-review": ["REVIEW_ACCEPTED", "REVIEW_REJECTED"],
+            "adversarial-review": [],
             "validation": ["VALIDATION_PASS", "VALIDATION_FAIL"],
         }
         contract_fields = [
@@ -525,7 +529,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn("request_user_input", requirement_text)
         self.assertIn("render the identical questions and options in text", requirement_text)
         self.assertIn("Do not change host mode solely to obtain the panel", requirement_text)
-        self.assertIn("Confirm and qualify (Recommended)", requirement_text)
+        self.assertIn("Confirm and execute (Recommended)", requirement_text)
 
         self.assertIn("request_user_input", entry_text)
         self.assertIn("If the tool is unavailable", entry_text)
@@ -542,6 +546,197 @@ class PolarisCoreTests(unittest.TestCase):
             for marker in markers:
                 with self.subTest(skill=skill_name, marker=marker):
                     self.assertIn(marker, source_text)
+
+    def test_review_dispatch_requires_confirm_and_execute_authorization(self) -> None:
+        """自动创建 Review 任务前必须由 Work Item 确认显式授权。"""
+        requirement_text = (
+            ROOT / "skills" / "requirement-analysis" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        entry_text = (
+            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Confirm and execute (Recommended)", requirement_text)
+        self.assertIn(
+            "authorizes Polaris to create every required independent Review task",
+            requirement_text,
+        )
+        self.assertIn("Do not create Reviewer tasks without that authority", entry_text)
+
+        path = self.task / "revisions" / "work-item-r001.json"
+        value = read_json(path)
+        value.update(
+            {
+                "title": "Authorization gate",
+                "goal": "Require explicit dispatch authorization",
+                "motivation": "Keep authorization in repository authority",
+            }
+        )
+        value["scope"]["in"] = ["skills"]
+        value["acceptance"][0].update(
+            {"statement": "Authorization is required", "evidence": "gate result"}
+        )
+        legacy_value = copy.deepcopy(value)
+        legacy_value.pop("review_dispatch")
+        schema = read_json(ROOT / "schemas" / "work-item.schema.json")
+        self.assertEqual(validate_schema(legacy_value, schema), [])
+        write_json_atomic(path, legacy_value)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "QUALIFY",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        write_json_atomic(path, value)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "QUALIFY",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        value["review_dispatch"]["authorized"] = True
+        write_json_atomic(path, value)
+        self.assertEqual(
+            transition(
+                self.repo,
+                "TASK-0001",
+                "QUALIFY",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )["to"],
+            "QUALIFIED",
+        )
+
+    def test_r0_keeps_isolated_review_in_same_session(self) -> None:
+        """R0 继续使用同会话隔离审查，不创建独立 Review 任务。"""
+        entry_text = (
+            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        review_text = (
+            ROOT / "skills" / "adversarial-review" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("R0 performs an explicit isolated same-session pass", entry_text)
+        self.assertIn("R0 may use the same session only as an explicit isolated pass", review_text)
+
+    def test_r1_dispatches_one_visible_fresh_local_task(self) -> None:
+        """R1 在同一本地项目中创建可见新任务，禁止 fork 和默认 worktree。"""
+        entry_text = (
+            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("dispatch a fresh task in that same local checkout", entry_text)
+        self.assertIn("Never fork the implementation conversation", entry_text)
+        self.assertIn("do not use a separate worktree by default", entry_text)
+
+    def test_reviewer_prompt_is_handoff_only_without_implementation_history(self) -> None:
+        """Reviewer 启动提示只含身份与 handoff，不泄漏实现总结或预期 verdict。"""
+        entry_text = (
+            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        review_text = (
+            ROOT / "skills" / "adversarial-review" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("only the task ID, Reviewer slot, registered handoff path", entry_text)
+        self.assertIn(
+            "Use $adversarial-review for <TASK>, Reviewer slot <SLOT>",
+            entry_text,
+        )
+        self.assertIn("Do not include implementation explanations", entry_text)
+        self.assertIn("another Reviewer's artifact, or an expected verdict", review_text)
+        fixture = read_json(
+            ROOT / "tests" / "fixtures" / "review-dispatch-host-smoke.json"
+        )
+        self.assertEqual(fixture["required_isolation"], "fresh_session")
+        self.assertEqual(fixture["reviewer_slot"], 1)
+        self.assertEqual(
+            fixture["output"], ".polaris-host-smoke/review-result.json"
+        )
+
+    def test_review_dispatch_is_idempotent_by_artifact_and_title(self) -> None:
+        """恢复时优先复用 artifact 或唯一同名任务，禁止重复派发。"""
+        entry_text = (
+            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>",
+            entry_text,
+        )
+        self.assertIn("first accept a valid deterministic Review artifact", entry_text)
+        self.assertIn("Never create a duplicate", entry_text)
+        self.assertIn("multiple exact matches", entry_text)
+
+    def test_review_rejection_returns_to_rework_and_redispatches(self) -> None:
+        """Reviewer 拒绝后由主流程合法返工，并为下一 attempt 创建新任务。"""
+        entry_text = (
+            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("run `REJECT_REVIEW`", entry_text)
+        self.assertIn("on rework, generate a new handoff", entry_text)
+        self.assertIn("up to the graph limit", entry_text)
+
+    def test_high_risk_r2_dispatches_distinct_reviewers_sequentially(self) -> None:
+        """高风险 R2 串行派发两个 Reviewer，并要求不同 session ID。"""
+        entry_text = (
+            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        review_text = (
+            ROOT / "skills" / "adversarial-review" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Dispatch required Reviewers sequentially", entry_text)
+        self.assertIn("slot 2 as `review_2`", entry_text)
+        self.assertIn("Reviewer session IDs must be distinct", entry_text)
+        self.assertIn("review-<attempt>-2.json", review_text)
+
+    def test_review_dispatch_falls_back_without_blocking(self) -> None:
+        """宿主自动派发不可用时保持 REVIEWING 并回退手动提示。"""
+        entry_text = (
+            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("keep state `REVIEWING`", entry_text)
+        self.assertIn("provide the exact manual new-task prompt", entry_text)
+        self.assertIn(
+            "do not enter `BLOCKED` solely because host automation is unavailable",
+            entry_text,
+        )
+
+    def test_review_session_started_uses_stable_status_contract(self) -> None:
+        """自动派发状态使用新 marker、固定九字段和四个 Review 详情字段。"""
+        entry_text = (
+            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("REVIEW_SESSION_STARTED", entry_text)
+        for field in (
+            "`Task`",
+            "`Revision`",
+            "`Rigor`",
+            "`State`",
+            "`Outcome`",
+            "`Authority`",
+            "`Remaining`",
+            "`Next`",
+            "`User action`",
+        ):
+            self.assertIn(field, entry_text)
+        for detail in ("`Review task`", "`Reviewer slot`", "`Handoff`", "`Dispatch mode`"):
+            self.assertIn(detail, entry_text)
+        self.assertIn("set `User action` to `None` while the task is running", entry_text)
 
     def test_fresh_clone_recovers_the_committed_task_boundary(self) -> None:
         """Fresh Clone 仅凭已提交的 vendored 协议和仓库状态恢复最近阶段边界。"""
@@ -588,6 +783,8 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(created["revision"], 2)
         path = self.task / "revisions" / "work-item-r002.json"
         value = read_json(path)
+        self.assertFalse(value["review_dispatch"]["authorized"])
+        value["review_dispatch"]["authorized"] = True
         value["known_unknowns"] = []
         write_json_atomic(path, value)
         activated = transition(

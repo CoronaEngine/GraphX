@@ -248,14 +248,15 @@ Polaris 每次暂停、等待用户决定或完成一个阶段时，都会在对
 - `REQUIREMENTS_NEEDED`：需求仍有会影响方案或验收的未知项；
 - `WORK_ITEM_PREVIEW`：Work Item 已整理好，等待用户确认冻结；
 - `WORK_ITEM_QUALIFIED`、`PLAN_READY`、`IMPLEMENTATION_FINISHED`、`DOCS_SYNCED`：阶段检查点；
-- `REVIEW_HANDOFF_READY`：R1/R2 实现会话必须停止，等待独立 Reviewer；
+- `REVIEW_HANDOFF_READY`：handoff 已冻结；宿主无法自动派发时显示完整的手动新任务提示；
+- `REVIEW_SESSION_STARTED`：宿主已创建或复用独立 Review 任务，主任务正在等待；
 - `REVIEW_ACCEPTED` / `REVIEW_REJECTED`、`VALIDATION_PASS` / `VALIDATION_FAIL`：审查与验证结论；
 - `TASK_BLOCKED`：给出 blocker、Decision Owner 和解除条件；
 - `TASK_CLOSED`：仅在转换脚本确实写入 `CLOSED` 后显示。
 
 需求信息不完整时，`requirement-analysis` 每轮只问一到三个会实质影响结果的问题。每个问题会提供两到三个互斥选项，把推荐选项放在第一位，并逐项说明影响；如果选项都不合适，用户仍可直接给出精确答案。宿主提供 `request_user_input` 等结构化交互工具时，Polaris 优先在对话框中弹出选择面板；工具不可调用时，自动回退为内容相同的文本选项，不会为获得面板而自行切换模式或中断任务。
 
-无论通过面板还是文本回答，答案都会写入相同的 Work Item 字段，未回答项会写入 `known_unknowns`，任务停留在 `DRAFT`。信息完整后，无论原始需求多详细，Polaris 都会先展示 `WORK_ITEM_PREVIEW`，列出目标、范围、约束、严谨度、风险、所有验收标准及证据方式，然后等待用户明确确认。确认时同样优先显示“确认并冻结（推荐）/要求修改”的选择面板；未确认时不得进入 `QUALIFIED`。
+无论通过面板还是文本回答，答案都会写入相同的 Work Item 字段，未回答项会写入 `known_unknowns`，任务停留在 `DRAFT`。信息完整后，无论原始需求多详细，Polaris 都会先展示 `WORK_ITEM_PREVIEW`，列出目标、范围、约束、严谨度、风险、所有验收标准及证据方式，然后等待用户明确确认。确认时同样优先显示“确认并执行（推荐）/要求修改”的选择面板；说明文字明确告知：确认会冻结 Work Item，并授权 Polaris 在同一本地项目中自动创建本 revision 所需的全部独立 Review 任务和后续 Review attempts。该授权写入 Work Item 的 `review_dispatch.authorized=true`；新 Revision 会重置为 `false` 并要求重新确认。未确认时不得进入 `QUALIFIED`，也不得创建 Review 任务。
 
 询问示例：
 
@@ -281,7 +282,7 @@ Outcome: Work Item 草案已完整，等待冻结确认
 Authority: .polaris/tasks/TASK-0001/revisions/work-item-r001.json
 Remaining: None
 Next: QUALIFY
-User action: 请确认目标、范围和 AC-01 至 AC-04；如需修改请逐项指出
+User action: 请选择“确认并执行”以冻结上述内容并授权自动创建所需的独立 Review 任务；如需修改请逐项指出
 ```
 
 用户确认后，Polaris 校验 JSON、执行转换、重新读取状态，再输出 `WORK_ITEM_QUALIFIED`。后续若目标、范围、硬约束或验收标准发生实质变化，必须创建新 Revision 并重新确认，不能静默覆盖已冻结内容。
@@ -323,7 +324,7 @@ python tools/polaris/scripts/transition_task.py TASK-0001 <EVENT> --repo .
 Polaris 根据风险选择严谨度：
 
 - `R0`：低风险、小范围、易回退的变更；不要求独立 Reviewer，可在同一会话做明确隔离的审查 pass。
-- `R1`：常规非平凡工程变更；至少一个独立 Reviewer，Review 必须新开会话或使用不继承实现聊天的隔离 reviewer agent。
+- `R1`：常规非平凡工程变更；至少一个独立 Reviewer，宿主支持时自动创建可见新任务，否则回退手动新任务或隔离 reviewer agent。
 - `R2`：高风险变更；要求 Human 预批准和最终批准，并至少一个独立 Reviewer。安全、持久化格式或不可逆迁移等风险还可能要求两个 Reviewer。
 
 用户通常在这些位置参与：
@@ -337,7 +338,7 @@ Polaris 根据风险选择严谨度：
 
 如果实现期间目标或范围改变，不应悄悄修改原 Work Item。应创建新 Revision，并让任务回到 `QUALIFIED` 重新规划。
 
-## 9. 独立 Review：必须注意新会话
+## 9. 独立 Review：自动新任务与手动回退
 
 实现和 Documentation Sync 完成后，先由实现会话生成冻结 handoff：
 
@@ -349,15 +350,29 @@ python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . 
 然后按严谨度处理：
 
 - `R0`：允许同一会话执行明确隔离的审查 pass，handoff 使用 `r0_isolated_same_session`；
-- `R1/R2`：实现会话到这里必须停止 Review 工作；新开 Codex 任务，或者使用不继承实现聊天历史的隔离 reviewer agent；
+- `R1/R2`：实现会话到这里停止实现和 Review 工作，只负责派发、等待、重读仓库 Authority 和执行机械转换；
+- 宿主可以管理 Codex 任务时，在同一本地项目中自动创建可见的新 Review 任务，不 fork 实现对话，也不默认使用独立 worktree；
 - 新 Reviewer 只接收已注册 handoff 路径，使用 `adversarial-review`，先查规格符合性，再查工程质量；
 - Reviewer session ID 必须与实现者不同，并如实记录隔离方式和聊天继承声明。
+
+自动任务标题固定为：
+
+```text
+Polaris Review · TASK-0001 · r001 · attempt 1 · reviewer 1
+```
+
+创建前会先查找该 slot 已存在的有效 Review artifact，再查找唯一同名任务；因此恢复或等待中断不会正常地产生重复 Review 任务。任务启动后主对话显示 `REVIEW_SESSION_STARTED`，其中包括 Review task、Reviewer slot、handoff、dispatch mode，并在 Reviewer 执行期间显示 `User action: None`。
+
+高风险 R2 的两个 Reviewer 按顺序启动，且 session ID 必须不同。任一 Reviewer `REJECT` 后不再启动本轮剩余 Reviewer；全部 `ACCEPT` 后，原 `engineering-task` 会话注册 `review`/`review_2` 并执行 `ACCEPT_REVIEW`。Reviewer 只写不可变 Review JSON，不修改实现，也不直接推进状态机。
+
+如果宿主没有创建、列出或等待 Codex 任务的能力，或者自动派发失败，Polaris 不会因此把业务任务写成 `BLOCKED`，而是保持 `REVIEWING`、显示 `REVIEW_HANDOFF_READY`，并给出下面的手动提示。完成手动 Review 后，回到原任务请求 `$engineering-task` 从仓库恢复并继续。
 
 给新 Review 任务的请求可以是：
 
 ```text
-请使用 adversarial-review 独立审查 TASK-0001。
-只依据仓库中已注册的 Review handoff，不继承或假设实现会话中的结论。
+请使用 $adversarial-review 独立审查 TASK-0001，Reviewer slot 1。
+只依据 .polaris/tasks/TASK-0001/reviews/r001/handoff-001.json，不继承或假设实现会话中的结论。
+写入不可变 Review JSON 后返回 verdict 和路径，不要修改实现或执行状态转换。
 ```
 
 Session ID 是审计声明，不是身份认证。如果宿主没有提供 ID，每个会话开始时应生成一个不复用的稳定标识。
@@ -369,6 +384,8 @@ Session ID 是审计声明，不是身份认证。如果宿主没有提供 ID，
 3. 新 subject 和响应一起注册，再生成下一份 handoff；
 4. Reviewer 保留 Finding ID，复查完整新 patch，并填写 resolution；
 5. 第三次 Review 仍为 `REJECT` 时，状态机会把任务送入 Human-owned `BLOCKED`，不能继续自动循环。
+
+正常 R1 happy path 中，用户确认 Work Item 后不再需要手工创建审查任务或向新任务发送消息。R2 仍保留实施前批准和最终批准；权限请求、Human-owned 决策、手动回退或 `TASK_BLOCKED` 会产生额外交互。
 
 ## 10. 恢复工作
 
@@ -430,6 +447,8 @@ python tools/polaris/scripts/validate_project.py --repo .
 ```
 
 确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。
+
+早期 v0.1 已冻结的 Work Item 可能没有 `review_dispatch`。这些任务仍可按手动 handoff 完成，但 Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成 `authorized=false` 的字段，用户再次“确认并执行”后才启用自动 Review 任务。
 
 ## 12. 失败探索与卡点
 

@@ -71,11 +71,12 @@ v0.1 明确不实现：
 - Documentation impact 检查
 - R1 Review → Validation → Result → CLOSED 的机械闭环
 - 不可变 Reviewer handoff、独立会话声明和三轮 Review 上限
+- Codex 宿主支持时自动创建可见独立 Review 任务，并在其他宿主回退手动交接
 - Review Response 与跨 Attempt 的稳定 Finding 生命周期
 - Fresh-session Recovery、项目索引和可刷新 Working Set
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 25 个带场景日志的自动化测试
+- 34 个带场景日志的自动化测试
 
 仍在建设：
 
@@ -222,7 +223,9 @@ python tools/polaris/scripts/build_review_handoff.py TASK-0001 --repo . --implem
 python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . --artifact review_handoff=reviews/r001/handoff-001.json
 ```
 
-R1/R2 到这里必须停止实现者会话。新建 Codex 会话，或启动不继承实现聊天的隔离 reviewer agent，只向它提供已注册的 handoff 路径，再使用 `$adversarial-review`。Review JSON 必须绑定 handoff，并如实记录隔离模式、聊天继承声明和不同的 Reviewer session ID。
+R1/R2 到这里必须停止实现与审查工作，但原会话会继续承担宿主编排：Work Item 中的 `review_dispatch.authorized=true` 记录用户的“确认并执行”授权；据此优先在同一本地项目中自动创建可见的独立 Codex Review 任务，只传递 task ID、Reviewer slot 和已注册 handoff 路径，再等待其写回 Review JSON。实现对话不会被 fork，Reviewer 不继承实现聊天；也不默认创建独立 worktree。宿主没有创建或等待任务的能力时，Polaris 回退为完整的手动新任务提示，状态保持 `REVIEWING`。
+
+自动 Review 任务使用确定性标题 `Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>`。恢复或重试时先复用已有有效 Review artifact，再复用唯一的同名任务，避免重复创建。高风险 R2 按顺序启动两个独立 Reviewer；任一 Reviewer 拒绝即停止本轮，全部接受后由原会话注册 Review artifacts 并推进状态。
 
 Review 被拒绝后，实现者必须使用 `review-response.json` 模板逐项回复所有 open Finding，并在下一次 `FINISH_IMPLEMENTATION` 同时注册该响应。后续 Reviewer 必须保留 Finding ID、复查完整新 Patch 并填写 Reviewer resolution。第三次 Review 仍为 `REJECT` 时，任务自动进入 Human-owned `BLOCKED`。
 

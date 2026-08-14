@@ -57,7 +57,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - Dashboard、TUI、IDE 或独立 App
 - 自定义 Agent Runtime、模型适配层或进程生命周期管理
 - 数据库、向量库、知识图谱服务或事件服务
-- 自动多任务调度、跨项目管理、实时进度百分比
+- 通用自动多任务调度、跨项目管理、实时进度百分比；当前 TASK 内由宿主创建必要的独立 Review 会话不属于通用调度
 - Task DAG、任务归档和跨任务依赖调度
 - 通用领域 Skill 市场
 - 自动合并、发布或远程 CI 编排
@@ -236,11 +236,11 @@ Skill 描述应按触发边界编写，而不是做技术能力菜单。七个 P
 
 ### 稳定对话协议
 
-`engineering-task` 负责所有用户可见检查点的一致性。每次暂停、Human gate、阶段完成、Review/Validation verdict 和终态都必须输出一个以 `[POLARIS:<MARKER>]` 开头的状态块，并按固定顺序包含 `Task / Revision / Rigor / State / Outcome / Authority / Remaining / Next / User action`。空字段写 `None`，不得省略；状态只能在转换脚本成功后重新读取 Authority 再报告，不得提前宣布。
+`engineering-task` 负责所有用户可见检查点的一致性。每次暂停、Human gate、阶段完成、Review/Validation verdict 和终态都必须输出一个以 `[POLARIS:<MARKER>]` 开头的状态块，并按固定顺序包含 `Task / Revision / Rigor / State / Outcome / Authority / Remaining / Next / User action`。空字段写 `None`，不得省略；状态只能在转换脚本成功后重新读取 Authority 再报告，不得提前宣布。`REVIEW_SESSION_STARTED` 表示宿主已创建独立 Reviewer 任务，状态仍为 `REVIEWING`，并额外显示 Review task、Reviewer slot、handoff 和 dispatch mode。
 
-需求分析每轮最多询问三个会实质影响方案或验收的问题。每个问题必须给出两到三个互斥选项，推荐项排在第一位并逐项说明影响，同时允许用户提供选项之外的精确答案。宿主提供 `request_user_input` 或等效结构化交互工具时优先弹出选择面板；不可调用时必须显示内容相同的文本选项，不得为获得 UI 自行切换宿主模式或阻塞流程。两种回答写入相同 Authority；未回答项进入 `known_unknowns`，任务保持 `DRAFT`。信息完整后必须先展示 `WORK_ITEM_PREVIEW`，完整列出目标、范围、硬约束、rigor、风险、Human-owned 决策和每个 AC 的 statement/evidence，并以相同的 UI-first/text-fallback 规则等待用户明确确认。确认后才能执行 `QUALIFY` 或 `NEW_REVISION` 并输出 `WORK_ITEM_QUALIFIED`。已冻结后发生实质需求变化必须创建新 revision，不允许静默覆盖。
+需求分析每轮最多询问三个会实质影响方案或验收的问题。每个问题必须给出两到三个互斥选项，推荐项排在第一位并逐项说明影响，同时允许用户提供选项之外的精确答案。宿主提供 `request_user_input` 或等效结构化交互工具时优先弹出选择面板；不可调用时必须显示内容相同的文本选项，不得为获得 UI 自行切换宿主模式或阻塞流程。两种回答写入相同 Authority；未回答项进入 `known_unknowns`，任务保持 `DRAFT`。信息完整后必须先展示 `WORK_ITEM_PREVIEW`，完整列出目标、范围、硬约束、rigor、风险、Human-owned 决策和每个 AC 的 statement/evidence，并以相同的 UI-first/text-fallback 规则等待用户明确确认。推荐确认项为“确认并执行”，其说明必须明确：确认会冻结 Work Item，并授权 Polaris 在同一本地项目中自动创建当前 revision 所需的全部独立 Review 任务以及图允许范围内的后续 Review attempts。确认写入权威 JSON 的 `review_dispatch`，固定为 `mode=auto_new_task / fallback=manual_handoff / same_local_project=true / authorized=true`；新 revision 将 `authorized` 重置为 `false`。确认后才能执行 `QUALIFY` 或 `NEW_REVISION` 并输出 `WORK_ITEM_QUALIFIED`。已冻结后发生实质需求变化必须创建新 revision，不允许静默覆盖。
 
-v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板完全复用宿主工具，文本回退保证跨宿主可用。稳定性由 Skill 指令、仓库 Authority、转换后重读和 fixture 测试共同保证。`transition_task.py` 必须机械拒绝 statement 或 evidence 为空白/`TODO` 的验收项。
+v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Review 任务创建完全复用宿主工具，文本与手动新会话回退保证跨宿主可用。稳定性由 Skill 指令、仓库 Authority、转换后重读和 fixture 测试共同保证。`transition_task.py` 必须机械拒绝 statement 或 evidence 为空白/`TODO` 的验收项。
 
 ## 6. Work Item 与任务模型
 
@@ -416,17 +416,19 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 
 ## 10. 独立对抗 Review 协议
 
-1. 实现者完成 Implementation checkpoint 和 Documentation Sync 后停止，不得自审后直接进入 Validation。
-2. R1/R2 在新的 Codex 会话或隔离的 reviewer agent 中启动 Review；Reviewer 不继承实现会话的聊天历史。R0 允许同会话，但必须重新加载冻结合同和最终 Patch，执行隔离式 adversarial pass。
-3. Reviewer 只接收：冻结 Work Item、Plan、Working Set、`subject_base_commit`、最终 `subject_head_commit`、`subject_diff_hash`、项目规则、相关模块文档、实现记录、Knowledge Delta 和可复现证据。
-4. 第一遍检查 **Specification Compliance**：是否解决正确问题、越界、漏掉 AC、引入未授权行为。
-5. 第二遍检查 **Engineering Quality**：正确性、生命周期、并发、安全、性能、兼容性、可维护性、测试缺口和反例。
-6. Finding 使用稳定 ID，包含 `severity / location / claim / evidence / required_action / status`。权威记录写入 `reviews/<revision>/review-<attempt>.json`，Markdown 只做可读投影。
-7. `critical`、`high`、任何 AC 不满足或越界均为 blocking。作者必须逐项回复；Reviewer 必须重新检查新 diff/证据后才能关闭。
-8. Review JSON 必须记录 `implementer_session_id / reviewer_session_id / work_item_revision / subject_base_commit / subject_head_commit / subject_diff_hash / reviewed_at`。Validator 检查引用、哈希和 R1/R2 session ID 不同；该机制是可审计治理，不是防恶意伪造的身份认证。
-9. R1 需要一名独立 Reviewer。R2 默认需要一名独立 Reviewer；涉及安全、不可逆数据迁移或公共持久化格式变更时需要两名独立 Reviewer，且全部 `ACCEPT` 才能推进。
-10. 最多三轮 author-reviewer 循环；`REJECT` 通过 Graph 回到 `IMPLEMENTING`。任何代码、测试或项目文档变化都会生成新的 subject checkpoint 和 subject diff hash，并使旧 Review/Validation 失效。三轮后仍有争议则进入 `BLOCKED` 并按 Decision Owner 升级，不启动“仲裁 Agent”替代 Human-owned 决策。
-11. 只有 Reviewer 可在 Review JSON 中写 `ACCEPT`；只有 transition/validator 脚本可据此推进状态。
+1. 实现者完成 Implementation checkpoint 和 Documentation Sync 后停止实现与审查，不得自审后直接进入 Validation；原会话只保留宿主调度、等待、Authority 重读和机械转换职责。
+2. R1/R2 优先由宿主在同一本地项目中自动创建新的可见 Codex Review 任务；Reviewer 不继承实现会话的聊天历史，只接收 task ID、Reviewer slot 和已注册 handoff 路径。不得使用继承历史的 fork，也不默认使用独立 worktree。R0 允许同会话，但必须重新加载冻结合同和最终 Patch，执行隔离式 adversarial pass。
+3. Work Item 的 `review_dispatch.authorized=true` 是“确认并执行”对本 revision 自动创建全部必需 Review 任务的权威记录。宿主缺少创建、查找或等待能力，或者派发失败时，状态保持 `REVIEWING`，显示 `REVIEW_HANDOFF_READY` 和完整手动提示；不得仅因宿主不支持自动派发而进入 `BLOCKED`。
+4. Review 任务标题固定为 `Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>`。创建前先复用已有有效 Review artifact，其次复用唯一的同名任务；同一 key 不得重复创建，发现多个同名任务时回退人工处理。
+5. Reviewer 只接收：冻结 Work Item、Plan、Working Set、`subject_base_commit`、最终 `subject_head_commit`、`subject_diff_hash`、项目规则、相关模块文档、实现记录、Knowledge Delta 和可复现证据。
+6. 第一遍检查 **Specification Compliance**：是否解决正确问题、越界、漏掉 AC、引入未授权行为。
+7. 第二遍检查 **Engineering Quality**：正确性、生命周期、并发、安全、性能、兼容性、可维护性、测试缺口和反例。
+8. Finding 使用稳定 ID，包含 `severity / location / claim / evidence / required_action / status`。权威记录写入 `reviews/<revision>/review-<attempt>.json`；第二 Reviewer 使用 `review-<attempt>-2.json`，Markdown 只做可读投影。
+9. `critical`、`high`、任何 AC 不满足或越界均为 blocking。作者必须逐项回复；Reviewer 必须重新检查新 diff/证据后才能关闭。
+10. Review JSON 必须记录 `implementer_session_id / reviewer_session_id / work_item_revision / subject_base_commit / subject_head_commit / subject_diff_hash / reviewed_at`。Validator 检查引用、哈希和 R1/R2 session ID 不同；该机制是可审计治理，不是防恶意伪造的身份认证。
+11. R1 需要一名独立 Reviewer。R2 默认需要一名独立 Reviewer；涉及安全、不可逆数据迁移或公共持久化格式变更时需要两名独立 Reviewer，按 slot 顺序派发，任一 `REJECT` 即停止本轮，全部 `ACCEPT` 才能推进。
+12. 最多三轮 author-reviewer 循环；`REJECT` 通过 Graph 回到 `IMPLEMENTING`。任何代码、测试或项目文档变化都会生成新的 subject checkpoint 和 subject diff hash，并使旧 Review/Validation 失效。每轮使用新的确定性任务标题和独立 Reviewer session；三轮后仍有争议则进入 `BLOCKED` 并按 Decision Owner 升级，不启动“仲裁 Agent”替代 Human-owned 决策。
+13. 只有 Reviewer 可在 Review JSON 中写 `ACCEPT` 或 `REJECT`；Review 任务只写不可变 Review artifact，由原 `engineering-task` 编排上下文验证、注册并调用 transition 脚本推进状态。
 
 ## 11. Recovery 与失败探索
 
@@ -513,6 +515,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [x] 实现绑定 revision、commit、diff hash 和 session attestation 的 reviewer handoff 与 finding lifecycle
 - [x] 实现渐进恢复与 Working Set 刷新
 - [x] 实现 failed exploration 的任务内记录与项目级提升
+- [x] 实现宿主支持时自动创建可见独立 Review 任务，并在不支持时回退手动交接
 
 完成标准：全新 Codex 会话不读取旧聊天即可指出当前状态、blocker、next action，并开始正确节点。
 

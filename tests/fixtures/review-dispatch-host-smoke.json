@@ -1,0 +1,19 @@
+{
+    "fixture_id": "review-dispatch-host-smoke",
+    "task_id": "TASK-9999",
+    "reviewer_slot": 1,
+    "required_isolation": "fresh_session",
+    "package": [
+        "AGENTS.md",
+        "VERSION",
+        "skills/engineering-task/SKILL.md",
+        "skills/adversarial-review/SKILL.md"
+    ],
+    "checks": [
+        "VERSION matches the current Polaris release",
+        "engineering-task declares REVIEW_SESSION_STARTED",
+        "engineering-task forbids conversation fork and default worktree",
+        "adversarial-review returns an immutable Review path without transitioning"
+    ],
+    "output": ".polaris-host-smoke/review-result.json"
+}

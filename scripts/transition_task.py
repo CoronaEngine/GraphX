@@ -127,6 +127,9 @@ def check_gate(
                     )
         if work_item["known_unknowns"]:
             raise RuleFailure("Work Item has unresolved known_unknowns")
+        dispatch = work_item.get("review_dispatch")
+        if not isinstance(dispatch, dict) or not dispatch.get("authorized"):
+            raise RuleFailure("Work Item requires explicit Review task dispatch authorization")
         if any(work_item["risk_flags"].values()) and work_item["rigor"] != "R2":
             raise RuleFailure("true risk flags require rigor R2")
         full_commit(repo, work_item["base_commit"])
