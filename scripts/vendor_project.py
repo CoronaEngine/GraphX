@@ -8,6 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from materialize_task_layout import materialize_template_tree
 from polaris_core import InputFailure, ensure_gitignore_rule, run_main
 from task_layout import RUNTIME_IGNORE_PATTERN
 
@@ -47,6 +48,7 @@ def vendor(source: Path, target: Path, force: bool) -> dict[str, str]:
     shutil.copyfile(source / "VERSION", tools_target / "VERSION")
     for name in ("scripts", "schemas", "templates", "workflow"):
         shutil.copytree(source / name, tools_target / name, ignore=ignore_generated)
+    materialize_template_tree(tools_target)
     ensure_gitignore_rule(target, RUNTIME_IGNORE_PATTERN)
     return {"message": f"vendored Polaris into {target}", "target": str(target)}
 

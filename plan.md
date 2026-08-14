@@ -36,7 +36,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 10. **Failed exploration is durable knowledge.** 失败尝试必须记录原因、证据和重试条件，避免跨会话重复踩坑。
 11. **Rigor is progressive.** 风险越高，所需产物、独立审查和人工门禁越严格。
 12. **Machine validation wins format decisions.** 同一内容同时需要机械校验和人类阅读时，默认只保存四格缩进 JSON，并在展示时按需格式化；只有独立自然语言内容无法用结构化字段清晰表达时才使用 Markdown。
-13. **Task layout has one source.** `scripts/task_layout.py` 是任务相对路径的唯一权威；初始化、构建器、校验器和模板样例都从同一组路径模式生成，Schema 不重复硬编码目录正则。
+13. **Task layout has one source.** `scripts/task_layout.py` 是任务相对路径的唯一权威；`scripts/materialize_task_layout.py` 从该定义同时生成 `templates/task/` 样例树和真实任务目录。模板正文只维护在平铺的 `templates/task-sources/`，Schema 不重复硬编码目录正则。
 
 ## 2. MVP 范围
 
@@ -123,7 +123,12 @@ polaris/
 │   └── documentation-sync/SKILL.md
 ├── templates/
 │   ├── project-index.json
-│   └── task/
+│   ├── task-sources/              # 模板正文唯一来源；不表达目录结构
+│   │   ├── state.json
+│   │   ├── work-item.json
+│   │   ├── implementation.json
+│   │   └── ...
+│   └── task/                      # 由 materialize_task_layout.py 生成；禁止手改
 │       ├── state.json
 │       ├── working-set.json
 │       ├── PLAN.md
@@ -153,6 +158,8 @@ polaris/
 ├── scripts/
 │   ├── init_project.py
 │   ├── init_task.py
+│   ├── task_layout.py
+│   ├── materialize_task_layout.py
 │   ├── new_revision.py
 │   ├── build_working_set.py
 │   ├── validate_project.py
@@ -413,12 +420,13 @@ AGENTS.md
 | 脚本 | 最小职责 |
 |---|---|
 | `init_project.py` | 在 vendored 协议包已存在的前提下创建 `.polaris/`、复制默认 graph/config，不覆盖已有文件 |
-| `init_task.py` | 分配 Task ID，创建 r001 与完整任务目录，追加事件 |
+| `init_task.py` | 分配 Task ID，通过统一物化器创建 r001 与完整任务目录，追加事件 |
 | `new_revision.py` | 复制当前 revision 为下一不可变修订，记录失效范围 |
 | `build_working_set.py` | 根据 Work Item、模块索引和显式引用生成/刷新结构化工作集 |
 | `refresh_project_index.py` | 从项目和任务 Authority 原子刷新结构化恢复索引 |
 | `build_implementation_handoff.py` | 从当前 revision、Plan、Working Set 与 prior Review 构造不可变 Implementer 输入包 |
 | `task_layout.py` | 集中定义所有任务相对路径、动态 revision/attempt 渲染和模板样例投影 |
+| `materialize_task_layout.py` | 从 `task_layout.py` 生成模板样例树和真实任务目录，并校验生成物与平铺模板正文一致 |
 | `update_implementation_progress.py` | 通过明确事件原子更新 ignored 的线性步骤进度；拒绝 session 接管、跳步、回退、未知验收 ID 和非法 blocker |
 | `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |

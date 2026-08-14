@@ -8,6 +8,7 @@ import copy
 import sys
 from pathlib import Path
 
+from materialize_task_layout import materialize_task_directories
 from polaris_core import (
     InputFailure,
     current_work_item_path,
@@ -28,6 +29,7 @@ def create(repo: Path, task_id: str) -> dict[str, object]:
     if destination.exists():
         raise InputFailure(f"revision already exists: {destination}")
     value = copy.deepcopy(read_json(current_work_item_path(directory, state["current_revision"])))
+    materialize_task_directories(directory, revision)
     value["revision"] = revision
     value["base_commit"] = full_commit(repo)
     value["implementation_dispatch"] = {

@@ -1,0 +1,16 @@
+{
+    "task_id": "TASK-0001",
+    "work_item_revision": 1,
+    "artifact_attempt": 1,
+    "implementation_task": "Polaris Implement · TASK-0001 · r001 · attempt 1",
+    "implementer_session_id": "Pending",
+    "handoff_path": ".polaris/tasks/TASK-0001/implementations/r001/handoff-001.json",
+    "handoff_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "phase": "QUEUED",
+    "current_step_id": null,
+    "implementation_steps": [],
+    "checks": [],
+    "blocker": null,
+    "user_action": null,
+    "updated_at": "1970-01-01T00:00:00Z"
+}

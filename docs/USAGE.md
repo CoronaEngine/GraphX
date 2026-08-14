@@ -140,9 +140,15 @@ Polaris 源仓库也可以选择用 Polaris 管理，但自举不是默认状态
 
 自举与普通目标项目的差别只有来源位置：
 
-- 开发 vendoring 工具本身时，源文件位于 `skills/`、`scripts/`、`schemas/`、`templates/` 和 `workflow/`；`scripts/task_layout.py` 是任务相对路径的唯一权威，`templates/task/` 使用 `TASK-0001`、`r001` 和首个适用 attempt 作为由该权威生成的样例投影；
+- 开发 vendoring 工具本身时，源文件位于 `skills/`、`scripts/`、`schemas/`、`templates/` 和 `workflow/`；`scripts/task_layout.py` 是任务相对路径的唯一权威，平铺的 `templates/task-sources/` 只保存模板正文，`templates/task/` 是 `scripts/materialize_task_layout.py` 生成的样例投影，禁止手改；
 - 执行本仓库任务时，使用已锁定的 `.agents/skills/` 与 `tools/polaris/`；
 - 修改源实现后，需要按版本升级流程重新 vendoring，确认两份内容一致。
+
+目录结构变更只修改 `scripts/task_layout.py`，模板正文只修改平铺的
+`templates/task-sources/`。开发仓库运行
+`python scripts/materialize_task_layout.py` 后会重建并校验
+`templates/task/`；任务初始化、新 Revision 和 vendoring 调用同一个物化模块，
+因此模板目录与真实任务目录不会分别维护。
 
 ## 5. 每次提出需求之前
 
@@ -492,7 +498,7 @@ git diff -- .agents/skills tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION` 和新的 handoff 绑定；v0.1.3 使用 `project-index.json` 与 `working-set.json` 代替旧 Markdown 文件；v0.1.4 使用线性 `implementation_steps` 并要求 Implementation 冻结匹配的 `step_results`；v0.1.5 让任务模板目录镜像实际生成目录；v0.1.6 将任务路径集中到 `task_layout.py` 单一真源，但 Workflow 版本仍为 v0.1.2。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
+确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION` 和新的 handoff 绑定；v0.1.3 使用 `project-index.json` 与 `working-set.json` 代替旧 Markdown 文件；v0.1.4 使用线性 `implementation_steps` 并要求 Implementation 冻结匹配的 `step_results`；v0.1.5 让任务模板目录镜像实际生成目录；v0.1.6 将任务路径集中到 `task_layout.py` 单一真源，并由同一物化脚本生成模板树与真实任务目录，但 Workflow 版本仍为 v0.1.2。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 

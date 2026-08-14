@@ -20,12 +20,12 @@ from polaris_core import (
     write_json_atomic,
 )
 from recovery_protocol import refresh_project_index
+from materialize_task_layout import materialize_task_directories
 from task_layout import (
     events_path,
     plan_path,
-    revision_directories,
     state_path,
-    template_path,
+    template_source_path,
     work_item_path,
     working_set_path,
 )
@@ -38,19 +38,18 @@ def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
         raise InputFailure(f"task already exists: {directory}")
     project_path = repo / ".polaris" / "project.json"
     project = read_json(project_path)
-    state = read_json(template_path(root, "state"))
+    state = read_json(template_source_path(root, "state"))
     state.update({"task_id": task_id, "rigor": rigor})
-    work_item = read_json(template_path(root, "work_item"))
+    work_item = read_json(template_source_path(root, "work_item"))
     work_item.update({"id": task_id, "rigor": rigor, "base_commit": full_commit(repo)})
 
-    for path in revision_directories(directory, 1):
-        path.mkdir(parents=True, exist_ok=True)
+    materialize_task_directories(directory, 1)
     write_json_atomic(state_path(directory), state)
     write_json_atomic(work_item_path(directory, 1), work_item)
-    working_set = read_json(template_path(root, "working_set"))
+    working_set = read_json(template_source_path(root, "working_set"))
     working_set["task_id"] = task_id
     write_json_atomic(working_set_path(directory), working_set)
-    shutil.copyfile(template_path(root, "plan"), plan_path(directory))
+    shutil.copyfile(template_source_path(root, "plan"), plan_path(directory))
 
     event = {
         "sequence": 0,

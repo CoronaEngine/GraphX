@@ -80,6 +80,22 @@ TEMPLATE_SAMPLE_PATHS = {
     "result": task_relative_path("result"),
     "exploration": task_relative_path("exploration"),
 }
+TEMPLATE_SOURCE_PATHS = {
+    "state": Path("state.json"),
+    "plan": Path("PLAN.md"),
+    "working_set": Path("working-set.json"),
+    "progress": Path("implementation-progress.json"),
+    "work_item": Path("work-item.json"),
+    "implementation_handoff": Path("implementation-handoff.json"),
+    "implementation": Path("implementation.json"),
+    "knowledge_delta": Path("knowledge-delta.json"),
+    "review_handoff": Path("review-handoff.json"),
+    "review": Path("review.json"),
+    "review_response": Path("review-response.json"),
+    "validation": Path("validation.json"),
+    "result": Path("result.json"),
+    "exploration": Path("exploration.json"),
+}
 RUNTIME_IGNORE_PATTERN = (
     task_root_relative_path("*") / task_relative_path("progress").parent
 ).as_posix() + "/"
@@ -87,6 +103,15 @@ RUNTIME_IGNORE_PATTERN = (
 
 def template_path(protocol_root: Path, artifact: str) -> Path:
     return protocol_root / "templates" / "task" / TEMPLATE_SAMPLE_PATHS[artifact]
+
+
+def template_source_path(protocol_root: Path, artifact: str) -> Path:
+    return (
+        protocol_root
+        / "templates"
+        / "task-sources"
+        / TEMPLATE_SOURCE_PATHS[artifact]
+    )
 
 
 def state_path(directory: Path) -> Path:
@@ -216,3 +241,7 @@ def revision_directories(directory: Path, revision: int) -> tuple[Path, ...]:
         evidence_dir(directory, revision),
         explorations_dir(directory),
     )
+
+
+def task_directories(directory: Path, revision: int) -> tuple[Path, ...]:
+    return (progress_path(directory).parent, *revision_directories(directory, revision))

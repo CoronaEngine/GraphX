@@ -70,7 +70,7 @@ v0.1 明确不实现：
 - 状态转换、项目/任务校验、事件账本和状态重建
 - Git subject commit/diff hash 绑定
 - 可恢复、验收标准绑定的线性 `implementation_steps`，以及冻结到 Implementation artifact 的 `step_results`
-- 由 `scripts/task_layout.py` 统一生成运行时路径和模板样例，避免目录规则形成多个真源
+- 由 `scripts/task_layout.py` 定义唯一目录结构，`scripts/materialize_task_layout.py` 同时生成模板树和真实任务目录
 - Documentation impact 检查
 - R1 Review → Validation → Result → CLOSED 的机械闭环
 - 不可变 Reviewer handoff、独立会话声明和三轮 Review 上限
@@ -99,7 +99,7 @@ Polaris/
 ├── skills/                 # 七个 Workflow Skills 的源文件
 ├── scripts/                # 标准库实现的确定性辅助脚本
 ├── schemas/                # 权威 JSON 数据结构
-├── templates/              # 镜像实际生成位置的项目和任务模板
+├── templates/              # task-sources 是正文源；task 是脚本生成的目录投影
 ├── workflow/               # 默认声明式 Workflow Graph
 ├── tests/                  # Fixtures、规则测试和日志运行器
 ├── AGENTS.md               # 本仓库 AI 工程规则
@@ -125,6 +125,17 @@ target-repo/
 - 支持仓库级 Skills 的 Codex 宿主环境
 
 Polaris v0.1 的 Python 代码只使用标准库，不需要安装第三方依赖。
+
+任务目录规则只修改 `scripts/task_layout.py`。模板正文只修改
+`templates/task-sources/`；随后运行下列命令重建并校验生成的
+`templates/task/`，不要直接编辑生成目录：
+
+```powershell
+python scripts/materialize_task_layout.py
+```
+
+`init_task.py` 和 `new_revision.py` 使用同一个物化模块创建真实任务目录；
+`vendor_project.py` 也会在复制后重建目标仓库中的模板树。
 
 ## 开发与验证
 
@@ -175,7 +186,7 @@ python scripts/vendor_project.py C:\path\to\target-repo
 python scripts/vendor_project.py C:\path\to\target-repo --force
 ```
 
-`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤，并把终态步骤结果冻结进 Implementation artifact；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将所有任务路径集中到 `task_layout.py` 单一真源。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
+`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤，并把终态步骤结果冻结进 Implementation artifact；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将所有任务路径集中到 `task_layout.py` 单一真源，并由统一物化脚本生成 `templates/task/` 与真实任务目录。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
 
 ### 2. 初始化项目状态
 

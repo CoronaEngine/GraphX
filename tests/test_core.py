@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,11 +39,17 @@ from record_exploration import record as record_exploration  # noqa: E402
 from transition_task import transition  # noqa: E402
 from update_implementation_progress import update as update_implementation_progress  # noqa: E402
 from implementation_protocol import step_results, validate_progress  # noqa: E402
+from materialize_task_layout import (  # noqa: E402
+    materialize_template_tree,
+    validate_materialized_template_tree,
+)
 from task_layout import (  # noqa: E402
     TEMPLATE_SAMPLE_PATHS,
+    TEMPLATE_SOURCE_PATHS,
     task_repo_relative_path,
     task_relative_path,
     template_path,
+    template_source_path,
 )
 from validate_task import validate  # noqa: E402
 from validate_project import validate as validate_project  # noqa: E402
@@ -403,7 +410,8 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(rebuilt, read_json(self.task / "state.json"))
 
     def test_task_layout_is_single_source_and_templates_mirror_it(self) -> None:
-        """任务路径只在 task_layout 定义，模板树机械投影同一组规则。"""
+        """模板树和真实任务树都从 task_layout 与平铺内容源机械生成。"""
+        validate_materialized_template_tree(ROOT)
         template_root = ROOT / "templates" / "task"
         actual = {
             path.relative_to(template_root).as_posix()
@@ -412,6 +420,39 @@ class PolarisCoreTests(unittest.TestCase):
         }
         expected = {path.as_posix() for path in TEMPLATE_SAMPLE_PATHS.values()}
         self.assertEqual(actual, expected)
+        self.assertEqual(set(TEMPLATE_SAMPLE_PATHS), set(TEMPLATE_SOURCE_PATHS))
+        for artifact in TEMPLATE_SAMPLE_PATHS:
+            self.assertEqual(
+                template_path(ROOT, artifact).read_bytes(),
+                template_source_path(ROOT, artifact).read_bytes(),
+            )
+
+        fixture_root = self.repo / "layout-fixture"
+        shutil.copytree(
+            ROOT / "templates" / "task-sources",
+            fixture_root / "templates" / "task-sources",
+        )
+        materialize_template_tree(fixture_root)
+        validate_materialized_template_tree(fixture_root)
+        fixture_files = {
+            path.relative_to(fixture_root / "templates" / "task").as_posix()
+            for path in (fixture_root / "templates" / "task").rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(fixture_files, expected)
+
+        for relative in (
+            "runtime",
+            "revisions",
+            "implementations/r001",
+            "knowledge/r001",
+            "reviews/r001",
+            "validations/r001",
+            "results/r001",
+            "evidence/r001",
+            "explorations",
+        ):
+            self.assertTrue((self.task / relative).is_dir(), relative)
         self.assertEqual(
             task_relative_path("implementation", revision=12, attempt=3).as_posix(),
             "implementations/r012/attempt-003.json",
