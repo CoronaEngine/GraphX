@@ -12,6 +12,7 @@
         "subject_base_commit",
         "subject_head_commit",
         "subject_diff_hash",
+        "step_results",
         "deviations",
         "checks"
     ],
@@ -52,6 +53,36 @@
         "subject_diff_hash": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
+        },
+        "step_results": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "status",
+                    "result"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^STEP-[0-9]{3}$"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "COMPLETED",
+                            "SKIPPED"
+                        ]
+                    },
+                    "result": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                }
+            }
         },
         "deviations": {
             "type": "array",

@@ -47,6 +47,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - Work Item 修订、任务状态、事件账本、工作集、Review、Validation、Result。
 - 项目初始化、任务初始化、状态转换、结构校验、文档影响检查、工作集生成脚本。
 - 独立 Codex Implementer 任务、不可变 Implementation handoff 与事件驱动实时进度快照。
+- 验收标准绑定的线性 `implementation_steps`；步骤只能依次推进或在末尾追加，最终结果冻结进 Implementation artifact。
 - 独立 Codex 会话的对抗审查协议。
 - Fresh-session / fresh-clone 的渐进恢复协议。
 - `R0 / R1 / R2` 三档渐进式严谨度。
@@ -413,7 +414,7 @@ AGENTS.md
 | `build_working_set.py` | 根据 Work Item、模块索引和显式引用生成/刷新结构化工作集 |
 | `refresh_project_index.py` | 从项目和任务 Authority 原子刷新结构化恢复索引 |
 | `build_implementation_handoff.py` | 从当前 revision、Plan、Working Set 与 prior Review 构造不可变 Implementer 输入包 |
-| `update_implementation_progress.py` | 原子更新 ignored 的实时进度 JSON；拒绝 session 接管和非法 blocker |
+| `update_implementation_progress.py` | 通过明确事件原子更新 ignored 的线性步骤进度；拒绝 session 接管、跳步、回退、未知验收 ID 和非法 blocker |
 | `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
 | `transition_task.py` | 获取任务锁，校验合法边与 gate，追加带 sequence 的事件，再原子替换 `state.json` |
@@ -439,11 +440,12 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 3. Work Item 的 `implementation_dispatch.authorized=true` 是“确认并执行”对当前 revision 全部 Implementer attempts 的显式授权。宿主支持任务管理时，在同一本地项目和同一 checkout 创建可见的新任务；不 fork 主对话，也不默认使用 worktree。
 4. Implementer 标题固定为 `Polaris Implement · <TASK> · <REVISION> · attempt <N>`。创建前先复用与 handoff 绑定的有效 Implementation artifact，其次复用唯一同名任务；多条同名记录时不得猜测，回退同会话执行。
 5. Implementer 只接收 task ID 与已注册 handoff，不接收主聊天、实现建议或预期结果。它拥有本轮代码、测试、构建文件和项目文档的单写者权限，但不执行 Graph 转换、Review、Validation 或关闭。
-6. Implementer 在开始/完成实现步骤、测试结束、blocker、checkpoint 和 Documentation Sync 时，通过 `update_implementation_progress.py` 原子更新 `.polaris/tasks/<TASK>/runtime/progress.json`。进度记录 phase、current action、completed、remaining、checks、blocker、user action 和更新时间；主任务按需格式化展示，不生成 Markdown 副本或主观百分比。
-7. 每个任务的 `runtime/` 子目录默认 Git ignored，不影响工作树 checkpoint，也不承诺跨电脑恢复。正式 Implementation、Knowledge Delta、commit/diff 和 event 继续写入耐久 Authority。主任务可随时读取进度；若整个宿主停止运行，快照只代表最后一次成功更新。
-8. Implementation artifact 必须绑定 handoff path/hash 和 Implementer session。主任务验证后执行 `FINISH_IMPLEMENTATION`，再续接同一个 Implementer 任务执行 `$documentation-sync`；Worker 写回 Knowledge Delta 和最终 subject checkpoint，主任务执行 `SYNC_DOCS`。
-9. Review 或 Validation 返工生成新 attempt、新 handoff 和新的 Implementer 任务；prior Review 通过 handoff 传递，Implementer 写 Review Response。不同 attempt 不复用 Implementer session。
-10. 宿主缺少创建、查找、等待或续接能力时，主任务使用同一 handoff 执行 `same_session` fallback，仍更新进度文件并明确提示即时状态响应可能延迟；不得仅因宿主能力不足把业务任务置为 `BLOCKED`。
+6. 主任务先用 `INITIALIZE` 创建空的 `QUEUED` 快照；Implementer 在改代码前用 `DEFINE_STEPS` 建立有序、非空且绑定 Work Item 验收 ID 的 `implementation_steps`。每步使用稳定 `STEP-NNN`，只能通过 `START_STEP / COMPLETE_STEP / BLOCK_STEP / RESUME_STEP / SKIP_STEP` 线性推进；新发现工作只能用 `APPEND_STEP` 加到末尾，不能重排、删除、改名或回退。测试证据用 `ADD_CHECK` 追加，阶段用 `SET_PHASE` 更新。
+7. `.polaris/tasks/<TASK>/runtime/progress.json` 只保留一份有序步骤权威；current、completed 和 remaining 均由步骤状态推导。所有步骤终态后才能进入 `CHECKPOINTING`，Implementation artifact 必须复制完全一致的 `step_results`。主任务按需格式化展示，不生成 Markdown 副本、Task DAG 或主观百分比。
+8. 每个任务的 `runtime/` 子目录默认 Git ignored，不影响工作树 checkpoint，也不承诺跨电脑恢复。正式 Implementation、Knowledge Delta、commit/diff 和 event 继续写入耐久 Authority。主任务可随时读取进度；若整个宿主停止运行，快照只代表最后一次成功更新。
+9. Implementation artifact 必须绑定 handoff path/hash、Implementer session 和终态 `step_results`。主任务验证后执行 `FINISH_IMPLEMENTATION`，再续接同一个 Implementer 任务执行 `$documentation-sync`；Worker 写回 Knowledge Delta 和最终 subject checkpoint，主任务执行 `SYNC_DOCS`。
+10. Review 或 Validation 返工生成新 attempt、新 handoff 和新的 Implementer 任务；prior Review 通过 handoff 传递，Implementer 写 Review Response。不同 attempt 不复用 Implementer session。
+11. 宿主缺少创建、查找、等待或续接能力时，主任务使用同一 handoff 执行 `same_session` fallback，仍更新进度文件并明确提示即时状态响应可能延迟；不得仅因宿主能力不足把业务任务置为 `BLOCKED`。
 
 ### Independent Review
 
@@ -546,6 +548,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 - [x] 实现独立 Implementer 自动派发、确定性任务复用、handoff/result 绑定和同会话回退
 - [x] 实现事件驱动实时进度 JSON、本机忽略规则、session 所有权与恢复读取
+- [x] 实现验收标准绑定的线性 Implementation steps、追加式变更和终态 step results 门禁
 - [x] 实现绑定 revision、commit、diff hash 和 session attestation 的 reviewer handoff 与 finding lifecycle
 - [x] 实现渐进恢复与 Working Set 刷新
 - [x] 实现 failed exploration 的任务内记录与项目级提升
@@ -577,7 +580,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [ ] 非平凡任务不会在 Work Item 冻结前进入 Implementation。
 - [ ] 每个暂停点和阶段结果都按固定字段展示，Work Item 未经用户确认不进入 `QUALIFIED`。
 - [ ] 自动路径中主任务保持为可查询控制入口；Implementer 只从冻结 handoff 工作并持续写入最近有效进度。
-- [ ] Implementation artifact 绑定当前 handoff path/hash；不同返工 attempt 使用新的确定性 Implementer 任务。
+- [ ] Implementation artifact 绑定当前 handoff path/hash 和终态 step results；不同返工 attempt 使用新的确定性 Implementer 任务。
 - [ ] 每个前进、返工、阻塞、取消和新 revision 转换都可由 graph + artifact + gate 机械解释。
 - [ ] Agent 无法通过正常流程自行写入 `VERIFIED` 或 `CLOSED`。
 - [ ] R1/R2 Review 来自独立上下文；R0 使用隔离式 adversarial pass；全部覆盖 specification 与 engineering 两层。

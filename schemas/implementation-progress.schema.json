@@ -11,9 +11,8 @@
         "handoff_path",
         "handoff_sha256",
         "phase",
-        "current_action",
-        "completed_steps",
-        "remaining_steps",
+        "current_step_id",
+        "implementation_steps",
         "checks",
         "blocker",
         "user_action",
@@ -60,19 +59,60 @@
                 "FAILED"
             ]
         },
-        "current_action": {
-            "type": "string"
+        "current_step_id": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "pattern": "^STEP-[0-9]{3}$"
         },
-        "completed_steps": {
+        "implementation_steps": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
-        },
-        "remaining_steps": {
-            "type": "array",
-            "items": {
-                "type": "string"
+                "type": "object",
+                "required": [
+                    "id",
+                    "title",
+                    "status",
+                    "acceptance_ids",
+                    "result"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^STEP-[0-9]{3}$"
+                    },
+                    "title": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "PENDING",
+                            "IN_PROGRESS",
+                            "COMPLETED",
+                            "BLOCKED",
+                            "SKIPPED"
+                        ]
+                    },
+                    "acceptance_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "uniqueItems": true,
+                        "items": {
+                            "type": "string",
+                            "pattern": "^AC-[0-9]{2}$"
+                        }
+                    },
+                    "result": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                }
             }
         },
         "checks": {

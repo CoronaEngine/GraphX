@@ -5,7 +5,7 @@ description: Internal Polaris worker stage for an explicitly started `$engineeri
 
 # Documentation Sync
 
-1. Continue in the same Implementer conversation and reload the registered Implementation artifact and live progress. Set progress phase to `DOCUMENTING`.
+1. Continue in the same Implementer conversation and reload the registered Implementation artifact and live progress. Use the progress updater's `SET_PHASE` event to enter `DOCUMENTING`; do not alter the terminal Implementation steps.
 2. Compare changed subject paths with project documentation and the frozen Work Item.
 3. Write a Knowledge Delta JSON with an entry for every affected knowledge area: `ADD`, `UPDATE`, `STALE`, or `NO_CHANGE`.
 4. Update confirmed project documentation. Do not promote unverified inference to authority.
@@ -13,7 +13,7 @@ description: Internal Polaris worker stage for an explicitly started `$engineeri
 6. Leave no unresolved `STALE` entry.
 7. Create the final subject checkpoint and recompute the subject diff hash.
 8. Refresh the Working Set if a promoted exploration or documentation change alters the next stage's justified inputs.
-9. Run `check_docs.py` with the final subject base/head, set progress to `COMPLETED` with no remaining work or blocker, and return the Knowledge Delta path, final subject base/head, diff hash, changed documentation, promoted explorations, and check result.
+9. Run `check_docs.py` with the final subject base/head, append its result with `ADD_CHECK`, then use `SET_PHASE` to enter `COMPLETED` with no blocker. Return the Knowledge Delta path, final subject base/head, diff hash, changed documentation, promoted explorations, and check result.
 
 Do not run `SYNC_DOCS` or emit a Polaris checkpoint marker. The main `$engineering-task` validates and registers the artifact, advances the graph, reloads state, and emits `[POLARIS:DOCS_SYNCED]`.
 

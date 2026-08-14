@@ -28,7 +28,11 @@ from polaris_core import (
     write_json_atomic,
 )
 from recovery_protocol import refresh_project_index
-from implementation_protocol import validate_handoff as validate_implementation_handoff
+from implementation_protocol import (
+    step_results,
+    validate_handoff as validate_implementation_handoff,
+    validate_progress,
+)
 from review_protocol import (
     MAX_REVIEW_ATTEMPTS,
     normalized_reference,
@@ -177,6 +181,15 @@ def check_gate(
             or implementation["subject_diff_hash"] != state["subject"]["diff_hash"]
         ):
             raise RuleFailure("Implementation targets the wrong revision or subject")
+        progress = validate_progress(repo, state["task_id"])
+        if progress["phase"] != "CHECKPOINTING":
+            raise RuleFailure(
+                "FINISH_IMPLEMENTATION requires CHECKPOINTING live progress"
+            )
+        if progress["implementer_session_id"] != implementation["implementer_session_id"]:
+            raise RuleFailure("Implementation and live progress have different sessions")
+        if implementation["step_results"] != step_results(progress):
+            raise RuleFailure("Implementation step_results do not match live progress")
         validate_review_response(root, directory, state, implementation)
     elif gate == "docs_ready":
         knowledge_path = artifact_file(directory, state, "knowledge_delta")

@@ -2,7 +2,7 @@
 
 本文面向希望在 Codex 中使用 Polaris 管理软件工程任务的项目成员。它从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.3。Polaris v0.1 是仓库原生的 Skills 与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.4。Polaris v0.1 是仓库原生的 Skills 与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -370,7 +370,7 @@ Implementer 只接收 task ID 和已注册 handoff，不继承主任务聊天。
 .polaris/tasks/TASK-0001/runtime/progress.json
 ```
 
-它展示当前 phase、正在做什么、已完成、剩余、最近检查、blocker、用户动作和更新时间，也是这份本机快照的机械权威。Implementer 会在开始或完成步骤、测试结束、遇到 blocker、准备 checkpoint 和文档同步时更新；Polaris 不根据耗时猜测百分比，也不生成内容重复的 Markdown 文件。
+它保存当前 phase、有序 `implementation_steps`、最近检查、blocker、用户动作和更新时间，也是这份本机快照的机械权威。每个步骤都有稳定 `STEP-NNN`、标题、状态、关联的 Work Item 验收 ID 和终态结果。当前、已完成和剩余工作由这一个列表推导，不能跳步或回退；发现新工作时只能追加。Implementer 通过明确事件更新它，Polaris 不根据耗时猜测百分比，也不生成内容重复的 Markdown 文件。
 
 这个目录默认加入 `.gitignore`，因此不会污染工作树，也不会随 Git 在另一台电脑继续。换电脑后，耐久状态仍能恢复到最近 checkpoint；新 Implementer 会创建新的本机进度快照。
 
@@ -492,7 +492,7 @@ git diff -- .agents/skills tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION` 和新的 handoff 绑定；v0.1.3 使用 `project-index.json` 与 `working-set.json` 代替旧 Markdown 文件。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
+确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION` 和新的 handoff 绑定；v0.1.3 使用 `project-index.json` 与 `working-set.json` 代替旧 Markdown 文件；v0.1.4 使用线性 `implementation_steps` 并要求 Implementation 冻结匹配的 `step_results`，但 Workflow 版本仍为 v0.1.2。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 
@@ -574,7 +574,7 @@ Implementation 期间查看进度：
 ```text
 [ ] 优先打开 .polaris/tasks/TASK-NNNN/runtime/progress.json
 [ ] 或在主任务请求展示 IMPLEMENTATION_PROGRESS 后继续
-[ ] 不用进度百分比替代 completed / current / remaining
+[ ] 从 implementation_steps 推导 completed / current / remaining，不使用主观百分比
 ```
 
 R1/R2 Review 前：

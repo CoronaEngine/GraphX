@@ -191,16 +191,77 @@ def validate_progress_value(
         raise RuleFailure("Live progress has the wrong deterministic task title")
     if progress["phase"] != "QUEUED" and progress["implementer_session_id"] == "Pending":
         raise RuleFailure("active progress requires a real Implementer session ID")
-    if progress["phase"] == "COMPLETED" and (
-        progress["remaining_steps"]
-        or progress["blocker"] is not None
-        or progress["user_action"] is not None
-    ):
-        raise RuleFailure("COMPLETED progress cannot retain remaining work or a blocker")
-    if progress["phase"] == "BLOCKED" and (
-        not progress["blocker"] or not progress["user_action"]
-    ):
-        raise RuleFailure("BLOCKED progress requires blocker and user_action")
+    steps = progress["implementation_steps"]
+    expected_ids = [f"STEP-{index:03d}" for index in range(1, len(steps) + 1)]
+    if [step["id"] for step in steps] != expected_ids:
+        raise RuleFailure("Implementation step IDs must be unique and sequential")
+    work_item = validate_json_file(
+        current_work_item_path(task_dir(repo, task_id), state["current_revision"]),
+        root / "schemas" / "work-item.schema.json",
+    )
+    acceptance_ids = {item["id"] for item in work_item["acceptance"]}
+    terminal_prefix = True
+    pending_seen = False
+    active: list[dict[str, Any]] = []
+    for step in steps:
+        if not step["title"].strip():
+            raise RuleFailure(f"{step['id']} requires a non-empty title")
+        unknown = set(step["acceptance_ids"]) - acceptance_ids
+        if unknown:
+            raise RuleFailure(
+                f"{step['id']} references unknown acceptance IDs: "
+                + ", ".join(sorted(unknown))
+            )
+        terminal = step["status"] in {"COMPLETED", "SKIPPED"}
+        if terminal and (not isinstance(step["result"], str) or not step["result"].strip()):
+            raise RuleFailure(f"terminal {step['id']} requires a result")
+        if not terminal and step["result"] is not None:
+            raise RuleFailure(f"non-terminal {step['id']} cannot have a result")
+        if step["status"] in {"IN_PROGRESS", "BLOCKED"}:
+            if pending_seen:
+                raise RuleFailure("Implementation steps cannot start after a pending step")
+            active.append(step)
+            terminal_prefix = False
+        elif step["status"] == "PENDING":
+            pending_seen = True
+            terminal_prefix = False
+        elif not terminal_prefix:
+            raise RuleFailure("Implementation steps cannot skip or reorder earlier work")
+    if len(active) > 1:
+        raise RuleFailure("Only one Implementation step may be active")
+    active_id = active[0]["id"] if active else None
+    if progress["current_step_id"] != active_id:
+        raise RuleFailure("current_step_id must identify the active Implementation step")
+    if progress["phase"] == "QUEUED" and (steps or active_id is not None):
+        raise RuleFailure("QUEUED progress cannot contain defined steps")
+    if progress["phase"] == "QUEUED" and progress["implementer_session_id"] != "Pending":
+        raise RuleFailure("QUEUED progress must remain unowned")
+    if progress["phase"] != "QUEUED" and not steps:
+        raise RuleFailure("active progress requires defined Implementation steps")
+    if progress["phase"] == "BLOCKED":
+        if not active or active[0]["status"] != "BLOCKED":
+            raise RuleFailure("BLOCKED progress requires a blocked current step")
+        if not progress["blocker"] or not progress["user_action"]:
+            raise RuleFailure("BLOCKED progress requires blocker and user_action")
+    elif progress["phase"] == "FAILED":
+        if not progress["blocker"] or not progress["user_action"]:
+            raise RuleFailure("FAILED progress requires blocker and user_action")
+    elif progress["blocker"] is not None or progress["user_action"] is not None:
+        raise RuleFailure("only BLOCKED or FAILED progress may retain a blocker")
+    if progress["phase"] in {"CHECKPOINTING", "DOCUMENTING", "COMPLETED"}:
+        if any(step["status"] not in {"COMPLETED", "SKIPPED"} for step in steps):
+            raise RuleFailure(f"{progress['phase']} requires all steps to be terminal")
+        if active_id is not None:
+            raise RuleFailure(f"{progress['phase']} cannot retain a current step")
+
+
+def step_results(progress: dict[str, Any]) -> list[dict[str, str]]:
+    """Project terminal live steps into the immutable Implementation artifact."""
+    return [
+        {"id": step["id"], "status": step["status"], "result": step["result"]}
+        for step in progress["implementation_steps"]
+        if step["status"] in {"COMPLETED", "SKIPPED"}
+    ]
 
 
 def validate_progress(repo: Path, task_id: str) -> dict[str, Any]:

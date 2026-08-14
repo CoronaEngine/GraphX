@@ -37,7 +37,7 @@ from record_exploration import promote as promote_exploration  # noqa: E402
 from record_exploration import record as record_exploration  # noqa: E402
 from transition_task import transition  # noqa: E402
 from update_implementation_progress import update as update_implementation_progress  # noqa: E402
-from implementation_protocol import validate_progress  # noqa: E402
+from implementation_protocol import step_results, validate_progress  # noqa: E402
 from validate_task import validate  # noqa: E402
 from validate_project import validate as validate_project  # noqa: E402
 from vendor_project import SKILLS, vendor  # noqa: E402
@@ -147,6 +147,38 @@ class PolarisCoreTests(unittest.TestCase):
         self, base: str, head: str, session_id: str
     ) -> dict[str, object]:
         handoff, reference = self.dispatch_implementation()
+        title = (
+            f"Polaris Implement · TASK-0001 · r001 · attempt "
+            f"{handoff['artifact_attempt']}"
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "Pending", "INITIALIZE"
+        )
+        progress = validate_progress(self.repo, "TASK-0001")
+        if progress["phase"] == "QUEUED":
+            update_implementation_progress(
+                self.repo,
+                "TASK-0001",
+                title,
+                session_id,
+                "DEFINE_STEPS",
+                defined_steps=[
+                    {"title": "Implement accepted change", "acceptance_ids": ["AC-01"]}
+                ],
+            )
+            update_implementation_progress(
+                self.repo, "TASK-0001", title, session_id, "START_STEP",
+                step_id="STEP-001",
+            )
+            update_implementation_progress(
+                self.repo, "TASK-0001", title, session_id, "COMPLETE_STEP",
+                step_id="STEP-001", result="Implemented and checked the accepted change",
+            )
+            update_implementation_progress(
+                self.repo, "TASK-0001", title, session_id, "SET_PHASE",
+                phase="CHECKPOINTING",
+            )
+        progress = validate_progress(self.repo, "TASK-0001")
         value = read_json(ROOT / "templates" / "task" / "implementation.json")
         value.update(
             {
@@ -157,6 +189,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "subject_base_commit": base,
                 "subject_head_commit": head,
                 "subject_diff_hash": subject_diff_hash(self.repo, base, head),
+                "step_results": step_results(progress),
             }
         )
         return value
@@ -902,13 +935,7 @@ class PolarisCoreTests(unittest.TestCase):
             "TASK-0001",
             title,
             "Pending",
-            "QUEUED",
-            "Waiting for the Implementer task to start",
-            [],
-            ["Modify subject", "Run tests"],
-            [],
-            None,
-            None,
+            "INITIALIZE",
         )
         progress_path = self.task / "runtime" / "progress.json"
         self.assertIn('    "task_id"', progress_path.read_text(encoding="utf-8"))
@@ -926,16 +953,32 @@ class PolarisCoreTests(unittest.TestCase):
             "TASK-0001",
             title,
             "impl-progress-session",
-            "TESTING",
-            "Running focused tests",
-            ["Modified subject"],
-            ["Create checkpoint", "Synchronize docs"],
-            ["unit tests: 8/8 PASS"],
-            None,
-            None,
+            "DEFINE_STEPS",
+            defined_steps=[
+                {"title": "Modify subject", "acceptance_ids": ["AC-01"]},
+                {"title": "Run focused tests", "acceptance_ids": ["AC-01"]},
+            ],
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-progress-session", "START_STEP",
+            step_id="STEP-001",
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-progress-session", "COMPLETE_STEP",
+            step_id="STEP-001", result="Modified subject",
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-progress-session", "START_STEP",
+            phase="TESTING", step_id="STEP-002",
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-progress-session", "ADD_CHECK",
+            phase="TESTING", checks=["unit tests: 8/8 PASS"],
         )
         progress = validate_progress(self.repo, "TASK-0001")
         self.assertEqual(progress["phase"], "TESTING")
+        self.assertEqual(progress["current_step_id"], "STEP-002")
+        self.assertEqual(progress["implementation_steps"][0]["status"], "COMPLETED")
         self.assertEqual(progress["checks"], ["unit tests: 8/8 PASS"])
         recovered = recover(self.repo, "TASK-0001")
         self.assertTrue(recovered["live_implementation_progress"]["available"])
@@ -952,14 +995,20 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             title,
+            "Pending",
+            "INITIALIZE",
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
             "impl-owner-session",
-            "IMPLEMENTING",
-            "Editing subject",
-            [],
-            ["Run tests"],
-            [],
-            None,
-            None,
+            "DEFINE_STEPS",
+            defined_steps=[{"title": "Run tests", "acceptance_ids": ["AC-01"]}],
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-owner-session", "START_STEP",
+            step_id="STEP-001",
         )
         with self.assertRaises(RuleFailure):
             update_implementation_progress(
@@ -967,13 +1016,8 @@ class PolarisCoreTests(unittest.TestCase):
                 "TASK-0001",
                 title,
                 "impl-other-session",
-                "TESTING",
-                "Attempting takeover",
-                [],
-                [],
-                [],
-                None,
-                None,
+                "ADD_CHECK",
+                checks=["attempting takeover"],
             )
         with self.assertRaises(RuleFailure):
             update_implementation_progress(
@@ -981,18 +1025,143 @@ class PolarisCoreTests(unittest.TestCase):
                 "TASK-0001",
                 title,
                 "impl-owner-session",
-                "BLOCKED",
-                "Waiting",
-                [],
-                ["Continue"],
-                [],
-                None,
-                None,
+                "BLOCK_STEP",
+                step_id="STEP-001",
+                blocker="Waiting",
             )
         self.assertEqual(
             validate_progress(self.repo, "TASK-0001")["implementer_session_id"],
             "impl-owner-session",
         )
+
+    def test_implementation_steps_are_linear_append_only_and_acceptance_bound(self) -> None:
+        """步骤只能按序执行；新增只能追加，未知验收 ID 与跳步都会被拒绝。"""
+        self.enter_implementing()
+        self.dispatch_implementation()
+        title = "Polaris Implement · TASK-0001 · r001 · attempt 1"
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "Pending", "INITIALIZE"
+        )
+        with self.assertRaises(RuleFailure):
+            update_implementation_progress(
+                self.repo, "TASK-0001", title, "impl-linear-session", "DEFINE_STEPS",
+                defined_steps=[{"title": "Unknown acceptance", "acceptance_ids": ["AC-99"]}],
+            )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-linear-session", "DEFINE_STEPS",
+            defined_steps=[
+                {"title": "First", "acceptance_ids": ["AC-01"]},
+                {"title": "Second", "acceptance_ids": ["AC-01"]},
+            ],
+        )
+        with self.assertRaises(RuleFailure):
+            update_implementation_progress(
+                self.repo, "TASK-0001", title, "impl-linear-session", "START_STEP",
+                step_id="STEP-002",
+            )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-linear-session", "SKIP_STEP",
+            step_id="STEP-001", result="Already satisfied by existing code",
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-linear-session", "APPEND_STEP",
+            step_title="Third", acceptance_ids=["AC-01"],
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-linear-session", "START_STEP",
+            step_id="STEP-002",
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-linear-session", "BLOCK_STEP",
+            step_id="STEP-002", blocker="Need a decision", user_action="Choose the behavior",
+        )
+        self.assertEqual(validate_progress(self.repo, "TASK-0001")["phase"], "BLOCKED")
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-linear-session", "RESUME_STEP",
+            step_id="STEP-002",
+        )
+        progress = validate_progress(self.repo, "TASK-0001")
+        self.assertEqual(
+            [step["id"] for step in progress["implementation_steps"]],
+            ["STEP-001", "STEP-002", "STEP-003"],
+        )
+        self.assertEqual(progress["implementation_steps"][0]["status"], "SKIPPED")
+
+    def test_checkpoint_requires_terminal_steps_and_freezes_step_results(self) -> None:
+        """未完成步骤不能进入 checkpoint，最终 artifact 必须精确冻结步骤结果。"""
+        self.enter_implementing()
+        handoff, reference = self.dispatch_implementation()
+        title = "Polaris Implement · TASK-0001 · r001 · attempt 1"
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "Pending", "INITIALIZE"
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-freeze-session", "DEFINE_STEPS",
+            defined_steps=[{"title": "Finish work", "acceptance_ids": ["AC-01"]}],
+        )
+        with self.assertRaises(RuleFailure):
+            update_implementation_progress(
+                self.repo, "TASK-0001", title, "impl-freeze-session", "SET_PHASE",
+                phase="CHECKPOINTING",
+            )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-freeze-session", "START_STEP",
+            step_id="STEP-001",
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-freeze-session", "COMPLETE_STEP",
+            step_id="STEP-001", result="Finished work",
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-freeze-session", "SET_PHASE",
+            phase="CHECKPOINTING",
+        )
+        base = run_git(self.repo, "rev-parse", "HEAD")
+        (self.repo / "freeze.txt").write_text("done\n", encoding="utf-8")
+        run_git(self.repo, "add", "freeze.txt")
+        run_git(self.repo, "commit", "-q", "-m", "freeze implementation")
+        head = run_git(self.repo, "rev-parse", "HEAD")
+        implementation = read_json(ROOT / "templates" / "task" / "implementation.json")
+        implementation.update({
+            "artifact_attempt": handoff["artifact_attempt"],
+            "implementer_session_id": "impl-freeze-session",
+            "implementation_handoff_path": reference["path"],
+            "implementation_handoff_sha256": reference["sha256"],
+            "subject_base_commit": base,
+            "subject_head_commit": head,
+            "subject_diff_hash": subject_diff_hash(self.repo, base, head),
+            "step_results": [{"id": "STEP-001", "status": "COMPLETED", "result": "wrong"}],
+        })
+        path = self.task / handoff["output_path"]
+        write_json_atomic(path, implementation)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo, "TASK-0001", "FINISH_IMPLEMENTATION",
+                ["implementation=implementations/r001/attempt-001.json"],
+                None, base, head, None, None, None,
+            )
+        implementation["step_results"] = [
+            {"id": "STEP-001", "status": "COMPLETED", "result": "Finished work"}
+        ]
+        write_json_atomic(path, implementation)
+        transition(
+            self.repo, "TASK-0001", "FINISH_IMPLEMENTATION",
+            ["implementation=implementations/r001/attempt-001.json"],
+            None, base, head, None, None, None,
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-freeze-session", "SET_PHASE",
+            phase="DOCUMENTING",
+        )
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "impl-freeze-session", "SET_PHASE",
+            phase="COMPLETED",
+        )
+        with self.assertRaises(RuleFailure):
+            update_implementation_progress(
+                self.repo, "TASK-0001", title, "impl-freeze-session", "SET_PHASE",
+                phase="IMPLEMENTING",
+            )
 
     def test_implementation_status_contract_and_same_session_fallback(self) -> None:
         """主任务提供可查询 marker；宿主不能派发时回退且明确响应可能延迟。"""
