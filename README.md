@@ -8,7 +8,7 @@ Polaris 是一套运行在 Codex 之上的、以仓库为权威状态的软件�
 
 Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须在请求中主动调用 `$engineering-task`。其他阶段 Skills 同样禁止隐式调用，只能由已启动的工作流在合法节点分派。
 
-> 当前版本：`0.1.4`（开发中）
+> 当前版本：`0.1.5`（开发中）
 
 ## 核心目标
 
@@ -81,7 +81,7 @@ v0.1 明确不实现：
 - Fresh-session Recovery、项目索引和可刷新 Working Set
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 44 个带场景日志的自动化测试
+- 45 个带场景日志的自动化测试
 
 仍在建设：
 
@@ -98,7 +98,7 @@ Polaris/
 ├── skills/                 # 七个 Workflow Skills 的源文件
 ├── scripts/                # 标准库实现的确定性辅助脚本
 ├── schemas/                # 权威 JSON 数据结构
-├── templates/              # 项目和任务模板
+├── templates/              # 镜像实际生成位置的项目和任务模板
 ├── workflow/               # 默认声明式 Workflow Graph
 ├── tests/                  # Fixtures、规则测试和日志运行器
 ├── AGENTS.md               # 本仓库 AI 工程规则
@@ -174,7 +174,7 @@ python scripts/vendor_project.py C:\path\to\target-repo
 python scripts/vendor_project.py C:\path\to\target-repo --force
 ```
 
-`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤，并把终态步骤结果冻结进 Implementation artifact。Workflow Graph 协议仍是 `0.1.2`，因为本次没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
+`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤，并把终态步骤结果冻结进 Implementation artifact；`0.1.5` 让任务模板目录镜像实际生成目录。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
 
 ### 2. 初始化项目状态
 
@@ -255,7 +255,7 @@ R1/R2 到这里必须停止实现与审查工作，但主任务会继续承担�
 
 自动 Review 任务使用确定性标题 `Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>`。恢复或重试时先复用已有有效 Review artifact，再复用唯一的同名任务，避免重复创建。高风险 R2 按顺序启动两个独立 Reviewer；任一 Reviewer 拒绝即停止本轮，全部接受后由主任务注册 Review artifacts 并推进状态。
 
-Review 被拒绝后，实现者必须使用 `review-response.json` 模板逐项回复所有 open Finding，并在下一次 `FINISH_IMPLEMENTATION` 同时注册该响应。后续 Reviewer 必须保留 Finding ID、复查完整新 Patch 并填写 Reviewer resolution。第三次 Review 仍为 `REJECT` 时，任务自动进入 Human-owned `BLOCKED`。
+Review 被拒绝后，实现者必须使用 `templates/task/reviews/r001/response-002.json` 所示结构逐项回复所有 open Finding，并在下一次 `FINISH_IMPLEMENTATION` 同时注册该响应。后续 Reviewer 必须保留 Finding ID、复查完整新 Patch 并填写 Reviewer resolution。第三次 Review 仍为 `REJECT` 时，任务自动进入 Human-owned `BLOCKED`。
 
 Session ID 是审计声明，不是身份认证。如果宿主没有公开 ID，应在每个会话开始时生成一个不复用的稳定标识。
 

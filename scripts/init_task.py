@@ -31,7 +31,9 @@ def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
     project = read_json(project_path)
     state = read_json(root / "templates" / "task" / "state.json")
     state.update({"task_id": task_id, "rigor": rigor})
-    work_item = read_json(root / "templates" / "task" / "work-item.json")
+    work_item = read_json(
+        root / "templates" / "task" / "revisions" / "work-item-r001.json"
+    )
     work_item.update({"id": task_id, "rigor": rigor, "base_commit": full_commit(repo)})
 
     (directory / "revisions").mkdir(parents=True)

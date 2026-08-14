@@ -124,18 +124,21 @@ polaris/
 │   ├── project-index.json
 │   └── task/
 │       ├── state.json
-│       ├── work-item.json
 │       ├── working-set.json
 │       ├── PLAN.md
-│       ├── implementation-handoff.json
-│       ├── implementation-progress.json
-│       ├── implementation.json
-│       ├── knowledge-delta.json
-│       ├── review-handoff.json
-│       ├── review-response.json
-│       ├── review.json
-│       ├── validation.json
-│       └── result.json
+│       ├── runtime/progress.json
+│       ├── revisions/work-item-r001.json
+│       ├── implementations/r001/
+│       │   ├── handoff-001.json
+│       │   └── attempt-001.json
+│       ├── knowledge/r001/knowledge-delta-001.json
+│       ├── reviews/r001/
+│       │   ├── handoff-001.json
+│       │   ├── review-001.json
+│       │   └── response-002.json
+│       ├── validations/r001/validation-001.json
+│       ├── results/r001/result-001.json
+│       └── explorations/EXP-0001.json
 ├── workflow/default-workflow.json
 ├── schemas/
 │   ├── project.schema.json
