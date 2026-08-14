@@ -1,0 +1,11 @@
+{
+    "project_id": "PROJECT_ID",
+    "recommended_task": null,
+    "recommended_next_action": "initialize a task",
+    "tasks": [],
+    "links": {
+        "project_rules": "AGENTS.md",
+        "authority_state": ".polaris/project.json",
+        "workflow": ".polaris/workflow.json"
+    }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh the bounded human-readable project recovery map."""
+"""Refresh the bounded structured project recovery index."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def refresh(repo: Path) -> dict[str, object]:
     result = refresh_project_index(repo)
     return {
         "message": f"refreshed project recovery map for {len(result['tasks'])} tasks",
-        "path": str(repo / ".polaris" / "project-index.md"),
+        "path": str(repo / ".polaris" / "project-index.json"),
         "recommended_task": result["recommended_task"],
     }
 

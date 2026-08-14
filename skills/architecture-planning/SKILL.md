@@ -6,7 +6,7 @@ description: Internal Polaris stage for an explicitly started `$engineering-task
 # Architecture Planning
 
 1. Read the frozen Work Item and project rules.
-2. Refresh `WORKING_SET.md` with `build_working_set.py`. Record every entry as path, reason, and discovery source; add explicit entries only for concrete dependencies.
+2. Refresh `working-set.json` with `build_working_set.py`. Record every entry as section, path, reason, and discovery source; add explicit entries only for concrete dependencies. Do not parse or create a duplicate Markdown Working Set.
 3. Investigate only paths justified by the task or a discovered dependency.
 4. Write `PLAN.md` as a delta from `base_commit`, including alternatives, risks, affected invariants, and expected documentation changes.
 5. Map every acceptance criterion to a planned validation command or Human check.

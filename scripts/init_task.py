@@ -44,8 +44,10 @@ def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
     (directory / "explorations").mkdir(parents=True)
     write_json_atomic(directory / "state.json", state)
     write_json_atomic(directory / "revisions" / "work-item-r001.json", work_item)
+    working_set = read_json(root / "templates" / "task" / "working-set.json")
+    working_set["task_id"] = task_id
+    write_json_atomic(directory / "working-set.json", working_set)
     shutil.copyfile(root / "templates" / "task" / "PLAN.md", directory / "PLAN.md")
-    shutil.copyfile(root / "templates" / "task" / "WORKING_SET.md", directory / "WORKING_SET.md")
 
     event = {
         "sequence": 0,

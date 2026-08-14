@@ -1,0 +1,67 @@
+"""Validate and expose the structured bounded Working Set."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from polaris_core import (
+    RuleFailure,
+    protocol_root,
+    read_json,
+    task_dir,
+    validate_schema,
+)
+
+
+SECTIONS = ["Documents", "Code", "Tests", "Decisions", "Explorations", "Unknowns"]
+
+
+def validate_working_set_value(
+    repo: Path,
+    task_id: str,
+    state: dict[str, Any],
+    value: dict[str, Any],
+) -> dict[str, Any]:
+    schema = read_json(protocol_root(repo) / "schemas" / "working-set.schema.json")
+    errors = validate_schema(value, schema)
+    if errors:
+        raise RuleFailure("Working Set failed schema validation:\n- " + "\n- ".join(errors))
+    if value["task_id"] != task_id:
+        raise RuleFailure("Working Set targets the wrong task")
+    if value["work_item_revision"] != state["current_revision"]:
+        raise RuleFailure("Working Set targets the wrong Work Item revision")
+
+    seen_paths: set[str] = set()
+    repo_root = repo.resolve()
+    for entry in value["entries"]:
+        raw_path = entry["path"]
+        if raw_path in seen_paths:
+            raise RuleFailure(f"Working Set contains duplicate path: {raw_path}")
+        seen_paths.add(raw_path)
+        if raw_path.startswith("<") and raw_path.endswith(">"):
+            continue
+        candidate = (repo / raw_path).resolve()
+        try:
+            candidate.relative_to(repo_root)
+        except ValueError as exc:
+            raise RuleFailure(f"Working Set path escapes repository: {raw_path}") from exc
+    return value
+
+
+def validate_working_set(
+    repo: Path,
+    task_id: str,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    directory = task_dir(repo, task_id)
+    state = read_json(directory / "state.json")
+    if path is None:
+        path = directory / "working-set.json"
+    elif not path.is_absolute():
+        path = directory / path
+    return validate_working_set_value(repo, task_id, state, read_json(path))
+
+
+def working_set_entries(value: dict[str, Any]) -> list[dict[str, str]]:
+    return list(value["entries"])

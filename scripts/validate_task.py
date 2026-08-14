@@ -30,6 +30,7 @@ from review_protocol import (
     validate_review,
     validate_review_response,
 )
+from working_set_protocol import validate_working_set
 
 
 ORDER = [
@@ -124,7 +125,8 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
     status = state["status"]
     if at_least(status, "PLANNED"):
         require_artifact(state, directory, "plan")
-        require_artifact(state, directory, "working_set")
+        working_set_path = require_artifact(state, directory, "working_set")
+        validate_working_set(repo, task_id, working_set_path)
     if status == "IMPLEMENTING" and "implementation_handoff" in state["artifacts"]:
         validate_implementation_handoff(repo, root, directory, state)
     if at_least(status, "IMPLEMENTED"):

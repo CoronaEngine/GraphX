@@ -8,7 +8,7 @@ Polaris 是一套运行在 Codex 之上的、以仓库为权威状态的软件�
 
 Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须在请求中主动调用 `$engineering-task`。其他阶段 Skills 同样禁止隐式调用，只能由已启动的工作流在合法节点分派。
 
-> 当前版本：`0.1.2`（开发中）
+> 当前版本：`0.1.3`（开发中）
 
 ## 核心目标
 
@@ -29,7 +29,7 @@ Polaris 希望让 AI 从“生成代码”转向“可靠参与软件工程”�
 
 - Graph 决定合法流程，Agent 只负责节点内执行。
 - 聊天记录不是项目事实来源，权威状态保存在仓库中。
-- JSON 是机械判定依据；Markdown 只保存具有独立内容的实施计划、工作集、恢复地图和使用文档，不复制 JSON artifact。
+- JSON 是机械判定依据，并保存项目索引、Working Set 和全部结构化 artifact；Markdown 只保存具有独立自然语言内容的实施计划、规则、Skills 和使用文档。
 - Agent 不能自行宣布完成；只有门禁全部满足后，转换脚本才能写入 `VERIFIED` 或 `CLOSED`。
 - Review、Validation 与 Work Item Revision、Git commit 和 diff hash 绑定。
 - 新会话不依赖旧聊天，可以从仓库恢复任务状态。
@@ -80,7 +80,7 @@ v0.1 明确不实现：
 - Fresh-session Recovery、项目索引和可刷新 Working Set
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 40 个带场景日志的自动化测试
+- 42 个带场景日志的自动化测试
 
 仍在建设：
 
@@ -173,7 +173,7 @@ python scripts/vendor_project.py C:\path\to\target-repo
 python scripts/vendor_project.py C:\path\to\target-repo --force
 ```
 
-`0.1.2` 增加了新的 Workflow event。不要把它直接覆盖到仍冻结在 `0.1.1` 的活动项目；应先完成旧任务或把工作流迁移作为单独变更。
+`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把工作流与结构化文件迁移作为单独变更。
 
 ### 2. 初始化项目状态
 
@@ -214,9 +214,9 @@ python tools/polaris/scripts/validate_task.py TASK-0001 --repo .
 python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 ```
 
-恢复脚本先校验项目和任务，再只返回当前 Revision、状态与 blocker、最后事件、下一动作、最小 Working Set，以及存在时的最近有效 Implementation 进度。它不读取聊天历史。
+恢复脚本先校验 `.polaris/project-index.json`、项目和任务，再只返回当前 Revision、状态与 blocker、最后事件、下一动作、结构化 `working-set.json`，以及存在时的最近有效 Implementation 进度。它不读取聊天历史。
 
-刷新 Working Set 时可以保留已有条目，或用 `--force` 重建自动条目：
+刷新 `working-set.json` 时可以保留已有条目，或用 `--force` 重建自动条目：
 
 ```powershell
 python tools/polaris/scripts/build_working_set.py TASK-0001 --repo . --entry "Code|src/module.py|affected entry point|dependency from AC-01"

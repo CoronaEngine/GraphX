@@ -2,7 +2,7 @@
 
 本文面向希望在 Codex 中使用 Polaris 管理软件工程任务的项目成员。它从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.2。Polaris v0.1 是仓库原生的 Skills 与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.3。Polaris v0.1 是仓库原生的 Skills 与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -69,7 +69,7 @@ python scripts/vendor_project.py C:\path\to\target-repo --force
 python tools/polaris/scripts/init_project.py my-project --repo .
 ```
 
-该命令创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json`、恢复索引等文件；如果仓库没有 `AGENTS.md`，还会创建最小仓库规则，并确保 `.gitignore` 包含 `.polaris/tasks/*/runtime/`。
+该命令创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json` 和结构化 `.polaris/project-index.json`；如果仓库没有 `AGENTS.md`，还会创建最小仓库规则，并确保 `.gitignore` 包含 `.polaris/tasks/*/runtime/`。
 
 校验初始化结果：
 
@@ -174,7 +174,7 @@ python tools/polaris/scripts/validate_project.py --repo .
 python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 ```
 
-恢复结果会给出当前 Revision、状态、blocker、最近事件、下一动作和最小 Working Set。先续办已有任务还是创建新任务，应根据恢复结果决定。
+恢复结果会给出当前 Revision、状态、blocker、最近事件、下一动作和来自 `working-set.json` 的最小 Working Set。先续办已有任务还是创建新任务，应根据恢复结果决定。
 
 ### 5.3 从正确位置打开 Codex
 
@@ -306,7 +306,7 @@ DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → IMPLEMENTED
 
 1. `DRAFT`：把自然语言需求整理成 Work Item。
 2. `QUALIFIED`：目标、范围、约束、验收证据、风险和决策所有者已冻结。
-3. `PLANNED`：形成最小 Working Set、变更计划和验收映射。
+3. `PLANNED`：形成结构化 `working-set.json`、变更计划和验收映射。
 4. `IMPLEMENTING`：在冻结范围内修改并运行局部检查。
 5. `IMPLEMENTED`：已有 subject checkpoint commit 和实现证据。
 6. `DOCS_SYNCED`：文档影响已分类，过时知识已处理。
@@ -492,7 +492,7 @@ git diff -- .agents/skills tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION` 和新的 handoff 绑定，不能把 0.1.2 工具直接覆盖到仍冻结在 0.1.1 的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先在 0.1.1 完成任务，或另行制定迁移。
+确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION` 和新的 handoff 绑定；v0.1.3 使用 `project-index.json` 与 `working-set.json` 代替旧 Markdown 文件。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 

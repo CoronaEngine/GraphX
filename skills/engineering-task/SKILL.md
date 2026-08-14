@@ -27,7 +27,7 @@ Never report an anticipated state. Reload authority after every transition. A st
 
 ## Main-task ownership
 
-1. Locate `AGENTS.md`, `.polaris/project.json`, `.polaris/workflow.json`, and active task state.
+1. Locate `AGENTS.md`, `.polaris/project.json`, `.polaris/project-index.json`, `.polaris/workflow.json`, and active task state.
 2. Recover existing work with `recover_task.py <task-id> --repo . --json`; stop on validation, reference, or state conflicts.
 3. Load only the recovery result, frozen Work Item, Working Set, and paths justified by it.
 4. Invoke `$requirement-analysis` for a new request and `$architecture-planning` at `QUALIFIED` or returned `PLANNED`.

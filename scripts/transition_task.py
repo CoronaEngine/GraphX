@@ -36,6 +36,7 @@ from review_protocol import (
     validate_review,
     validate_review_response,
 )
+from working_set_protocol import validate_working_set
 
 
 def parse_artifacts(values: list[str], directory: Path) -> dict[str, dict[str, str]]:
@@ -143,7 +144,8 @@ def check_gate(
         full_commit(repo, work_item["base_commit"])
     elif gate == "plan_ready":
         artifact_file(directory, state, "plan")
-        artifact_file(directory, state, "working_set")
+        working_set_path = artifact_file(directory, state, "working_set")
+        validate_working_set(repo, state["task_id"], working_set_path)
     elif gate == "implementation_approved":
         if state["rigor"] == "R2":
             artifact_file(directory, state, "pre_approval")

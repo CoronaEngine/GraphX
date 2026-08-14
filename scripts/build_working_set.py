@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -12,29 +11,34 @@ from typing import Any
 from polaris_core import (
     RuleFailure,
     current_work_item_path,
+    protocol_root,
     read_json,
     run_main,
     task_dir,
-    write_text_atomic,
+    validate_json_file,
+    write_json_atomic,
 )
+from working_set_protocol import SECTIONS, validate_working_set_value
 
 
-SECTIONS = ["Documents", "Code", "Tests", "Decisions", "Explorations", "Unknowns"]
-ENTRY = re.compile(r"^-\s+`([^`]+)`\s+—\s+(.+?)\s+—\s+(.+)$")
-
-
-def _existing(path: Path) -> dict[str, dict[str, tuple[str, str]]]:
+def _existing(
+    repo: Path,
+    path: Path,
+    current_revision: int,
+) -> dict[str, dict[str, tuple[str, str]]]:
     result = {section: {} for section in SECTIONS}
     if not path.is_file():
         return result
-    section = ""
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("## "):
-            section = line[3:].strip()
-            continue
-        match = ENTRY.fullmatch(line)
-        if match and section in result:
-            result[section][match.group(1)] = (match.group(2), match.group(3))
+    value = validate_json_file(
+        path, protocol_root(repo) / "schemas" / "working-set.schema.json"
+    )
+    if value["work_item_revision"] != current_revision:
+        return result
+    for entry in value["entries"]:
+        result[entry["section"]][entry["path"]] = (
+            entry["reason"],
+            entry["discovered_from"],
+        )
     return result
 
 
@@ -82,14 +86,18 @@ def build(
     state = read_json(directory / "state.json")
     work_item_path = current_work_item_path(directory, state["current_revision"])
     work_item = read_json(work_item_path)
-    destination = directory / "WORKING_SET.md"
-    entries = {section: {} for section in SECTIONS} if force else _existing(destination)
+    destination = directory / "working-set.json"
+    entries = (
+        {section: {} for section in SECTIONS}
+        if force
+        else _existing(repo, destination, state["current_revision"])
+    )
 
     _add(entries, "Documents", "AGENTS.md", "project rules", "recovery bootstrap")
     _add(
         entries,
         "Documents",
-        ".polaris/project-index.md",
+        ".polaris/project-index.json",
         "bounded project recovery map",
         "recovery bootstrap",
     )
@@ -149,27 +157,28 @@ def build(
         for section in SECTIONS:
             entries[section].pop(path, None)
 
-    lines = [
-        "# Working Set",
-        "",
-        f"Generated for `{task_id}@r{state['current_revision']:03d}`. Entries are `path — reason — discovered_from`.",
-        "",
-    ]
-    total = 0
+    output_entries: list[dict[str, str]] = []
     for section in SECTIONS:
-        lines.extend([f"## {section}", ""])
-        if entries[section]:
-            for path, (reason, source) in sorted(entries[section].items()):
-                lines.append(f"- `{path}` — {reason} — {source}")
-                total += 1
-        else:
-            lines.append("- None")
-        lines.append("")
-    write_text_atomic(destination, "\n".join(lines))
+        for path, (reason, source) in sorted(entries[section].items()):
+            output_entries.append(
+                {
+                    "section": section,
+                    "path": path,
+                    "reason": reason,
+                    "discovered_from": source,
+                }
+            )
+    value = {
+        "task_id": task_id,
+        "work_item_revision": state["current_revision"],
+        "entries": output_entries,
+    }
+    validate_working_set_value(repo, task_id, state, value)
+    write_json_atomic(destination, value)
     return {
-        "message": f"refreshed bounded Working Set with {total} entries",
+        "message": f"refreshed bounded Working Set with {len(output_entries)} entries",
         "path": str(destination),
-        "entries": total,
+        "entries": len(output_entries),
     }
 
 

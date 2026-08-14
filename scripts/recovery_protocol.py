@@ -1,12 +1,11 @@
-"""Small, deterministic projections used by fresh-session recovery."""
+"""Small, deterministic indexes used by fresh-session recovery."""
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
-from polaris_core import read_json, task_dir, write_text_atomic
+from polaris_core import read_json, task_dir, write_json_atomic
 
 
 NEXT_ACTIONS = {
@@ -26,36 +25,11 @@ NEXT_ACTIONS = {
 }
 
 
-WORKING_SET_ENTRY = re.compile(r"^-\s+`([^`]+)`\s+—\s+(.+?)\s+—\s+(.+)$")
-
-
 def recommended_action(state: dict[str, Any]) -> str:
     return NEXT_ACTIONS.get(state["status"], "inspect the workflow before acting")
 
 
-def working_set_entries(path: Path) -> list[dict[str, str]]:
-    section = ""
-    entries: list[dict[str, str]] = []
-    if not path.is_file():
-        return entries
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("## "):
-            section = line[3:].strip()
-            continue
-        match = WORKING_SET_ENTRY.fullmatch(line)
-        if match:
-            entries.append(
-                {
-                    "section": section,
-                    "path": match.group(1),
-                    "reason": match.group(2),
-                    "discovered_from": match.group(3),
-                }
-            )
-    return entries
-
-
-def refresh_project_index(repo: Path) -> dict[str, Any]:
+def project_index_value(repo: Path) -> dict[str, Any]:
     project = read_json(repo / ".polaris" / "project.json")
     rows: list[dict[str, Any]] = []
     for task_id in sorted(project["active_tasks"]):
@@ -81,59 +55,22 @@ def refresh_project_index(repo: Path) -> dict[str, Any]:
         row for row in rows if row["status"] not in {"BLOCKED", "CLOSED", "CANCELLED"}
     ]
     recommended = executable[0] if executable else (rows[0] if rows else None)
-    lines = [
-        "# Project Recovery Map",
-        "",
-        "## Project",
-        "",
-        f"- Project: `{project['project_id']}`",
-        f"- Active task records: {len(rows)}",
-        "- Recommended next action: "
-        + (
-            f"`{recommended['task_id']}@r{recommended['revision']:03d}` — {recommended['next_action']}"
-            if recommended
-            else "initialize a task"
-        ),
-        "",
-        "## Tasks",
-        "",
-    ]
-    if rows:
-        for row in rows:
-            lines.append(
-                f"- `{row['task_id']}@r{row['revision']:03d}` — {row['status']} — {row['title']}"
-            )
-    else:
-        lines.append("- None")
-    lines.extend(["", "## Blockers", ""])
-    blockers = [row for row in rows if row["blocker"]]
-    if blockers:
-        for row in blockers:
-            blocker = row["blocker"]
-            lines.append(
-                f"- `{row['task_id']}` — {blocker['type']} — {blocker['reason']} — owner: {blocker['decision_owner']}"
-            )
-    else:
-        lines.append("- None")
-    lines.extend(["", "## Executable", ""])
-    if executable:
-        for row in executable:
-            lines.append(f"- `{row['task_id']}` — {row['next_action']}")
-    else:
-        lines.append("- None")
-    lines.extend(
-        [
-            "",
-            "## Links",
-            "",
-            "- Project rules: `AGENTS.md`",
-            "- Authority state: `.polaris/project.json`",
-            "- Workflow: `.polaris/workflow.json`",
-            "",
-        ]
-    )
-    write_text_atomic(repo / ".polaris" / "project-index.md", "\n".join(lines))
     return {
-        "tasks": rows,
+        "project_id": project["project_id"],
         "recommended_task": recommended["task_id"] if recommended else None,
+        "recommended_next_action": (
+            recommended["next_action"] if recommended else "initialize a task"
+        ),
+        "tasks": rows,
+        "links": {
+            "project_rules": "AGENTS.md",
+            "authority_state": ".polaris/project.json",
+            "workflow": ".polaris/workflow.json",
+        },
     }
+
+
+def refresh_project_index(repo: Path) -> dict[str, Any]:
+    value = project_index_value(repo)
+    write_json_atomic(repo / ".polaris" / "project-index.json", value)
+    return value

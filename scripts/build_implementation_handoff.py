@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,9 +24,7 @@ from polaris_core import (
     write_json_atomic,
 )
 from review_protocol import normalized_reference
-
-
-WORKING_SET_PATH = re.compile(r"^-\s+`([^`]+)`\s+—")
+from working_set_protocol import validate_working_set
 
 
 def _entry(repo: Path, role: str, path: Path) -> dict[str, Any]:
@@ -71,16 +68,17 @@ def build(repo: Path, task_id: str) -> dict[str, Any]:
         )
     seen_paths = {entry["path"] for entry in package}
     working_set_path = directory / working_set["path"]
-    for line in working_set_path.read_text(encoding="utf-8").splitlines():
-        match = WORKING_SET_PATH.match(line)
-        if not match or match.group(1) == ".polaris/project-index.md":
+    working_set_value = validate_working_set(repo, task_id, working_set_path)
+    for working_entry in working_set_value["entries"]:
+        raw_path = working_entry["path"]
+        if raw_path == ".polaris/project-index.json":
             continue
-        candidate = (repo / match.group(1)).resolve()
+        candidate = (repo / raw_path).resolve()
         try:
             candidate.relative_to(repo.resolve())
         except ValueError as exc:
             raise RuleFailure(
-                f"Working Set path escapes repository: {match.group(1)}"
+                f"Working Set path escapes repository: {raw_path}"
             ) from exc
         if candidate.exists():
             entry = _entry(repo, "working_set_reference", candidate)

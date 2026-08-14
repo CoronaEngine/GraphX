@@ -99,7 +99,7 @@ v0.1 没有常驻控制器，因此 Graph 的控制力来自三层：Skill 必�
 6. 与当前 Work Item revision、commit 和 diff hash 匹配的 Review / Validation evidence
 7. Plan、工作笔记、聊天记录和状态摘要
 
-聊天、`project-index.md`、`PLAN.md` 和 `WORKING_SET.md` 均是导航、计划或有限上下文，不得覆盖权威 JSON 状态。结构化 artifact 不生成内容重复的 Markdown 副本。旧 Review 或 Validation 不得覆盖更新后的代码事实；其绑定的 revision、commit 或 diff hash 不匹配时自动失效。
+聊天和 `PLAN.md` 是叙述或计划，不得覆盖权威 JSON 状态；`project-index.json` 与 `working-set.json` 是可校验的结构化恢复索引和有限上下文。结构化 artifact 不生成内容重复的 Markdown 副本。旧 Review 或 Validation 不得覆盖更新后的代码事实；其绑定的 revision、commit 或 diff hash 不匹配时自动失效。
 
 ## 4. 仓库布局
 
@@ -119,29 +119,29 @@ polaris/
 │   ├── validation/SKILL.md
 │   └── documentation-sync/SKILL.md
 ├── templates/
-│   ├── project-index.md
+│   ├── project-index.json
 │   └── task/
 │       ├── state.json
 │       ├── work-item.json
-│       ├── work-item.md
-│       ├── plan.md
-│       ├── working-set.md
+│       ├── working-set.json
+│       ├── PLAN.md
+│       ├── implementation-handoff.json
+│       ├── implementation-progress.json
 │       ├── implementation.json
-│       ├── implementation.md
-│       ├── review.json
-│       ├── review.md
-│       ├── validation.json
-│       ├── validation.md
 │       ├── knowledge-delta.json
-│       ├── knowledge-delta.md
-│       ├── result.json
-│       └── result.md
+│       ├── review-handoff.json
+│       ├── review-response.json
+│       ├── review.json
+│       ├── validation.json
+│       └── result.json
 ├── workflow/default-workflow.json
 ├── schemas/
 │   ├── project.schema.json
 │   ├── task-state.schema.json
 │   ├── workflow.schema.json
 │   ├── work-item.schema.json
+│   ├── working-set.schema.json
+│   ├── project-index.schema.json
 │   ├── review.schema.json
 │   └── validation.schema.json
 ├── scripts/
@@ -186,7 +186,7 @@ target-repo/
 │   └── modules/<module>/index.md
 └── .polaris/
     ├── project.json
-    ├── project-index.md           # 保持短小，只做恢复地图
+    ├── project-index.json         # 保持短小，只做结构化恢复地图
     ├── workflow.json
     ├── decisions/
     │   └── CD-*.json              # append-only，权威 Human Decision/Approval
@@ -199,7 +199,7 @@ target-repo/
     │       ├── revisions/
     │       │   └── work-item-r001.json  # 权威执行合同
     │       ├── PLAN.md
-    │       ├── WORKING_SET.md
+    │       ├── working-set.json
     │       ├── implementations/r001/
     │       │   ├── handoff-001.json
     │       │   └── attempt-001.json
@@ -309,7 +309,7 @@ v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Worker �
 }
 ```
 
-`base_commit` 必须是可解析的 Git commit SHA，不允许使用 working-tree marker。所有机械读取字段均存储在 JSON 中；`PLAN.md`、`WORKING_SET.md` 和恢复地图不使用可被误认为权威数据的自由格式 front matter。
+`base_commit` 必须是可解析的 Git commit SHA，不允许使用 working-tree marker。所有机械读取字段均存储在 JSON 中；`PLAN.md` 不使用可被误认为权威数据的自由格式 front matter。
 
 ### Delta-oriented change package
 
@@ -382,9 +382,9 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 
 ```text
 AGENTS.md
-  → .polaris/project-index.md
+  → .polaris/project-index.json
   → active task state + frozen Work Item
-  → WORKING_SET.md
+  → working-set.json
   → affected module index
   → referenced Decision / Exploration
   → code entry points and tests
@@ -393,8 +393,8 @@ AGENTS.md
 
 ### Working Set 规则
 
-- `project-index.md` 只含项目目标摘要、活跃任务、blocker、可执行任务、一个 recommended next action 和链接；建议不超过 200 行。
-- `WORKING_SET.md` 分 `Documents / Code / Tests / Decisions / Explorations / Unknowns`。
+- `project-index.json` 只含项目 ID、活跃任务摘要、blocker、每项 next action、一个 recommended task/action 和固定链接，并通过 Schema 校验。
+- `working-set.json` 的 entries 使用 `Documents / Code / Tests / Decisions / Explorations / Unknowns` section，并为每项保存 path、reason 和 discovered_from。
 - 每个条目记录 `path + reason + discovered_from`；代码只列入口和直接相关区域，不复制代码正文。
 - 默认先定位再读取、先局部再扩展。新增内容必须由具体问题或依赖链触发。
 - 文档负责导航、约束和原因；代码、测试、构建结果负责当前事实。冲突时登记 `documentation_stale`，不得静默选边。
@@ -409,10 +409,11 @@ AGENTS.md
 | `init_project.py` | 在 vendored 协议包已存在的前提下创建 `.polaris/`、复制默认 graph/config，不覆盖已有文件 |
 | `init_task.py` | 分配 Task ID，创建 r001 与完整任务目录，追加事件 |
 | `new_revision.py` | 复制当前 revision 为下一不可变修订，记录失效范围 |
-| `build_working_set.py` | 根据 Work Item、模块索引和显式引用生成/刷新工作集骨架 |
+| `build_working_set.py` | 根据 Work Item、模块索引和显式引用生成/刷新结构化工作集 |
+| `refresh_project_index.py` | 从项目和任务 Authority 原子刷新结构化恢复索引 |
 | `build_implementation_handoff.py` | 从当前 revision、Plan、Working Set 与 prior Review 构造不可变 Implementer 输入包 |
 | `update_implementation_progress.py` | 原子更新 ignored 的实时进度 JSON；拒绝 session 接管和非法 blocker |
-| `validate_project.py` | 检查目录、ID、索引链接、活动任务、dangling refs、graph schema |
+| `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
 | `transition_task.py` | 获取任务锁，校验合法边与 gate，追加带 sequence 的事件，再原子替换 `state.json` |
 | `rebuild_state.py` | 校验事件序列并从 `events.jsonl` 重建 `state.json` 投影 |

@@ -122,7 +122,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             "PLAN",
-            ["plan=PLAN.md", "working_set=WORKING_SET.md"],
+            ["plan=PLAN.md", "working_set=working-set.json"],
             None,
             None,
             None,
@@ -398,7 +398,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             "PLAN",
-            ["plan=PLAN.md", "working_set=WORKING_SET.md"],
+            ["plan=PLAN.md", "working_set=working-set.json"],
             None,
             None,
             None,
@@ -408,6 +408,78 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(planned["to"], "PLANNED")
         self.assertEqual(validate(self.repo, "TASK-0001")["state"], "PLANNED")
+
+    def test_working_set_json_rejects_wrong_revision_and_unsafe_paths(self) -> None:
+        """Working Set 必须绑定当前 Revision，并拒绝逃逸仓库的结构化路径。"""
+        self.freeze_work_item()
+        transition(
+            self.repo, "TASK-0001", "QUALIFY", [], None, None, None, None, None, None
+        )
+        build_working_set(self.repo, "TASK-0001", True)
+        path = self.task / "working-set.json"
+        valid = read_json(path)
+        self.assertFalse((self.task / "WORKING_SET.md").exists())
+
+        wrong_revision = copy.deepcopy(valid)
+        wrong_revision["work_item_revision"] = 2
+        write_json_atomic(path, wrong_revision)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PLAN",
+                ["plan=PLAN.md", "working_set=working-set.json"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+        unsafe = copy.deepcopy(valid)
+        unsafe["entries"].append(
+            {
+                "section": "Code",
+                "path": "../../outside.py",
+                "reason": "invalid escape",
+                "discovered_from": "test",
+            }
+        )
+        write_json_atomic(path, unsafe)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PLAN",
+                ["plan=PLAN.md", "working_set=working-set.json"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        write_json_atomic(path, valid)
+
+    def test_project_index_json_rejects_wrong_project_and_stale_tasks(self) -> None:
+        """Project Index 必须绑定项目，并完整列出 active task。"""
+        path = self.repo / ".polaris" / "project-index.json"
+        valid = read_json(path)
+        self.assertFalse((self.repo / ".polaris" / "project-index.md").exists())
+
+        wrong_project = copy.deepcopy(valid)
+        wrong_project["project_id"] = "another-project"
+        write_json_atomic(path, wrong_project)
+        with self.assertRaises(RuleFailure):
+            validate_project(self.repo)
+
+        stale = copy.deepcopy(valid)
+        stale["tasks"] = []
+        write_json_atomic(path, stale)
+        with self.assertRaises(RuleFailure):
+            validate_project(self.repo)
+        write_json_atomic(path, valid)
 
     def test_qualify_rejects_unresolved_acceptance_placeholders(self) -> None:
         """验收描述或证据为空白/TODO 时，Work Item 不得进入 QUALIFIED。"""
@@ -1122,7 +1194,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             "PLAN",
-            ["plan=PLAN.md", "working_set=WORKING_SET.md"],
+            ["plan=PLAN.md", "working_set=working-set.json"],
             None,
             None,
             None,
@@ -1773,7 +1845,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             "PLAN",
-            ["plan=PLAN.md", "working_set=WORKING_SET.md"],
+            ["plan=PLAN.md", "working_set=working-set.json"],
             None,
             None,
             None,
@@ -1861,7 +1933,7 @@ class PolarisCoreTests(unittest.TestCase):
         }
         self.assertIn("scripts/recover_task.py", paths)
         self.assertIn("AGENTS.md", paths)
-        self.assertIn(".polaris/project-index.md", paths)
+        self.assertIn(".polaris/project-index.json", paths)
         self.assertIn(
             f".polaris/explorations/{recorded['exploration_id']}.json", paths
         )

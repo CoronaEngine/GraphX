@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
+from recovery_protocol import project_index_value
 from validate_task import validate as validate_task
 
 
@@ -53,13 +54,13 @@ def validate(repo: Path) -> dict[str, object]:
         raise RuleFailure("project Polaris version does not match vendored protocol")
     if project["workflow_version"] != workflow["workflow_version"]:
         raise RuleFailure("project and workflow versions do not match")
-    index_path = polaris / "project-index.md"
-    if not index_path.is_file():
-        raise RuleFailure("missing project recovery map: .polaris/project-index.md")
-    index_text = index_path.read_text(encoding="utf-8")
-    for required_link in ("AGENTS.md", ".polaris/project.json", ".polaris/workflow.json"):
-        if required_link not in index_text:
-            raise RuleFailure(f"project recovery map lacks required link: {required_link}")
+    index = validate_json_file(
+        polaris / "project-index.json", root / "schemas" / "project-index.schema.json"
+    )
+    if index["project_id"] != project["project_id"]:
+        raise RuleFailure("project recovery index targets the wrong project")
+    if index != project_index_value(repo):
+        raise RuleFailure("project recovery index is stale")
 
     for transition in workflow["transitions"]:
         alternate = transition.get("on_max_attempts_to")

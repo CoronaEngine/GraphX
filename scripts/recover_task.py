@@ -21,16 +21,16 @@ from polaris_core import (
 from recovery_protocol import (
     recommended_action,
     refresh_project_index,
-    working_set_entries,
 )
+from working_set_protocol import validate_working_set, working_set_entries
 from validate_project import validate as validate_project
 from validate_task import validate as validate_task
 
 
 def recover(repo: Path, task_id: str) -> dict[str, Any]:
+    refresh_project_index(repo)
     validate_project(repo)
     validate_task(repo, task_id)
-    refresh_project_index(repo)
     directory = task_dir(repo, task_id)
     state = read_json(directory / "state.json")
     work_item = read_json(current_work_item_path(directory, state["current_revision"]))
@@ -41,7 +41,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
             last_event = json.loads(line)
     blocker = state.get("blocker")
     work_item_path = current_work_item_path(directory, state["current_revision"])
-    working_set_path = directory / "WORKING_SET.md"
+    working_set_path = directory / "working-set.json"
     minimum_entries = [
         {
             "section": "Bootstrap",
@@ -51,7 +51,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
         },
         {
             "section": "Bootstrap",
-            "path": ".polaris/project-index.md",
+            "path": ".polaris/project-index.json",
             "reason": "bounded project recovery map",
             "discovered_from": "fixed recovery order",
         },
@@ -75,11 +75,17 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
         },
     ]
     known_paths = {item["path"] for item in minimum_entries}
-    minimum_entries.extend(
-        item
-        for item in working_set_entries(working_set_path)
-        if item["path"] not in known_paths
-    )
+    working_set_status: dict[str, Any]
+    try:
+        working_set = validate_working_set(repo, task_id, working_set_path)
+        minimum_entries.extend(
+            item
+            for item in working_set_entries(working_set)
+            if item["path"] not in known_paths
+        )
+        working_set_status = {"available": True}
+    except (RuleFailure, InputFailure) as exc:
+        working_set_status = {"available": False, "reason": str(exc)}
     live_progress: dict[str, Any] | None = None
     if state["status"] in {"IMPLEMENTING", "IMPLEMENTED"}:
         progress_path = directory / "runtime" / "progress.json"
@@ -119,6 +125,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
         "live_implementation_progress": live_progress,
         "minimum_working_set": {
             "path": str(working_set_path),
+            **working_set_status,
             "entries": minimum_entries,
         },
     }
