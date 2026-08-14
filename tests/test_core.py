@@ -513,6 +513,16 @@ class PolarisCoreTests(unittest.TestCase):
         for field in contract_fields:
             self.assertIn(field, entry_text)
 
+        requirement_text = (
+            ROOT / "skills" / "requirement-analysis" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "two or three concrete, mutually exclusive answer options",
+            requirement_text,
+        )
+        self.assertIn("(Recommended)", requirement_text)
+        self.assertIn("precise free-form answer", requirement_text)
+
         vendor(ROOT, self.repo, False)
         for skill_name, markers in expected_markers.items():
             source_path = ROOT / "skills" / skill_name / "SKILL.md"

@@ -9,7 +9,7 @@ Inspect the repository before asking questions. Ask only about unknowns that can
 
 ## Stable qualification interaction
 
-If material unknowns remain, keep the task in `DRAFT` and emit `REQUIREMENTS_NEEDED` using the `$engineering-task` status fields. After those fields, ask one to three focused questions per round. For each question, state the recommended default and the consequence of choosing it. Record every unanswered item in `known_unknowns`; do not modify production code or run `QUALIFY` while any remain.
+If material unknowns remain, keep the task in `DRAFT` and emit `REQUIREMENTS_NEEDED` using the `$engineering-task` status fields. After those fields, ask one to three focused questions per round. Every question must include two or three concrete, mutually exclusive answer options. Put the recommended option first, suffix its label with `(Recommended)`, and explain each option's consequence in one sentence. After the options, allow the user to provide a precise free-form answer when none fits; do not use `Other` as one of the numbered options. Record every unanswered item in `known_unknowns`; do not modify production code or run `QUALIFY` while any remain.
 
 When the draft is complete, always emit `WORK_ITEM_PREVIEW` before freezing it, even when the original request appeared complete. After the fixed status fields, show:
 
