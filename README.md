@@ -29,7 +29,7 @@ Polaris 希望让 AI 从“生成代码”转向“可靠参与软件工程”�
 
 - Graph 决定合法流程，Agent 只负责节点内执行。
 - 聊天记录不是项目事实来源，权威状态保存在仓库中。
-- JSON 是机械判定依据，Markdown 只提供人类可读投影。
+- JSON 是机械判定依据；Markdown 只保存具有独立内容的实施计划、工作集、恢复地图和使用文档，不复制 JSON artifact。
 - Agent 不能自行宣布完成；只有门禁全部满足后，转换脚本才能写入 `VERIFIED` 或 `CLOSED`。
 - Review、Validation 与 Work Item Revision、Git commit 和 diff hash 绑定。
 - 新会话不依赖旧聊天，可以从仓库恢复任务状态。
@@ -73,7 +73,7 @@ v0.1 明确不实现：
 - R1 Review → Validation → Result → CLOSED 的机械闭环
 - 不可变 Reviewer handoff、独立会话声明和三轮 Review 上限
 - 不可变 Implementation handoff、独立 Implementer 任务和 handoff/result 机械绑定
-- `.polaris/tasks/<TASK>/runtime/` 下事件驱动的实时进度 JSON 与 Markdown 投影
+- `.polaris/tasks/<TASK>/runtime/` 下事件驱动的实时进度 JSON
 - Codex 宿主支持时自动创建可见独立 Review 任务，并在其他宿主回退手动交接
 - Codex 宿主支持时自动创建或复用独立 Implementer 任务，并在其他宿主回退同会话执行
 - Review Response 与跨 Attempt 的稳定 Finding 生命周期
@@ -233,13 +233,13 @@ python tools/polaris/scripts/transition_task.py TASK-0001 DISPATCH_IMPLEMENTATIO
 
 自动任务标题为 `Polaris Implement · <TASK> · <REVISION> · attempt <N>`。Implementer 只接收 handoff，负责代码、测试、实现 checkpoint，以及同一会话内的 Documentation Sync；它只写 Implementation、Knowledge Delta 和实时进度，不执行状态转换。主任务验证这些产物并推进 Graph。
 
-开发期间可以直接打开：
+开发期间可以直接打开四格缩进的实时快照：
 
 ```text
-.polaris/tasks/TASK-0001/runtime/STATUS.md
+.polaris/tasks/TASK-0001/runtime/progress.json
 ```
 
-其 JSON 权威快照是同目录的 `progress.json`，记录当前动作、完成项、剩余项、检查、blocker、用户动作和更新时间。该目录默认忽略，不污染 Git；它不是主观百分比，也不保证跨电脑恢复。宿主无法自动创建任务时，主任务使用相同 handoff 同会话执行，并明确提示即时状态回答可能延迟。
+它记录当前动作、完成项、剩余项、检查、blocker、用户动作和更新时间。主任务读取并验证这份 JSON 后在对话中按需格式化展示，不另存 Markdown 副本。该目录默认忽略，不污染 Git；它不是主观百分比，也不保证跨电脑恢复。宿主无法自动创建任务时，主任务使用相同 handoff 同会话执行，并明确提示即时状态回答可能延迟。
 
 ### 7. 交接独立 Review
 

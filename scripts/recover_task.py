@@ -89,9 +89,6 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
                 live_progress = {
                     "available": True,
                     "path": progress_path.relative_to(repo).as_posix(),
-                    "projection": progress_path.with_name("STATUS.md")
-                    .relative_to(repo)
-                    .as_posix(),
                     "value": progress,
                 }
             except (RuleFailure, InputFailure) as exc:

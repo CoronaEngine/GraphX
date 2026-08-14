@@ -99,7 +99,7 @@ v0.1 没有常驻控制器，因此 Graph 的控制力来自三层：Skill 必�
 6. 与当前 Work Item revision、commit 和 diff hash 匹配的 Review / Validation evidence
 7. Plan、工作笔记、聊天记录和状态摘要
 
-聊天、`project-index.md`、Markdown 报告均是导航、叙述或投影，不得覆盖权威 JSON 状态。旧 Review 或 Validation 不得覆盖更新后的代码事实；其绑定的 revision、commit 或 diff hash 不匹配时自动失效。
+聊天、`project-index.md`、`PLAN.md` 和 `WORKING_SET.md` 均是导航、计划或有限上下文，不得覆盖权威 JSON 状态。结构化 artifact 不生成内容重复的 Markdown 副本。旧 Review 或 Validation 不得覆盖更新后的代码事实；其绑定的 revision、commit 或 diff hash 不匹配时自动失效。
 
 ## 4. 仓库布局
 
@@ -189,36 +189,28 @@ target-repo/
     ├── project-index.md           # 保持短小，只做恢复地图
     ├── workflow.json
     ├── decisions/
-    │   ├── CD-*.json              # append-only，权威 Human Decision/Approval
-    │   └── CD-*.md                # 可选可读投影
+    │   └── CD-*.json              # append-only，权威 Human Decision/Approval
     ├── explorations/EXP-*.json    # 可跨任务复用的失败探索
     ├── tasks/
     │   └── TASK-0001/
     │       ├── state.json         # 可由事件重建的当前状态投影
     │       ├── runtime/            # 本任务的本机实时状态；默认 Git ignored
-    │       │   ├── progress.json   # 实时进度 JSON 权威快照
-    │       │   └── STATUS.md       # 人类可读投影
+    │       │   └── progress.json   # 实时进度 JSON 权威快照
     │       ├── revisions/
-    │       │   ├── work-item-r001.json  # 权威执行合同
-    │       │   └── WORK_ITEM-r001.md    # 可读投影
+    │       │   └── work-item-r001.json  # 权威执行合同
     │       ├── PLAN.md
     │       ├── WORKING_SET.md
     │       ├── implementations/r001/
     │       │   ├── handoff-001.json
-    │       │   ├── attempt-001.json
-    │       │   └── IMPLEMENTATION-001.md
+    │       │   └── attempt-001.json
     │       ├── knowledge/r001/
-    │       │   ├── knowledge-delta-001.json
-    │       │   └── KNOWLEDGE_DELTA-001.md
+    │       │   └── knowledge-delta-001.json
     │       ├── reviews/r001/
-    │       │   ├── review-001.json
-    │       │   └── REVIEW-001.md
+    │       │   └── review-001.json
     │       ├── validations/r001/
-    │       │   ├── validation-001.json
-    │       │   └── VALIDATION-001.md
+    │       │   └── validation-001.json
     │       ├── results/r001/
-    │       │   ├── result-001.json
-    │       │   └── RESULT-001.md
+    │       │   └── result-001.json
     │       ├── evidence/r001/     # 可复现命令摘要、日志或其哈希
     │       ├── events.jsonl       # append-only，状态转换记录
     │       └── explorations/EXP-*.json
@@ -226,7 +218,7 @@ target-repo/
 
 `.agents/skills/`、`tools/polaris/` 和 `.polaris/` 的耐久状态均纳入 Git；唯一例外是各任务目录下的 `.polaris/tasks/<TASK>/runtime/`，它保存当前电脑上的实时进度并默认忽略，不参与阶段门禁或 Fresh Clone 恢复。前两者是 vendored 协议包，`.polaris/` 其余内容是项目运行状态。`project.json` 必须记录 `polaris_version` 和 `workflow_version`。v0.1 开工前使用最小 fixture 验证宿主能够发现仓库内 `.agents/skills/`；如果宿主发现规则不同，只调整 vendoring 路径，不改变 Skills 随目标仓库版本化的决定。
 
-JSON 文件是机械门禁的权威输入；同名 Markdown 只用于人类阅读，不参与状态判定。旧 revision 和旧 attempt 文件不可覆盖，`state.json` 仅保存当前有效 artifact 的指针。
+JSON 文件是机械门禁的权威输入。结构化 artifact 不生成同名 Markdown 副本；用户可直接查看四格缩进 JSON，主任务也可按需格式化展示。旧 revision 和旧 attempt 文件不可覆盖，`state.json` 仅保存当前有效 artifact 的指针。
 
 ## 5. Skill 列表与职责
 
@@ -258,7 +250,7 @@ v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Worker �
 - Human Change Decision：`CD-0001`
 - Failed Exploration：`EXP-0001`
 - Work Item revision：`TASK-0001@r001`
-- 权威文件：`revisions/work-item-r001.json`；可读投影：`revisions/WORK_ITEM-r001.md`。
+- 权威文件：`revisions/work-item-r001.json`；Work Item 预览由主任务直接从 JSON 格式化展示，不落盘重复 Markdown。
 - 修订文件不可覆盖；需求变化通过 `new_revision.py` 生成下一版、追加事件，并在 `state.json` 更新当前指针。
 - 已开始实现后如 Goal、Acceptance、Scope、Hard Constraint 变化，任务退回 `QUALIFIED`，Plan、Review、Validation 对新 revision 重新失效。
 
@@ -317,7 +309,7 @@ v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Worker �
 }
 ```
 
-`base_commit` 必须是可解析的 Git commit SHA，不允许使用 working-tree marker。所有机械读取字段均存储在 JSON 中；Markdown 不使用可被误认为权威数据的自由格式 front matter。
+`base_commit` 必须是可解析的 Git commit SHA，不允许使用 working-tree marker。所有机械读取字段均存储在 JSON 中；`PLAN.md`、`WORKING_SET.md` 和恢复地图不使用可被误认为权威数据的自由格式 front matter。
 
 ### Delta-oriented change package
 
@@ -329,7 +321,7 @@ v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Worker �
 - 实际代码 diff 与偏离 Plan 的原因
 - 新增、更新、失效或无需变更的知识条目
 
-权威 `knowledge-delta-<attempt>.json` 必须把每项标记为 `ADD / UPDATE / STALE / NO_CHANGE`，并给出目标路径和证据；Markdown 仅是投影。关闭前不得存在未处置的 `STALE`。
+权威 `knowledge-delta-<attempt>.json` 必须把每项标记为 `ADD / UPDATE / STALE / NO_CHANGE`，并给出目标路径和证据；不生成同名 Markdown 副本。关闭前不得存在未处置的 `STALE`。
 
 ### Decision ownership
 
@@ -419,7 +411,7 @@ AGENTS.md
 | `new_revision.py` | 复制当前 revision 为下一不可变修订，记录失效范围 |
 | `build_working_set.py` | 根据 Work Item、模块索引和显式引用生成/刷新工作集骨架 |
 | `build_implementation_handoff.py` | 从当前 revision、Plan、Working Set 与 prior Review 构造不可变 Implementer 输入包 |
-| `update_implementation_progress.py` | 原子更新 ignored 的实时进度 JSON 与 Markdown 投影；拒绝 session 接管和非法 blocker |
+| `update_implementation_progress.py` | 原子更新 ignored 的实时进度 JSON；拒绝 session 接管和非法 blocker |
 | `validate_project.py` | 检查目录、ID、索引链接、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
 | `transition_task.py` | 获取任务锁，校验合法边与 gate，追加带 sequence 的事件，再原子替换 `state.json` |
@@ -445,7 +437,7 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 3. Work Item 的 `implementation_dispatch.authorized=true` 是“确认并执行”对当前 revision 全部 Implementer attempts 的显式授权。宿主支持任务管理时，在同一本地项目和同一 checkout 创建可见的新任务；不 fork 主对话，也不默认使用 worktree。
 4. Implementer 标题固定为 `Polaris Implement · <TASK> · <REVISION> · attempt <N>`。创建前先复用与 handoff 绑定的有效 Implementation artifact，其次复用唯一同名任务；多条同名记录时不得猜测，回退同会话执行。
 5. Implementer 只接收 task ID 与已注册 handoff，不接收主聊天、实现建议或预期结果。它拥有本轮代码、测试、构建文件和项目文档的单写者权限，但不执行 Graph 转换、Review、Validation 或关闭。
-6. Implementer 在开始/完成实现步骤、测试结束、blocker、checkpoint 和 Documentation Sync 时，通过 `update_implementation_progress.py` 原子更新 `.polaris/tasks/<TASK>/runtime/progress.json`；同目录的 `STATUS.md` 仅为投影。进度记录 phase、current action、completed、remaining、checks、blocker、user action 和更新时间，不生成主观百分比。
+6. Implementer 在开始/完成实现步骤、测试结束、blocker、checkpoint 和 Documentation Sync 时，通过 `update_implementation_progress.py` 原子更新 `.polaris/tasks/<TASK>/runtime/progress.json`。进度记录 phase、current action、completed、remaining、checks、blocker、user action 和更新时间；主任务按需格式化展示，不生成 Markdown 副本或主观百分比。
 7. 每个任务的 `runtime/` 子目录默认 Git ignored，不影响工作树 checkpoint，也不承诺跨电脑恢复。正式 Implementation、Knowledge Delta、commit/diff 和 event 继续写入耐久 Authority。主任务可随时读取进度；若整个宿主停止运行，快照只代表最后一次成功更新。
 8. Implementation artifact 必须绑定 handoff path/hash 和 Implementer session。主任务验证后执行 `FINISH_IMPLEMENTATION`，再续接同一个 Implementer 任务执行 `$documentation-sync`；Worker 写回 Knowledge Delta 和最终 subject checkpoint，主任务执行 `SYNC_DOCS`。
 9. Review 或 Validation 返工生成新 attempt、新 handoff 和新的 Implementer 任务；prior Review 通过 handoff 传递，Implementer 写 Review Response。不同 attempt 不复用 Implementer session。
@@ -460,7 +452,7 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 5. Reviewer 只接收：冻结 Work Item、Plan、Working Set、`subject_base_commit`、最终 `subject_head_commit`、`subject_diff_hash`、项目规则、相关模块文档、实现记录、Knowledge Delta 和可复现证据。
 6. 第一遍检查 **Specification Compliance**：是否解决正确问题、越界、漏掉 AC、引入未授权行为。
 7. 第二遍检查 **Engineering Quality**：正确性、生命周期、并发、安全、性能、兼容性、可维护性、测试缺口和反例。
-8. Finding 使用稳定 ID，包含 `severity / location / claim / evidence / required_action / status`。权威记录写入 `reviews/<revision>/review-<attempt>.json`；第二 Reviewer 使用 `review-<attempt>-2.json`，Markdown 只做可读投影。
+8. Finding 使用稳定 ID，包含 `severity / location / claim / evidence / required_action / status`。权威记录写入 `reviews/<revision>/review-<attempt>.json`；第二 Reviewer 使用 `review-<attempt>-2.json`，不生成同名 Markdown 副本。
 9. `critical`、`high`、任何 AC 不满足或越界均为 blocking。作者必须逐项回复；Reviewer 必须重新检查新 diff/证据后才能关闭。
 10. Review JSON 必须记录 `implementer_session_id / reviewer_session_id / work_item_revision / subject_base_commit / subject_head_commit / subject_diff_hash / reviewed_at`。Validator 检查引用、哈希和 R1/R2 session ID 不同；该机制是可审计治理，不是防恶意伪造的身份认证。
 11. R1 需要一名独立 Reviewer。R2 默认需要一名独立 Reviewer；涉及安全、不可逆数据迁移或公共持久化格式变更时需要两名独立 Reviewer，按 slot 顺序派发，任一 `REJECT` 即停止本轮，全部 `ACCEPT` 才能推进。
@@ -530,7 +522,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 ### M1 — Repo skeleton 与 Skills（第 3–5 天）
 
-- [x] 建源仓库目录、JSON/Markdown 模板和七个 Skill
+- [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和七个 Skill
 - [x] 将 Skills vendoring 到 `.agents/skills/`，将版本锁定的脚本/Schema/模板/Workflow vendoring 到 `tools/polaris/`
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills
 - [x] `engineering-task` 实现仅显式触发、恢复、分派、门禁停止规则
@@ -551,7 +543,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 ### M3 — Review、Recovery 与 Working Set（第 10–12 天）
 
 - [x] 实现独立 Implementer 自动派发、确定性任务复用、handoff/result 绑定和同会话回退
-- [x] 实现事件驱动实时进度 JSON/Markdown、本机忽略规则、session 所有权与恢复读取
+- [x] 实现事件驱动实时进度 JSON、本机忽略规则、session 所有权与恢复读取
 - [x] 实现绑定 revision、commit、diff hash 和 session attestation 的 reviewer handoff 与 finding lifecycle
 - [x] 实现渐进恢复与 Working Set 刷新
 - [x] 实现 failed exploration 的任务内记录与项目级提升
@@ -610,7 +602,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 3. 建一个合法任务以及覆盖非法边、过期 revision、错误 commit/diff、事件损坏和证据缺失的非法 fixture。
 4. 实现 `validate_task.py`、`transition_task.py` 与 `rebuild_state.py`，锁定“Agent 不拥有完成状态”。
 5. 写 `engineering-task/SKILL.md`，让其只围绕 graph、owner、artifact、checkpoint 和 gate 编排。
-6. 补齐阶段 Skills、JSON/Markdown 模板、Documentation Sync 和 reviewer handoff。
+6. 补齐阶段 Skills、JSON artifact 模板、必要 Markdown 上下文模板、Documentation Sync 和 reviewer handoff。
 7. 将 Skills 和协议实现 vendoring 到 Horizon fixture，验证发现、版本锁定和 Fresh Clone Recovery。
 8. 用 Horizon 的一个小型 R1 任务 dogfood；遇到摩擦先改协议和 Skill，不扩建 CLI/UI。
 

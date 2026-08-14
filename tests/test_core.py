@@ -821,7 +821,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(result["to"], "IMPLEMENTED")
 
     def test_live_implementation_progress_is_queryable_and_ignored(self) -> None:
-        """事件驱动进度同时生成四空格 JSON 与 Markdown，并默认排除出 Git。"""
+        """事件驱动进度只生成四空格 JSON，并默认排除出 Git。"""
         self.enter_implementing()
         self.dispatch_implementation()
         title = "Polaris Implement · TASK-0001 · r001 · attempt 1"
@@ -839,9 +839,8 @@ class PolarisCoreTests(unittest.TestCase):
             None,
         )
         progress_path = self.task / "runtime" / "progress.json"
-        projection_path = progress_path.with_name("STATUS.md")
         self.assertIn('    "task_id"', progress_path.read_text(encoding="utf-8"))
-        self.assertIn("## Remaining", projection_path.read_text(encoding="utf-8"))
+        self.assertFalse(progress_path.with_name("STATUS.md").exists())
         self.assertEqual(
             run_git(
                 self.repo,

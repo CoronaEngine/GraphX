@@ -9,7 +9,7 @@ description: Internal Polaris stage for an explicitly started `$engineering-task
 2. Execute the evidence method for every acceptance criterion without weakening it.
 3. Record command/check, working directory, environment summary, start time, exit code, result, and output path or hash.
 4. Mark the overall verdict PASS only when every acceptance criterion passes.
-5. Write a new immutable Validation JSON attempt and readable projection.
+5. Write a new immutable Validation JSON attempt. Do not create a duplicate Markdown artifact.
 6. Use `PASS_VALIDATION`, `FAIL_IMPLEMENTATION`, or `FAIL_PLAN` according to the evidence.
 7. Require final Human approval before `CLOSE` when rigor is R2.
 

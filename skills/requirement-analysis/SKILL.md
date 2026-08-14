@@ -22,7 +22,7 @@ When the draft is complete, always emit `WORK_ITEM_PREVIEW` before freezing it, 
 - Human-owned decisions and approval gates;
 - remaining unknowns, which must be `None`.
 
-Ask the user to explicitly confirm this preview. Prefer the structured choice UI with `Confirm and execute (Recommended)` and `Request changes`; explain that confirmation freezes the Work Item and authorizes Polaris to create every required independent Implementation and Review task for this revision in the same local project, including later rework and Review attempts up to the workflow limit. Use the same choices and explanation as text when the UI is unavailable. Do not infer confirmation from silence or from the original request. Only after confirmation may you set both `implementation_dispatch.authorized` and `review_dispatch.authorized` to `true`, write the final draft, validate it, and run `QUALIFY` or `NEW_REVISION`. Then reload state and emit `WORK_ITEM_QUALIFIED` with the frozen JSON and Markdown projection paths. Any new revision resets both authorizations to `false`; any later substantive change to goal, scope, constraints, or acceptance creates a new immutable revision and requires confirmation again.
+Ask the user to explicitly confirm this preview. Prefer the structured choice UI with `Confirm and execute (Recommended)` and `Request changes`; explain that confirmation freezes the Work Item and authorizes Polaris to create every required independent Implementation and Review task for this revision in the same local project, including later rework and Review attempts up to the workflow limit. Use the same choices and explanation as text when the UI is unavailable. Do not infer confirmation from silence or from the original request. Only after confirmation may you set both `implementation_dispatch.authorized` and `review_dispatch.authorized` to `true`, write the final draft, validate it, and run `QUALIFY` or `NEW_REVISION`. Then reload state and emit `WORK_ITEM_QUALIFIED` with the frozen JSON path. Any new revision resets both authorizations to `false`; any later substantive change to goal, scope, constraints, or acceptance creates a new immutable revision and requires confirmation again.
 
 1. Define an observable goal and motivation.
 2. Separate in-scope and out-of-scope work.
@@ -31,7 +31,7 @@ Ask the user to explicitly confirm this preview. Prefer the structured choice UI
 5. Set every risk flag explicitly. Any true risk flag requires at least R2.
 6. Assign Human and Agent decision owners. Do not decide Human-owned boundaries.
 7. Bind `base_commit` to a full Git SHA.
-8. Write the next `revisions/work-item-rNNN.json` draft and readable Markdown projection. It becomes immutable when qualification succeeds.
+8. Write the next `revisions/work-item-rNNN.json` draft. Do not create a duplicate Markdown Work Item. The JSON becomes immutable when qualification succeeds.
 9. Present `WORK_ITEM_PREVIEW` and wait for explicit Human confirmation.
 10. Validate the JSON, then use `transition_task.py ... QUALIFY` or `NEW_REVISION` and report `WORK_ITEM_QUALIFIED`.
 

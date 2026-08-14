@@ -364,13 +364,13 @@ Implementer 只接收 task ID 和已注册 handoff，不继承主任务聊天。
 
 ### 9.1 不发消息也能查看
 
-直接打开下面的 Markdown 文件：
+直接打开下面的四格缩进 JSON 文件：
 
 ```text
-.polaris/tasks/TASK-0001/runtime/STATUS.md
+.polaris/tasks/TASK-0001/runtime/progress.json
 ```
 
-它展示当前 phase、正在做什么、已完成、剩余、最近检查、blocker、用户动作和更新时间。相同目录的 `progress.json` 是这份本机快照的机械权威。Implementer 会在开始或完成步骤、测试结束、遇到 blocker、准备 checkpoint 和文档同步时更新；Polaris 不根据耗时猜测百分比。
+它展示当前 phase、正在做什么、已完成、剩余、最近检查、blocker、用户动作和更新时间，也是这份本机快照的机械权威。Implementer 会在开始或完成步骤、测试结束、遇到 blocker、准备 checkpoint 和文档同步时更新；Polaris 不根据耗时猜测百分比，也不生成内容重复的 Markdown 文件。
 
 这个目录默认加入 `.gitignore`，因此不会污染工作树，也不会随 Git 在另一台电脑继续。换电脑后，耐久状态仍能恢复到最近 checkpoint；新 Implementer 会创建新的本机进度快照。
 
@@ -572,7 +572,7 @@ python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote 
 Implementation 期间查看进度：
 
 ```text
-[ ] 优先打开 .polaris/tasks/TASK-NNNN/runtime/STATUS.md
+[ ] 优先打开 .polaris/tasks/TASK-NNNN/runtime/progress.json
 [ ] 或在主任务请求展示 IMPLEMENTATION_PROGRESS 后继续
 [ ] 不用进度百分比替代 completed / current / remaining
 ```

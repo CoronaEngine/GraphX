@@ -43,14 +43,6 @@ def create(repo: Path, task_id: str) -> dict[str, object]:
     }
     value["known_unknowns"] = ["Review and freeze changes for this revision"]
     write_json_atomic(destination, value)
-    markdown = directory / "revisions" / f"WORK_ITEM-r{revision:03d}.md"
-    markdown.write_text(
-        "# Work Item\n\n"
-        f"Readable projection for `{task_id}@r{revision:03d}`. "
-        f"The matching JSON file is authoritative.\n",
-        encoding="utf-8",
-        newline="\n",
-    )
     return {
         "message": f"created {task_id}@r{revision:03d}; edit and freeze it before NEW_REVISION",
         "task": task_id,

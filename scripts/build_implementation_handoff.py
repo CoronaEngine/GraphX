@@ -98,7 +98,6 @@ def build(repo: Path, task_id: str) -> dict[str, Any]:
         "previous_review": previous_review,
         "output_path": f"implementations/r{revision:03d}/attempt-{attempt:03d}.json",
         "progress_json_path": f".polaris/tasks/{task_id}/runtime/progress.json",
-        "progress_markdown_path": f".polaris/tasks/{task_id}/runtime/STATUS.md",
         "package": package,
     }
     path = (

@@ -21,7 +21,6 @@ from polaris_core import (
     task_dir,
     utc_now,
     write_json_atomic,
-    write_text_atomic,
 )
 
 
@@ -35,42 +34,6 @@ PHASES = (
     "BLOCKED",
     "FAILED",
 )
-
-
-def _render(progress: dict[str, Any]) -> str:
-    def lines(values: list[str]) -> list[str]:
-        return [f"- {value}" for value in values] or ["- None"]
-
-    content = [
-        "# Polaris Implementation Progress",
-        "",
-        "> Live Markdown projection only. `progress.json` is authoritative for this local snapshot.",
-        "",
-        f"- Task: `{progress['task_id']}`",
-        f"- Revision: `r{progress['work_item_revision']:03d}`",
-        f"- Attempt: `{progress['artifact_attempt']}`",
-        f"- Phase: `{progress['phase']}`",
-        f"- Current action: {progress['current_action']}",
-        f"- Implementation task: {progress['implementation_task']}",
-        f"- Implementer session: `{progress['implementer_session_id']}`",
-        f"- Blocker: {progress['blocker'] or 'None'}",
-        f"- User action: {progress['user_action'] or 'None'}",
-        f"- Updated at: `{progress['updated_at']}`",
-        "",
-        "## Completed",
-        "",
-        *lines(progress["completed_steps"]),
-        "",
-        "## Remaining",
-        "",
-        *lines(progress["remaining_steps"]),
-        "",
-        "## Checks",
-        "",
-        *lines(progress["checks"]),
-        "",
-    ]
-    return "\n".join(content)
 
 
 def update(
@@ -122,13 +85,10 @@ def update(
         repo, root, task_id, state, handoff, reference, progress
     )
     write_json_atomic(progress_path, progress)
-    validated = validate_progress(repo, task_id)
-    markdown_path = repo / handoff["progress_markdown_path"]
-    write_text_atomic(markdown_path, _render(validated))
+    validate_progress(repo, task_id)
     return {
         "message": f"updated {task_id} Implementation progress to {phase}",
         "progress": str(progress_path),
-        "projection": str(markdown_path),
     }
 
 

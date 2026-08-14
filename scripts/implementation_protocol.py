@@ -109,10 +109,6 @@ def validate_handoff_value(
         f".polaris/tasks/{state['task_id']}/runtime/progress.json"
     ):
         raise RuleFailure("Implementation handoff has the wrong progress JSON path")
-    if handoff["progress_markdown_path"] != (
-        f".polaris/tasks/{state['task_id']}/runtime/STATUS.md"
-    ):
-        raise RuleFailure("Implementation handoff has the wrong progress Markdown path")
     roles = {entry["role"] for entry in handoff["package"]}
     missing = REQUIRED_PACKAGE_ROLES - roles
     if missing:

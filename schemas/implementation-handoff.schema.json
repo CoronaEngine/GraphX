@@ -13,7 +13,6 @@
         "previous_review",
         "output_path",
         "progress_json_path",
-        "progress_markdown_path",
         "package"
     ],
     "additionalProperties": false,
@@ -64,10 +63,6 @@
         "progress_json_path": {
             "type": "string",
             "pattern": "^\\.polaris/tasks/TASK-[0-9]{4}/runtime/progress\\.json$"
-        },
-        "progress_markdown_path": {
-            "type": "string",
-            "pattern": "^\\.polaris/tasks/TASK-[0-9]{4}/runtime/STATUS\\.md$"
         },
         "package": {
             "type": "array",
