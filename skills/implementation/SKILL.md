@@ -1,6 +1,6 @@
 ---
 name: implementation
-description: Implement the current frozen Polaris Work Item within its declared scope and plan. Use only in IMPLEMENTING, including fixes after Review rejection or Validation failure, while recording deviations, tests, subject commits, and reproducible evidence.
+description: Internal Polaris stage for an explicitly started `$engineering-task` workflow. Invoke only for the current frozen Work Item in IMPLEMENTING; do not activate from ordinary implementation or fix requests.
 ---
 
 # Implementation

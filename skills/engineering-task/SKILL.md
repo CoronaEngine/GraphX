@@ -1,9 +1,11 @@
 ---
 name: engineering-task
-description: Govern non-trivial software engineering work through the Polaris repository workflow. Use when a user asks Codex to implement, change, refactor, optimize, or fix a project and the work must be qualified, planned, reviewed, validated, documented, or resumed from .polaris state.
+description: Run the Polaris repository workflow only when the user explicitly invokes `$engineering-task`. Do not activate for ordinary engineering requests or infer opt-in from implementation, change, refactor, optimization, fix, review, or recovery intent.
 ---
 
 # Engineering Task
+
+Require explicit user invocation of `$engineering-task`. If the user did not explicitly invoke this Skill, do not enter the Polaris workflow.
 
 Treat the repository as authority. Never infer state or completion from chat history.
 

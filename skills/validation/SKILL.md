@@ -1,6 +1,6 @@
 ---
 name: validation
-description: Mechanically validate a reviewed Polaris change against every acceptance criterion. Use in VALIDATING after an accepted Review to run reproducible build, test, benchmark, regression, or Human checks and produce a subject-bound PASS or FAIL artifact.
+description: Internal Polaris stage for an explicitly started `$engineering-task` workflow. Invoke only in VALIDATING after an accepted Review; do not activate from ordinary validation or test requests.
 ---
 
 # Validation

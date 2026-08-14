@@ -224,7 +224,7 @@ JSON 文件是机械门禁的权威输入；同名 Markdown 只用于人类阅�
 
 | Skill | 责任 | 禁止事项 |
 |---|---|---|
-| `engineering-task` | 总入口；恢复状态；选择 rigor；解析 Graph；调用阶段 Skill；遇门禁停止 | 不直接宣布完成，不绕过 transition 脚本 |
+| `engineering-task` | 用户显式调用 `$engineering-task` 后的总入口；恢复状态；选择 rigor；解析 Graph；调用阶段 Skill；遇门禁停止 | 不隐式触发，不直接宣布完成，不绕过 transition 脚本 |
 | `requirement-analysis` | 澄清目标、验收、范围、硬约束、Decision Owner；生成并冻结 Work Item revision | 不替 Human 决定目标、破坏性边界或产品取舍 |
 | `architecture-planning` | 构造最小工作集；调查代码；形成 delta-oriented Plan、风险与验证映射 | 不把推测写成项目事实，不无界加载仓库 |
 | `implementation` | 按冻结 revision 和 Plan 小步实现；运行节点内 build/test/fix loop；记录偏差和证据 | 不修改 Work Item；不把本地测试通过等同完成 |
@@ -232,7 +232,7 @@ JSON 文件是机械门禁的权威输入；同名 Markdown 只用于人类阅�
 | `validation` | 把 acceptance criterion 映射到可复现证据；运行规定验证；产出 verdict 输入 | 不弱化验收条件，不用主观总结代替命令结果 |
 | `documentation-sync` | 分析知识 delta；更新或标记 stale 文档；提升可复用 Decision / Exploration | 不自动把未确认推断升级为权威知识 |
 
-Skill 描述应按“何时必须触发的行为”编写，而不是做技术能力菜单。Skill 本身使用 fixture 做回归测试。
+Skill 描述应按触发边界编写，而不是做技术能力菜单。七个 Polaris Skills 都必须设置 `policy.allow_implicit_invocation: false`：用户仅通过显式调用 `$engineering-task` 进入 Polaris，阶段 Skills 只由已启动的工作流在合法节点显式分派，R1/R2 Reviewer 只从已注册 handoff 显式调用。普通工程请求不进入 Polaris。Skill 本身使用 fixture 做回归测试。
 
 ## 6. Work Item 与任务模型
 
@@ -485,10 +485,10 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [x] 建源仓库目录、JSON/Markdown 模板和七个 Skill
 - [x] 将 Skills vendoring 到 `.agents/skills/`，将版本锁定的脚本/Schema/模板/Workflow vendoring 到 `tools/polaris/`
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills
-- [x] `engineering-task` 实现触发、恢复、分派、门禁停止规则
+- [x] `engineering-task` 实现仅显式触发、恢复、分派、门禁停止规则
 - [x] 阶段 Skill 明确输入、输出、owner 和禁止事项
 
-完成标准：Codex 接到一个模糊 R1 任务时先建立 Work Item，不直接改代码。
+完成标准：用户显式调用 `$engineering-task` 提交一个模糊 R1 任务时，Codex 先建立 Work Item，不直接改代码；未显式调用时不进入 Polaris。
 
 ### M2 — Mechanical core（第 6–9 天）
 

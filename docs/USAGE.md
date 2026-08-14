@@ -127,14 +127,14 @@ vendoring 和首次提交完成后，从目标仓库根目录新开一个 Codex 
 可用一个低风险请求验证发现，例如：
 
 ```text
-请使用 engineering-task 检查这个仓库是否已经正确接入 Polaris；只检查，不修改代码。
+请使用 $engineering-task 检查这个仓库是否已经正确接入 Polaris；只检查，不修改代码。
 ```
 
 如果 Codex 能读取 `.agents/skills/engineering-task/SKILL.md` 并按 Polaris 状态恢复或说明当前没有任务，说明发现链路正常。
 
 ## 4. Polaris 仓库自举
 
-Polaris 本身也可以用 Polaris 管理。当前仓库已 vendoring 自身，因此在 Polaris 仓库中使用 `tools/polaris/scripts/` 下的脚本，不需要再次把仓库复制给自己。
+Polaris 源仓库也可以选择用 Polaris 管理，但自举不是默认状态。只有仓库中存在 `.agents/skills/`、`tools/polaris/` 和 `.polaris/` 时，才表示当前源仓库已经完成自举。
 
 自举与普通目标项目的差别只有来源位置：
 
@@ -144,7 +144,7 @@ Polaris 本身也可以用 Polaris 管理。当前仓库已 vendoring 自身，�
 
 ## 5. 每次提出需求之前
 
-大多数情况下，用户不需要手工创建任务 JSON。先把仓库准备到可判断状态，再用自然语言提出需求即可。
+用户不需要手工创建任务 JSON。先把仓库准备到可判断状态，再在需求中显式调用 `$engineering-task`。普通自然语言工程请求不会自动进入 Polaris。
 
 ### 5.1 同步仓库
 
@@ -179,6 +179,7 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 - 工作目录应是目标仓库根目录；
 - 最好在 vendoring 后新开的 Codex 任务中工作；
 - 确认 Codex 能发现 `engineering-task` 等仓库 Skills；
+- 准备使用 Polaris 时，在请求中明确写出 `$engineering-task`；
 - 如果是 R1/R2 Review，不要复用实现会话，具体见第 9 节。
 
 ### 5.4 准备需求信息
@@ -199,7 +200,7 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 推荐模板：
 
 ```text
-请使用 Polaris 完成以下工程任务。
+请使用 $engineering-task 完成以下工程任务。
 
 目标：
 背景/动机：
@@ -214,7 +215,7 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 示例：
 
 ```text
-请使用 Polaris 为订单查询接口增加分页。
+请使用 $engineering-task 为订单查询接口增加分页。
 
 目标：列表接口支持 page 和 page_size，并返回总数。
 背景：当前一次返回全部订单，数据量增长后响应过慢。
@@ -226,7 +227,9 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 需要我决定的事项：如果兼容性与性能目标冲突，先让我选择。
 ```
 
-不必在需求中手写任务状态、Revision、Review JSON 或 transition 命令。让 `engineering-task` 负责选择相应 Skills 和合法状态转换。
+不必在需求中手写任务状态、Revision、Review JSON 或 transition 命令。显式调用后，让 `$engineering-task` 负责选择相应 Skills 和合法状态转换。
+
+如果用户只说“给订单接口增加分页”，Codex 会按普通工程请求处理，不会进入 Polaris。只有请求中明确调用 `$engineering-task`，才表示用户选择启用 Polaris 工作流。其余阶段 Skills 也禁止隐式调用，由已启动的 `$engineering-task` 按状态节点分派；不要把阶段 Skill 当成另一个入口。
 
 ## 7. 提出需求后会发生什么
 
@@ -326,7 +329,7 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 然后告诉 Codex：
 
 ```text
-请使用 engineering-task 从 .polaris 恢复并继续 TASK-0001。
+请使用 $engineering-task 从 .polaris 恢复并继续 TASK-0001。
 ```
 
 Codex 应根据当前状态加载对应 Skill，而不是从聊天记忆猜测下一步。
@@ -433,6 +436,7 @@ python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote 
 [ ] validate_project PASS
 [ ] 已从仓库根目录打开新的或合适的 Codex 任务
 [ ] Codex 能发现 engineering-task
+[ ] 请求中已显式调用 $engineering-task
 [ ] 已说明目标、范围、约束、验收和 Human-owned 决策
 ```
 

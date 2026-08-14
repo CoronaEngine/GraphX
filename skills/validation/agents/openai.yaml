@@ -2,3 +2,6 @@ interface:
   display_name: "Validation"
   short_description: "Validate acceptance evidence"
   default_prompt: "Use $validation to validate every acceptance criterion for the current Polaris task."
+
+policy:
+  allow_implicit_invocation: false

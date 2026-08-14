@@ -1,6 +1,6 @@
 ---
 name: documentation-sync
-description: Reconcile project documentation and durable knowledge with an implemented Polaris change before independent Review. Use in IMPLEMENTED or after implementation rework to classify documentation impact, resolve stale knowledge, and create the final Review subject checkpoint.
+description: Internal Polaris stage for an explicitly started `$engineering-task` workflow. Invoke only in IMPLEMENTED or after implementation rework to reconcile documentation; do not activate from ordinary documentation requests.
 ---
 
 # Documentation Sync

@@ -1,6 +1,6 @@
 ---
 name: requirement-analysis
-description: Convert an ambiguous engineering request into a frozen Polaris Work Item. Use before implementation when goal, scope, exclusions, constraints, acceptance evidence, risk flags, decision owners, or rigor are not yet recorded in a versioned work-item JSON.
+description: Internal Polaris stage for an explicitly started `$engineering-task` workflow. Invoke only to convert its request into a frozen Work Item; do not activate from ordinary user requirements.
 ---
 
 # Requirement Analysis

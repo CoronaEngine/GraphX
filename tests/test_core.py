@@ -37,7 +37,7 @@ from record_exploration import record as record_exploration  # noqa: E402
 from transition_task import transition  # noqa: E402
 from validate_task import validate  # noqa: E402
 from validate_project import validate as validate_project  # noqa: E402
-from vendor_project import vendor  # noqa: E402
+from vendor_project import SKILLS, vendor  # noqa: E402
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -419,6 +419,33 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertTrue((self.repo / "tools" / "polaris" / "VERSION").is_file())
         result = validate_project(self.repo)
         self.assertEqual(result["active_tasks"], 1)
+
+    def test_engineering_task_requires_explicit_invocation(self) -> None:
+        """所有 Polaris Skills 禁止隐式调用，用户只能从 engineering-task 显式进入。"""
+        source_skill = ROOT / "skills" / "engineering-task"
+        source_instructions = (source_skill / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("only when the user explicitly invokes `$engineering-task`", source_instructions)
+        self.assertIn(
+            "only when the user explicitly invokes `$engineering-task`",
+            (self.repo / "AGENTS.md").read_text(encoding="utf-8"),
+        )
+
+        vendor(ROOT, self.repo, False)
+        for skill_name in SKILLS:
+            source = ROOT / "skills" / skill_name
+            vendored = self.repo / ".agents" / "skills" / skill_name
+            source_metadata = (source / "agents" / "openai.yaml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("allow_implicit_invocation: false", source_metadata)
+            self.assertEqual(
+                (vendored / "SKILL.md").read_text(encoding="utf-8"),
+                (source / "SKILL.md").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                (vendored / "agents" / "openai.yaml").read_text(encoding="utf-8"),
+                source_metadata,
+            )
 
     def test_fresh_clone_recovers_the_committed_task_boundary(self) -> None:
         """Fresh Clone 仅凭已提交的 vendored 协议和仓库状态恢复最近阶段边界。"""

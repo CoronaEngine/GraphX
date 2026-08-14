@@ -1,6 +1,6 @@
 ---
 name: architecture-planning
-description: Build a bounded working set and implementation plan for a frozen Polaris Work Item. Use when a task is QUALIFIED or returns to PLANNED because implementation strategy, risks, affected documentation, or acceptance-to-validation mapping must be established.
+description: Internal Polaris stage for an explicitly started `$engineering-task` workflow. Invoke only for a frozen task at QUALIFIED or returned PLANNED; do not activate from ordinary planning requests.
 ---
 
 # Architecture Planning

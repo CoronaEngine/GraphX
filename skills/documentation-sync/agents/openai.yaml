@@ -2,3 +2,6 @@ interface:
   display_name: "Documentation Sync"
   short_description: "Synchronize project knowledge"
   default_prompt: "Use $documentation-sync to reconcile project documentation with the current Polaris change."
+
+policy:
+  allow_implicit_invocation: false

@@ -1,6 +1,6 @@
 ---
 name: adversarial-review
-description: Independently and adversarially review a frozen Polaris change package. Use in REVIEWING for R1/R2 independent review or an R0 isolated pass, checking specification compliance first and engineering quality second against the exact subject revision and diff hash.
+description: Internal Polaris review stage for an explicitly started `$engineering-task` workflow. Invoke only from a registered REVIEWING handoff for R1/R2 independent review or an R0 isolated pass; do not activate from ordinary review requests.
 ---
 
 # Adversarial Review
