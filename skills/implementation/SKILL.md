@@ -16,4 +16,6 @@ description: Internal Polaris stage for an explicitly started `$engineering-task
 9. Record `subject_base_commit`, `subject_head_commit`, `subject_diff_hash`, session ID, and the next immutable artifact attempt.
 10. Transition with `FINISH_IMPLEMENTATION`, registering the Review Response when reworking, and report `IMPLEMENTATION_FINISHED`.
 
+Emit `[POLARIS:IMPLEMENTATION_FINISHED]` only after the transition succeeds and state is reloaded. Use the nine fixed `$engineering-task` status fields, then include the subject base/head commits, diff hash, checks run, deviations, and Review Response path when present.
+
 Do not self-accept Review, write Validation PASS, or claim completion.

@@ -118,6 +118,13 @@ def check_gate(
             raise RuleFailure("Work Item still contains unresolved required text")
         if not work_item["scope"]["in"] or not work_item["acceptance"]:
             raise RuleFailure("Work Item requires non-empty in-scope and acceptance entries")
+        for criterion in work_item["acceptance"]:
+            for field in ("statement", "evidence"):
+                value = criterion[field].strip()
+                if not value or value.upper() == "TODO":
+                    raise RuleFailure(
+                        f"Acceptance {criterion['id']} has unresolved {field}"
+                    )
         if work_item["known_unknowns"]:
             raise RuleFailure("Work Item has unresolved known_unknowns")
         if any(work_item["risk_flags"].values()) and work_item["rigor"] != "R2":

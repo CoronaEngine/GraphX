@@ -234,6 +234,14 @@ JSON 文件是机械门禁的权威输入；同名 Markdown 只用于人类阅�
 
 Skill 描述应按触发边界编写，而不是做技术能力菜单。七个 Polaris Skills 都必须设置 `policy.allow_implicit_invocation: false`：用户仅通过显式调用 `$engineering-task` 进入 Polaris，阶段 Skills 只由已启动的工作流在合法节点显式分派，R1/R2 Reviewer 只从已注册 handoff 显式调用。普通工程请求不进入 Polaris。Skill 本身使用 fixture 做回归测试。
 
+### 稳定对话协议
+
+`engineering-task` 负责所有用户可见检查点的一致性。每次暂停、Human gate、阶段完成、Review/Validation verdict 和终态都必须输出一个以 `[POLARIS:<MARKER>]` 开头的状态块，并按固定顺序包含 `Task / Revision / Rigor / State / Outcome / Authority / Remaining / Next / User action`。空字段写 `None`，不得省略；状态只能在转换脚本成功后重新读取 Authority 再报告，不得提前宣布。
+
+需求分析每轮最多询问三个会实质影响方案或验收的问题，并给出推荐默认值及其影响；未回答项进入 `known_unknowns`，任务保持 `DRAFT`。信息完整后必须先展示 `WORK_ITEM_PREVIEW`，完整列出目标、范围、硬约束、rigor、风险、Human-owned 决策和每个 AC 的 statement/evidence，并等待用户明确确认。确认后才能执行 `QUALIFY` 或 `NEW_REVISION` 并输出 `WORK_ITEM_QUALIFIED`。已冻结后发生实质需求变化必须创建新 revision，不允许静默覆盖。
+
+v0.1 不增加自定义对话 Runtime；稳定性由 Skill 指令、仓库 Authority、转换后重读和 fixture 测试共同保证。`transition_task.py` 必须机械拒绝 statement 或 evidence 为空白/`TODO` 的验收项。
+
 ## 6. Work Item 与任务模型
 
 ### ID 与修订
@@ -343,7 +351,7 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 
 | 目标状态 | Artifact dependency（ready） | Governance gate（可转换） |
 |---|---|---|
-| `QUALIFIED` | 冻结的 Work Item revision | 必填字段通过；Human-owned 未决项为零 |
+| `QUALIFIED` | 用户确认的冻结 Work Item revision | 必填字段通过；AC statement/evidence 非空且非 `TODO`；Human-owned 未决项为零 |
 | `PLANNED` | Plan + Working Set | 每个 AC 有验证映射；风险与受影响文档已列出 |
 | `IMPLEMENTING` | `PLANNED` | R2 已获得实施前 Human approval |
 | `IMPLEMENTED` | Implementation record + checkpoint commit | 实现者检查通过；所有偏离 Plan 已记录；subject commit 和 diff hash 已冻结 |
@@ -487,6 +495,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills
 - [x] `engineering-task` 实现仅显式触发、恢复、分派、门禁停止规则
 - [x] 阶段 Skill 明确输入、输出、owner 和禁止事项
+- [x] 固定对话检查点、Work Item 预览确认和阶段结果标记
 
 完成标准：用户显式调用 `$engineering-task` 提交一个模糊 R1 任务时，Codex 先建立 Work Item，不直接改代码；未显式调用时不进入 Polaris。
 
@@ -494,6 +503,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 - [x] 实现 init、revision、validate、transition、state rebuild、docs check
 - [x] 所有工作流状态转换经 `transition_task.py`
+- [x] `QUALIFY` 机械拒绝空白或 `TODO` 的验收描述与证据
 - [x] 单元测试覆盖第 9 节失败场景
 
 完成标准：非法跳转、过期 Review、错误 commit/diff、缺 AC 证据、未处置文档漂移和损坏事件序列均被脚本稳定拒绝；合法事件可以重建 `state.json`。
@@ -528,6 +538,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 - [ ] 目标仓库无需安装 Polaris 程序即可使用；vendored `.agents/skills/`、`tools/polaris/`、`.polaris/` 和 Python 足以运行。
 - [ ] 非平凡任务不会在 Work Item 冻结前进入 Implementation。
+- [ ] 每个暂停点和阶段结果都按固定字段展示，Work Item 未经用户确认不进入 `QUALIFIED`。
 - [ ] 每个前进、返工、阻塞、取消和新 revision 转换都可由 graph + artifact + gate 机械解释。
 - [ ] Agent 无法通过正常流程自行写入 `VERIFIED` 或 `CLOSED`。
 - [ ] R1/R2 Review 来自独立上下文；R0 使用隔离式 adversarial pass；全部覆盖 specification 与 engineering 两层。

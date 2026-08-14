@@ -14,4 +14,6 @@ description: Internal Polaris stage for an explicitly started `$engineering-task
 7. Refresh the Working Set if a promoted exploration or documentation change alters the next stage's justified inputs.
 8. Run `check_docs.py`, then transition with `SYNC_DOCS`.
 
+After the transition succeeds, reload state and emit `[POLARIS:DOCS_SYNCED]` with the nine fixed `$engineering-task` status fields. Include the Knowledge Delta, changed documentation, promoted explorations, subject diff hash, and documentation check result.
+
 Do not edit Review, Validation, Result, event, or state artifacts directly.

@@ -18,4 +18,6 @@ For R1/R2, run only in a fresh Codex session or an isolated reviewer agent creat
 9. Write a new immutable Review JSON bound to the handoff and session attestation. Reject while any blocking Finding remains open.
 10. Use `ACCEPT_REVIEW` or `REJECT_REVIEW`; never modify implementation code during Review. A third rejection enters Human-owned `BLOCKED`.
 
+After the transition succeeds, reload state and emit `[POLARIS:REVIEW_ACCEPTED]` or `[POLARIS:REVIEW_REJECTED]` with the nine fixed `$engineering-task` status fields. Include Review attempt, reviewer session ID, subject commits/diff hash, every Finding ID and status, and the immutable Review path. If isolation or handoff validation prevents review, emit `[POLARIS:TASK_BLOCKED]` instead and name the exact required fresh-session or handoff action.
+
 Only the Reviewer context may write `ACCEPT`.

@@ -324,6 +324,35 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(planned["to"], "PLANNED")
         self.assertEqual(validate(self.repo, "TASK-0001")["state"], "PLANNED")
 
+    def test_qualify_rejects_unresolved_acceptance_placeholders(self) -> None:
+        """验收描述或证据为空白/TODO 时，Work Item 不得进入 QUALIFIED。"""
+        self.freeze_work_item()
+        path = self.task / "revisions" / "work-item-r001.json"
+        frozen_draft = read_json(path)
+        cases = [
+            ("statement_blank", "statement", ""),
+            ("statement_todo", "statement", "TODO"),
+            ("evidence_blank", "evidence", "   "),
+            ("evidence_todo", "evidence", "todo"),
+        ]
+        for name, field, invalid_value in cases:
+            value = copy.deepcopy(frozen_draft)
+            value["acceptance"][0][field] = invalid_value
+            write_json_atomic(path, value)
+            with self.subTest(case=name), self.assertRaises(RuleFailure):
+                transition(
+                    self.repo,
+                    "TASK-0001",
+                    "QUALIFY",
+                    [],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+
     def test_rebuild_repairs_state_projection(self) -> None:
         """手工伪造 CLOSED 状态会被发现，state 可由 events 恢复为 DRAFT。"""
         state_path = self.task / "state.json"
@@ -446,6 +475,55 @@ class PolarisCoreTests(unittest.TestCase):
                 (vendored / "agents" / "openai.yaml").read_text(encoding="utf-8"),
                 source_metadata,
             )
+
+    def test_skills_define_stable_conversation_checkpoints(self) -> None:
+        """入口与每个阶段 Skill 都定义固定对话检查点，vendoring 后保持一致。"""
+        expected_markers = {
+            "engineering-task": [
+                "POLARIS_STARTED",
+                "TASK_BLOCKED",
+                "TASK_CANCELLED",
+                "TASK_CLOSED",
+            ],
+            "requirement-analysis": [
+                "REQUIREMENTS_NEEDED",
+                "WORK_ITEM_PREVIEW",
+                "WORK_ITEM_QUALIFIED",
+            ],
+            "architecture-planning": ["PLAN_READY"],
+            "implementation": ["IMPLEMENTATION_FINISHED"],
+            "documentation-sync": ["DOCS_SYNCED"],
+            "adversarial-review": ["REVIEW_ACCEPTED", "REVIEW_REJECTED"],
+            "validation": ["VALIDATION_PASS", "VALIDATION_FAIL"],
+        }
+        contract_fields = [
+            "`Task`",
+            "`Revision`",
+            "`Rigor`",
+            "`State`",
+            "`Outcome`",
+            "`Authority`",
+            "`Remaining`",
+            "`Next`",
+            "`User action`",
+        ]
+        entry_text = (ROOT / "skills" / "engineering-task" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        for field in contract_fields:
+            self.assertIn(field, entry_text)
+
+        vendor(ROOT, self.repo, False)
+        for skill_name, markers in expected_markers.items():
+            source_path = ROOT / "skills" / skill_name / "SKILL.md"
+            vendored_path = (
+                self.repo / ".agents" / "skills" / skill_name / "SKILL.md"
+            )
+            source_text = source_path.read_text(encoding="utf-8")
+            self.assertEqual(vendored_path.read_text(encoding="utf-8"), source_text)
+            for marker in markers:
+                with self.subTest(skill=skill_name, marker=marker):
+                    self.assertIn(marker, source_text)
 
     def test_fresh_clone_recovers_the_committed_task_boundary(self) -> None:
         """Fresh Clone 仅凭已提交的 vendored 协议和仓库状态恢复最近阶段边界。"""

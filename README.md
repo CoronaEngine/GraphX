@@ -33,6 +33,7 @@ Polaris 希望让 AI 从“生成代码”转向“可靠参与软件工程”�
 - Agent 不能自行宣布完成；只有门禁全部满足后，转换脚本才能写入 `VERIFIED` 或 `CLOSED`。
 - Review、Validation 与 Work Item Revision、Git commit 和 diff hash 绑定。
 - 新会话不依赖旧聊天，可以从仓库恢复任务状态。
+- 每个暂停点和阶段结果都用固定对话检查点展示，状态始终来自转换后的仓库 Authority。
 
 ## v0.1 边界
 
@@ -73,7 +74,8 @@ v0.1 明确不实现：
 - Review Response 与跨 Attempt 的稳定 Finding 生命周期
 - Fresh-session Recovery、项目索引和可刷新 Working Set
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
-- 22 个带场景日志的自动化测试
+- 固定字段的对话检查点、Work Item 预览确认和验收占位符门禁
+- 25 个带场景日志的自动化测试
 
 仍在建设：
 

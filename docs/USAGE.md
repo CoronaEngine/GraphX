@@ -233,6 +233,47 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 
 ## 7. 提出需求后会发生什么
 
+### 7.1 固定的对话检查点
+
+Polaris 每次暂停、等待用户决定或完成一个阶段时，都会在对话框中输出一个固定状态块。首行格式为：
+
+```text
+[POLARIS:<MARKER>]
+```
+
+后续字段顺序固定为 `Task / Revision / Rigor / State / Outcome / Authority / Remaining / Next / User action`。没有内容的字段显示 `None`，不会被省略。`State` 必须来自最近一次成功转换后重新读取的仓库状态，不能提前宣布下一状态。
+
+常见标记包括：
+
+- `REQUIREMENTS_NEEDED`：需求仍有会影响方案或验收的未知项；
+- `WORK_ITEM_PREVIEW`：Work Item 已整理好，等待用户确认冻结；
+- `WORK_ITEM_QUALIFIED`、`PLAN_READY`、`IMPLEMENTATION_FINISHED`、`DOCS_SYNCED`：阶段检查点；
+- `REVIEW_HANDOFF_READY`：R1/R2 实现会话必须停止，等待独立 Reviewer；
+- `REVIEW_ACCEPTED` / `REVIEW_REJECTED`、`VALIDATION_PASS` / `VALIDATION_FAIL`：审查与验证结论；
+- `TASK_BLOCKED`：给出 blocker、Decision Owner 和解除条件；
+- `TASK_CLOSED`：仅在转换脚本确实写入 `CLOSED` 后显示。
+
+需求信息不完整时，`requirement-analysis` 每轮只问一到三个会实质影响结果的问题，并为每个问题提供推荐默认值和选择影响；未回答项会写入 `known_unknowns`，任务停留在 `DRAFT`。信息完整后，无论原始需求多详细，Polaris 都会先展示 `WORK_ITEM_PREVIEW`，列出目标、范围、约束、严谨度、风险、所有验收标准及证据方式，然后等待用户明确确认。未确认时不得进入 `QUALIFIED`。
+
+例如：
+
+```text
+[POLARIS:WORK_ITEM_PREVIEW]
+Task: TASK-0001
+Revision: r001
+Rigor: R1
+State: DRAFT
+Outcome: Work Item 草案已完整，等待冻结确认
+Authority: .polaris/tasks/TASK-0001/revisions/work-item-r001.json
+Remaining: None
+Next: QUALIFY
+User action: 请确认目标、范围和 AC-01 至 AC-04；如需修改请逐项指出
+```
+
+用户确认后，Polaris 校验 JSON、执行转换、重新读取状态，再输出 `WORK_ITEM_QUALIFIED`。后续若目标、范围、硬约束或验收标准发生实质变化，必须创建新 Revision 并重新确认，不能静默覆盖已冻结内容。
+
+### 7.2 状态主路径
+
 默认主路径是：
 
 ```text

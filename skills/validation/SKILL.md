@@ -13,4 +13,6 @@ description: Internal Polaris stage for an explicitly started `$engineering-task
 6. Use `PASS_VALIDATION`, `FAIL_IMPLEMENTATION`, or `FAIL_PLAN` according to the evidence.
 7. Require final Human approval before `CLOSE` when rigor is R2.
 
+After the transition succeeds, reload state and emit `[POLARIS:VALIDATION_PASS]` or `[POLARIS:VALIDATION_FAIL]` with the nine fixed `$engineering-task` status fields. Include one result per acceptance ID, its evidence path or hash, the overall Validation path, and the next legal transition. Emit `[POLARIS:TASK_CLOSED]` only after a separate successful `CLOSE` transition.
+
 Compilation alone is not completion unless it is the only explicit acceptance criterion. Never edit `state.json` or claim `CLOSED` directly.
