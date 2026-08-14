@@ -1,4 +1,0 @@
-interface:
-  display_name: "Requirement Analysis"
-  short_description: "Freeze an executable work item"
-  default_prompt: "Use $requirement-analysis to turn this request into a frozen Polaris Work Item."

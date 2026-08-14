@@ -1,4 +1,0 @@
-interface:
-  display_name: "Engineering Task"
-  short_description: "Run governed engineering tasks"
-  default_prompt: "Use $engineering-task to qualify and execute this engineering request through Polaris."
