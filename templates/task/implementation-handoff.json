@@ -8,7 +8,7 @@
     "subject_base_commit": "0000000000000000000000000000000000000000",
     "previous_review": null,
     "output_path": "implementations/r001/attempt-001.json",
-    "progress_json_path": ".polaris/runtime/TASK-0001/progress.json",
-    "progress_markdown_path": ".polaris/runtime/TASK-0001/STATUS.md",
+    "progress_json_path": ".polaris/tasks/TASK-0001/runtime/progress.json",
+    "progress_markdown_path": ".polaris/tasks/TASK-0001/runtime/STATUS.md",
     "package": []
 }

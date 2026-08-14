@@ -46,7 +46,7 @@ def vendor(source: Path, target: Path, force: bool) -> dict[str, str]:
     shutil.copyfile(source / "VERSION", tools_target / "VERSION")
     for name in ("scripts", "schemas", "templates", "workflow"):
         shutil.copytree(source / name, tools_target / name, ignore=ignore_generated)
-    ensure_gitignore_rule(target, ".polaris/runtime/")
+    ensure_gitignore_rule(target, ".polaris/tasks/*/runtime/")
     return {"message": f"vendored Polaris into {target}", "target": str(target)}
 
 

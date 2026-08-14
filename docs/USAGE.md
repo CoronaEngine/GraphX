@@ -13,7 +13,7 @@ Polaris 把项目仓库作为权威事实来源：
 - `.polaris/` 保存项目配置、冻结工作流、任务状态、Work Item、计划、Review、Validation 和事件账本。
 - 普通 Git 提交保存实际代码、测试和文档。
 
-这三个目录的耐久内容都应提交 Git。不要把 `.polaris/` 整体当作缓存，也不要只提交代码而漏掉任务记录。唯一例外是 `.polaris/runtime/`：它保存当前电脑上的实时 Implementation 进度，默认忽略，不参与阶段门禁。
+这三个目录的耐久内容都应提交 Git。不要把 `.polaris/` 整体当作缓存，也不要只提交代码而漏掉任务记录。唯一例外是每个任务下的 `.polaris/tasks/<TASK>/runtime/`：它保存当前电脑上的实时 Implementation 进度，默认忽略，不参与阶段门禁。
 
 Polaris 不保存以下瞬时状态：
 
@@ -21,7 +21,7 @@ Polaris 不保存以下瞬时状态：
 - 编辑器窗口、断点和本地终端历史；
 - Codex 完整聊天记录；
 - 未写入任务产物的口头约定。
-- `.polaris/runtime/` 中最后一次本机进度快照在其他电脑上的延续。
+- `.polaris/tasks/<TASK>/runtime/` 中最后一次本机进度快照在其他电脑上的延续。
 
 因此，“可恢复”是指从 Git 中恢复已提交的项目事实和任务状态，而不是还原另一台电脑上的整个桌面或聊天现场。
 
@@ -69,7 +69,7 @@ python scripts/vendor_project.py C:\path\to\target-repo --force
 python tools/polaris/scripts/init_project.py my-project --repo .
 ```
 
-该命令创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json`、恢复索引等文件；如果仓库没有 `AGENTS.md`，还会创建最小仓库规则，并确保 `.gitignore` 包含 `.polaris/runtime/`。
+该命令创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json`、恢复索引等文件；如果仓库没有 `AGENTS.md`，还会创建最小仓库规则，并确保 `.gitignore` 包含 `.polaris/tasks/*/runtime/`。
 
 校验初始化结果：
 
@@ -119,7 +119,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 .transition.lock
-.polaris/runtime/
+.polaris/tasks/*/runtime/
 ```
 
 ### 3.4 让 Codex 发现 Skills
@@ -367,7 +367,7 @@ Implementer 只接收 task ID 和已注册 handoff，不继承主任务聊天。
 直接打开下面的 Markdown 文件：
 
 ```text
-.polaris/runtime/TASK-0001/STATUS.md
+.polaris/tasks/TASK-0001/runtime/STATUS.md
 ```
 
 它展示当前 phase、正在做什么、已完成、剩余、最近检查、blocker、用户动作和更新时间。相同目录的 `progress.json` 是这份本机快照的机械权威。Implementer 会在开始或完成步骤、测试结束、遇到 blocker、准备 checkpoint 和文档同步时更新；Polaris 不根据耗时猜测百分比。
@@ -472,7 +472,7 @@ python tools/polaris/scripts/validate_project.py --repo .
 python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 ```
 
-再从仓库根目录新开 Codex 任务并请求恢复。只要 `.agents/skills/`、`tools/polaris/`、`.polaris/` 的耐久产物和 subject commits 都已提交并推送，就能恢复权威工作状态；ignored 的 `.polaris/runtime/` 会在继续实现时重新生成。
+再从仓库根目录新开 Codex 任务并请求恢复。只要 `.agents/skills/`、`tools/polaris/`、`.polaris/` 的耐久产物和 subject commits 都已提交并推送，就能恢复权威工作状态；ignored 的任务内 `runtime/` 会在继续实现时重新生成。
 
 无法通过 Git 恢复的内容包括：旧电脑上未提交/未推送的文件、编辑器状态和完整聊天记录。重要决定应写入 Work Item、Plan、Review Response、Knowledge Delta 或 Result，而不是只留在对话里。
 
@@ -572,7 +572,7 @@ python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote 
 Implementation 期间查看进度：
 
 ```text
-[ ] 优先打开 .polaris/runtime/TASK-NNNN/STATUS.md
+[ ] 优先打开 .polaris/tasks/TASK-NNNN/runtime/STATUS.md
 [ ] 或在主任务请求展示 IMPLEMENTATION_PROGRESS 后继续
 [ ] 不用进度百分比替代 completed / current / remaining
 ```

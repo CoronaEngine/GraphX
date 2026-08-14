@@ -82,7 +82,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
     )
     live_progress: dict[str, Any] | None = None
     if state["status"] in {"IMPLEMENTING", "IMPLEMENTED"}:
-        progress_path = repo / ".polaris" / "runtime" / task_id / "progress.json"
+        progress_path = directory / "runtime" / "progress.json"
         if progress_path.is_file():
             try:
                 progress = validate_progress(repo, task_id)

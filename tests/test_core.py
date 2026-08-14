@@ -838,13 +838,17 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
-        progress_path = self.repo / ".polaris" / "runtime" / "TASK-0001" / "progress.json"
+        progress_path = self.task / "runtime" / "progress.json"
         projection_path = progress_path.with_name("STATUS.md")
         self.assertIn('    "task_id"', progress_path.read_text(encoding="utf-8"))
         self.assertIn("## Remaining", projection_path.read_text(encoding="utf-8"))
         self.assertEqual(
-            run_git(self.repo, "check-ignore", ".polaris/runtime/TASK-0001/progress.json"),
-            ".polaris/runtime/TASK-0001/progress.json",
+            run_git(
+                self.repo,
+                "check-ignore",
+                ".polaris/tasks/TASK-0001/runtime/progress.json",
+            ),
+            ".polaris/tasks/TASK-0001/runtime/progress.json",
         )
         update_implementation_progress(
             self.repo,

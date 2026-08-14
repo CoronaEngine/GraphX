@@ -34,7 +34,7 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
     agents_path = repo / "AGENTS.md"
     if not agents_path.exists():
         shutil.copyfile(root / "templates" / "AGENTS.md", agents_path)
-    ensure_gitignore_rule(repo, ".polaris/runtime/")
+    ensure_gitignore_rule(repo, ".polaris/tasks/*/runtime/")
     return {"message": f"initialized Polaris project {project_id}"}
 
 

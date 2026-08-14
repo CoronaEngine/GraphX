@@ -6,4 +6,4 @@ __pycache__/
 .coverage
 .transition.lock
 .polaris-host-smoke/
-.polaris/runtime/
+.polaris/tasks/*/runtime/

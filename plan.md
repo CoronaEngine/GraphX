@@ -192,13 +192,12 @@ target-repo/
     │   ├── CD-*.json              # append-only，权威 Human Decision/Approval
     │   └── CD-*.md                # 可选可读投影
     ├── explorations/EXP-*.json    # 可跨任务复用的失败探索
-    ├── runtime/                    # 本机实时状态；默认 Git ignored
-    │   └── TASK-0001/
-    │       ├── progress.json       # 实时进度 JSON 权威快照
-    │       └── STATUS.md           # 人类可读投影
     ├── tasks/
     │   └── TASK-0001/
     │       ├── state.json         # 可由事件重建的当前状态投影
+    │       ├── runtime/            # 本任务的本机实时状态；默认 Git ignored
+    │       │   ├── progress.json   # 实时进度 JSON 权威快照
+    │       │   └── STATUS.md       # 人类可读投影
     │       ├── revisions/
     │       │   ├── work-item-r001.json  # 权威执行合同
     │       │   └── WORK_ITEM-r001.md    # 可读投影
@@ -225,7 +224,7 @@ target-repo/
     │       └── explorations/EXP-*.json
 ```
 
-`.agents/skills/`、`tools/polaris/` 和 `.polaris/` 的耐久状态均纳入 Git；唯一例外是 `.polaris/runtime/`，它保存当前电脑上的实时进度并默认忽略，不参与阶段门禁或 Fresh Clone 恢复。前两者是 vendored 协议包，`.polaris/` 其余内容是项目运行状态。`project.json` 必须记录 `polaris_version` 和 `workflow_version`。v0.1 开工前使用最小 fixture 验证宿主能够发现仓库内 `.agents/skills/`；如果宿主发现规则不同，只调整 vendoring 路径，不改变 Skills 随目标仓库版本化的决定。
+`.agents/skills/`、`tools/polaris/` 和 `.polaris/` 的耐久状态均纳入 Git；唯一例外是各任务目录下的 `.polaris/tasks/<TASK>/runtime/`，它保存当前电脑上的实时进度并默认忽略，不参与阶段门禁或 Fresh Clone 恢复。前两者是 vendored 协议包，`.polaris/` 其余内容是项目运行状态。`project.json` 必须记录 `polaris_version` 和 `workflow_version`。v0.1 开工前使用最小 fixture 验证宿主能够发现仓库内 `.agents/skills/`；如果宿主发现规则不同，只调整 vendoring 路径，不改变 Skills 随目标仓库版本化的决定。
 
 JSON 文件是机械门禁的权威输入；同名 Markdown 只用于人类阅读，不参与状态判定。旧 revision 和旧 attempt 文件不可覆盖，`state.json` 仅保存当前有效 artifact 的指针。
 
@@ -446,8 +445,8 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 3. Work Item 的 `implementation_dispatch.authorized=true` 是“确认并执行”对当前 revision 全部 Implementer attempts 的显式授权。宿主支持任务管理时，在同一本地项目和同一 checkout 创建可见的新任务；不 fork 主对话，也不默认使用 worktree。
 4. Implementer 标题固定为 `Polaris Implement · <TASK> · <REVISION> · attempt <N>`。创建前先复用与 handoff 绑定的有效 Implementation artifact，其次复用唯一同名任务；多条同名记录时不得猜测，回退同会话执行。
 5. Implementer 只接收 task ID 与已注册 handoff，不接收主聊天、实现建议或预期结果。它拥有本轮代码、测试、构建文件和项目文档的单写者权限，但不执行 Graph 转换、Review、Validation 或关闭。
-6. Implementer 在开始/完成实现步骤、测试结束、blocker、checkpoint 和 Documentation Sync 时，通过 `update_implementation_progress.py` 原子更新 `.polaris/runtime/<TASK>/progress.json`；`STATUS.md` 仅为投影。进度记录 phase、current action、completed、remaining、checks、blocker、user action 和更新时间，不生成主观百分比。
-7. `.polaris/runtime/` 默认 Git ignored，不影响工作树 checkpoint，也不承诺跨电脑恢复。正式 Implementation、Knowledge Delta、commit/diff 和 event 继续写入耐久 Authority。主任务可随时读取进度；若整个宿主停止运行，快照只代表最后一次成功更新。
+6. Implementer 在开始/完成实现步骤、测试结束、blocker、checkpoint 和 Documentation Sync 时，通过 `update_implementation_progress.py` 原子更新 `.polaris/tasks/<TASK>/runtime/progress.json`；同目录的 `STATUS.md` 仅为投影。进度记录 phase、current action、completed、remaining、checks、blocker、user action 和更新时间，不生成主观百分比。
+7. 每个任务的 `runtime/` 子目录默认 Git ignored，不影响工作树 checkpoint，也不承诺跨电脑恢复。正式 Implementation、Knowledge Delta、commit/diff 和 event 继续写入耐久 Authority。主任务可随时读取进度；若整个宿主停止运行，快照只代表最后一次成功更新。
 8. Implementation artifact 必须绑定 handoff path/hash 和 Implementer session。主任务验证后执行 `FINISH_IMPLEMENTATION`，再续接同一个 Implementer 任务执行 `$documentation-sync`；Worker 写回 Knowledge Delta 和最终 subject checkpoint，主任务执行 `SYNC_DOCS`。
 9. Review 或 Validation 返工生成新 attempt、新 handoff 和新的 Implementer 任务；prior Review 通过 handoff 传递，Implementer 写 Review Response。不同 attempt 不复用 Implementer session。
 10. 宿主缺少创建、查找、等待或续接能力时，主任务使用同一 handoff 执行 `same_session` fallback，仍更新进度文件并明确提示即时状态响应可能延迟；不得仅因宿主能力不足把业务任务置为 `BLOCKED`。
@@ -484,7 +483,7 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 
 ### Durability checkpoint
 
-- Vendored Skills、`tools/polaris/`、`.polaris/` 的耐久状态和任务代码均纳入 Git；`.polaris/runtime/` 是明确忽略的本机瞬时例外。
+- Vendored Skills、`tools/polaris/`、`.polaris/` 的耐久状态和任务代码均纳入 Git；`.polaris/tasks/<TASK>/runtime/` 是明确忽略的本机瞬时例外。
 - `IMPLEMENTED`、`DOCS_SYNCED`、`REVIEWED`、`VERIFIED` 必须引用一个本地 checkpoint commit；Polaris 不自动 push、merge 或发布。
 - Fresh-session 可以继续当前工作树；Fresh-clone 只保证恢复到最近一次已提交的阶段边界，不承诺恢复尚未保存或尚未提交的编辑器内容。
 - Review 和 Validation 只接受 Git commit SHA，不接受 working-tree marker。创建 checkpoint 前必须识别并保护用户已有的无关改动，不能把不属于 Task scope 的变化混入证据 commit。

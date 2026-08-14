@@ -73,7 +73,7 @@ v0.1 明确不实现：
 - R1 Review → Validation → Result → CLOSED 的机械闭环
 - 不可变 Reviewer handoff、独立会话声明和三轮 Review 上限
 - 不可变 Implementation handoff、独立 Implementer 任务和 handoff/result 机械绑定
-- `.polaris/runtime/` 下事件驱动的实时进度 JSON 与 Markdown 投影
+- `.polaris/tasks/<TASK>/runtime/` 下事件驱动的实时进度 JSON 与 Markdown 投影
 - Codex 宿主支持时自动创建可见独立 Review 任务，并在其他宿主回退手动交接
 - Codex 宿主支持时自动创建或复用独立 Implementer 任务，并在其他宿主回退同会话执行
 - Review Response 与跨 Attempt 的稳定 Finding 生命周期
@@ -112,7 +112,8 @@ target-repo/
 ├── .agents/skills/         # vendored Codex Skills
 ├── tools/polaris/          # vendored、版本锁定的协议实现
 └── .polaris/               # 项目和任务 Authority State
-    └── runtime/            # 本机实时进度；默认忽略，不进入 Git
+    └── tasks/TASK-NNNN/
+        └── runtime/        # 本任务的本机实时进度；默认忽略，不进入 Git
 ```
 
 ## 环境要求
@@ -182,7 +183,7 @@ python scripts/vendor_project.py C:\path\to\target-repo --force
 python tools/polaris/scripts/init_project.py my-project --repo .
 ```
 
-这会创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 时还会创建最小仓库规则，并在 `.gitignore` 中加入 `.polaris/runtime/`。
+这会创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 时还会创建最小仓库规则，并在 `.gitignore` 中加入 `.polaris/tasks/*/runtime/`。
 
 ### 3. 初始化任务
 
@@ -235,7 +236,7 @@ python tools/polaris/scripts/transition_task.py TASK-0001 DISPATCH_IMPLEMENTATIO
 开发期间可以直接打开：
 
 ```text
-.polaris/runtime/TASK-0001/STATUS.md
+.polaris/tasks/TASK-0001/runtime/STATUS.md
 ```
 
 其 JSON 权威快照是同目录的 `progress.json`，记录当前动作、完成项、剩余项、检查、blocker、用户动作和更新时间。该目录默认忽略，不污染 Git；它不是主观百分比，也不保证跨电脑恢复。宿主无法自动创建任务时，主任务使用相同 handoff 同会话执行，并明确提示即时状态回答可能延迟。
