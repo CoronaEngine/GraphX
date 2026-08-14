@@ -2,6 +2,9 @@
     "task_id": "TASK-0001",
     "work_item_revision": 1,
     "artifact_attempt": 1,
+    "subject_base_commit": "0000000000000000000000000000000000000000",
+    "subject_head_commit": "0000000000000000000000000000000000000000",
+    "subject_diff_hash": "0000000000000000000000000000000000000000000000000000000000000000",
     "entries": [
         {
             "status": "NO_CHANGE",

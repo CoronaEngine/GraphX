@@ -7,6 +7,8 @@
         "work_item_revision",
         "artifact_attempt",
         "implementer_session_id",
+        "implementation_handoff_path",
+        "implementation_handoff_sha256",
         "subject_base_commit",
         "subject_head_commit",
         "subject_diff_hash",
@@ -30,6 +32,14 @@
         "implementer_session_id": {
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$"
+        },
+        "implementation_handoff_path": {
+            "type": "string",
+            "pattern": "^implementations/r[0-9]{3}/handoff-[0-9]{3}\\.json$"
+        },
+        "implementation_handoff_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
         },
         "subject_base_commit": {
             "type": "string",

@@ -29,6 +29,12 @@ def create(repo: Path, task_id: str) -> dict[str, object]:
     value = copy.deepcopy(read_json(current_work_item_path(directory, state["current_revision"])))
     value["revision"] = revision
     value["base_commit"] = full_commit(repo)
+    value["implementation_dispatch"] = {
+        "mode": "auto_new_task",
+        "fallback": "same_session",
+        "same_local_project": True,
+        "authorized": False,
+    }
     value["review_dispatch"] = {
         "mode": "auto_new_task",
         "fallback": "manual_handoff",

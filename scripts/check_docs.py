@@ -7,10 +7,26 @@ import argparse
 import sys
 from pathlib import Path
 
-from polaris_core import RuleFailure, git, protocol_root, read_json, run_main, task_dir, validate_json_file
+from polaris_core import (
+    RuleFailure,
+    full_commit,
+    git,
+    protocol_root,
+    read_json,
+    run_main,
+    subject_diff_hash,
+    task_dir,
+    validate_json_file,
+)
 
 
-def check(repo: Path, task_id: str, knowledge_path: Path | None) -> dict[str, object]:
+def check(
+    repo: Path,
+    task_id: str,
+    knowledge_path: Path | None,
+    subject_base: str | None = None,
+    subject_head: str | None = None,
+) -> dict[str, object]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
     state = read_json(directory / "state.json")
@@ -30,9 +46,26 @@ def check(repo: Path, task_id: str, knowledge_path: Path | None) -> dict[str, ob
     stale = [entry["path"] for entry in knowledge["entries"] if entry["status"] == "STALE"]
     if stale:
         raise RuleFailure(f"Knowledge Delta has unresolved STALE entries: {stale}")
-    subject = state.get("subject")
-    if not isinstance(subject, dict):
-        raise RuleFailure("task has no frozen subject")
+    if subject_base is not None or subject_head is not None:
+        if not subject_base or not subject_head:
+            raise RuleFailure("provide both subject_base and subject_head")
+        base = full_commit(repo, subject_base)
+        head = full_commit(repo, subject_head)
+        subject = {
+            "base_commit": base,
+            "head_commit": head,
+            "diff_hash": subject_diff_hash(repo, base, head),
+        }
+    else:
+        subject = state.get("subject")
+        if not isinstance(subject, dict):
+            raise RuleFailure("task has no frozen subject")
+    if (
+        knowledge["subject_base_commit"] != subject["base_commit"]
+        or knowledge["subject_head_commit"] != subject["head_commit"]
+        or knowledge["subject_diff_hash"] != subject["diff_hash"]
+    ):
+        raise RuleFailure("Knowledge Delta targets the wrong documentation subject")
     changed = set(
         filter(
             None,
@@ -57,11 +90,20 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("task_id")
     parser.add_argument("--knowledge", type=Path)
+    parser.add_argument("--subject-base")
+    parser.add_argument("--subject-head")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     return run_main(
-        lambda: check(args.repo.resolve(), args.task_id, args.knowledge), args.json
+        lambda: check(
+            args.repo.resolve(),
+            args.task_id,
+            args.knowledge,
+            args.subject_base,
+            args.subject_head,
+        ),
+        args.json,
     )
 
 

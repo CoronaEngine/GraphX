@@ -8,7 +8,14 @@ import shutil
 import sys
 from pathlib import Path
 
-from polaris_core import InputFailure, protocol_root, read_json, run_main, write_json_atomic
+from polaris_core import (
+    InputFailure,
+    ensure_gitignore_rule,
+    protocol_root,
+    read_json,
+    run_main,
+    write_json_atomic,
+)
 
 
 def initialize(repo: Path, project_id: str) -> dict[str, str]:
@@ -27,6 +34,7 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
     agents_path = repo / "AGENTS.md"
     if not agents_path.exists():
         shutil.copyfile(root / "templates" / "AGENTS.md", agents_path)
+    ensure_gitignore_rule(repo, ".polaris/runtime/")
     return {"message": f"initialized Polaris project {project_id}"}
 
 

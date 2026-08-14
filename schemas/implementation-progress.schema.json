@@ -1,0 +1,100 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris live implementation progress",
+    "type": "object",
+    "required": [
+        "task_id",
+        "work_item_revision",
+        "artifact_attempt",
+        "implementation_task",
+        "implementer_session_id",
+        "handoff_path",
+        "handoff_sha256",
+        "phase",
+        "current_action",
+        "completed_steps",
+        "remaining_steps",
+        "checks",
+        "blocker",
+        "user_action",
+        "updated_at"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "pattern": "^TASK-[0-9]{4}$"
+        },
+        "work_item_revision": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "artifact_attempt": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "implementation_task": {
+            "type": "string"
+        },
+        "implementer_session_id": {
+            "type": "string",
+            "pattern": "^(Pending|[A-Za-z0-9][A-Za-z0-9._:-]{2,127})$"
+        },
+        "handoff_path": {
+            "type": "string"
+        },
+        "handoff_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+        },
+        "phase": {
+            "type": "string",
+            "enum": [
+                "QUEUED",
+                "IMPLEMENTING",
+                "TESTING",
+                "CHECKPOINTING",
+                "DOCUMENTING",
+                "COMPLETED",
+                "BLOCKED",
+                "FAILED"
+            ]
+        },
+        "current_action": {
+            "type": "string"
+        },
+        "completed_steps": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "remaining_steps": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "checks": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "blocker": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "user_action": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "updated_at": {
+            "type": "string"
+        }
+    }
+}

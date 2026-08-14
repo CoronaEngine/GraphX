@@ -1,6 +1,6 @@
 {
-    "schema_version": "0.1.1",
-    "workflow_version": "0.1.1",
+    "schema_version": "0.1.2",
+    "workflow_version": "0.1.2",
     "initial_state": "DRAFT",
     "terminal_states": [
         "CLOSED",
@@ -46,6 +46,14 @@
             ],
             "to": "IMPLEMENTING",
             "gate": "implementation_approved"
+        },
+        {
+            "event": "DISPATCH_IMPLEMENTATION",
+            "from": [
+                "IMPLEMENTING"
+            ],
+            "to": "IMPLEMENTING",
+            "gate": "implementation_handoff_ready"
         },
         {
             "event": "FINISH_IMPLEMENTATION",

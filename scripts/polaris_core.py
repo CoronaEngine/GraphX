@@ -68,6 +68,19 @@ def write_text_atomic(path: Path, value: str) -> None:
             temp_path.unlink()
 
 
+def ensure_gitignore_rule(repo: Path, rule: str) -> bool:
+    """Append one exact ignore rule without disturbing existing user entries."""
+    path = repo / ".gitignore"
+    existing = path.read_text(encoding="utf-8-sig") if path.exists() else ""
+    if rule in {line.strip() for line in existing.splitlines()}:
+        return False
+    prefix = existing
+    if prefix and not prefix.endswith("\n"):
+        prefix += "\n"
+    write_text_atomic(path, prefix + rule + "\n")
+    return True
+
+
 def append_jsonl(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
@@ -199,6 +212,9 @@ def validate_schema(value: Any, schema: dict[str, Any], location: str = "$") -> 
 
     if "enum" in schema and value not in schema["enum"]:
         errors.append(f"{location}: value {value!r} is not in enum")
+
+    if "const" in schema and value != schema["const"]:
+        errors.append(f"{location}: value {value!r} does not equal const {schema['const']!r}")
 
     if isinstance(value, str) and "pattern" in schema:
         if re.fullmatch(schema["pattern"], value) is None:

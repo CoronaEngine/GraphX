@@ -9,7 +9,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from polaris_core import current_work_item_path, read_json, run_main, task_dir
+from implementation_protocol import validate_progress
+from polaris_core import (
+    InputFailure,
+    RuleFailure,
+    current_work_item_path,
+    read_json,
+    run_main,
+    task_dir,
+)
 from recovery_protocol import (
     recommended_action,
     refresh_project_index,
@@ -72,6 +80,26 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
         for item in working_set_entries(working_set_path)
         if item["path"] not in known_paths
     )
+    live_progress: dict[str, Any] | None = None
+    if state["status"] in {"IMPLEMENTING", "IMPLEMENTED"}:
+        progress_path = repo / ".polaris" / "runtime" / task_id / "progress.json"
+        if progress_path.is_file():
+            try:
+                progress = validate_progress(repo, task_id)
+                live_progress = {
+                    "available": True,
+                    "path": progress_path.relative_to(repo).as_posix(),
+                    "projection": progress_path.with_name("STATUS.md")
+                    .relative_to(repo)
+                    .as_posix(),
+                    "value": progress,
+                }
+            except (RuleFailure, InputFailure) as exc:
+                live_progress = {
+                    "available": False,
+                    "path": progress_path.relative_to(repo).as_posix(),
+                    "reason": str(exc),
+                }
     return {
         "message": f"recovered {task_id} at {state['status']} without chat history",
         "task": {
@@ -91,6 +119,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
             },
         },
         "recommended_next_action": recommended_action(state),
+        "live_implementation_progress": live_progress,
         "minimum_working_set": {
             "path": str(working_set_path),
             "entries": minimum_entries,

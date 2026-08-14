@@ -28,6 +28,7 @@ from polaris_core import (
     write_json_atomic,
 )
 from recovery_protocol import refresh_project_index
+from implementation_protocol import validate_handoff as validate_implementation_handoff
 from review_protocol import (
     MAX_REVIEW_ATTEMPTS,
     normalized_reference,
@@ -130,6 +131,13 @@ def check_gate(
         dispatch = work_item.get("review_dispatch")
         if not isinstance(dispatch, dict) or not dispatch.get("authorized"):
             raise RuleFailure("Work Item requires explicit Review task dispatch authorization")
+        implementation_dispatch = work_item.get("implementation_dispatch")
+        if not isinstance(implementation_dispatch, dict) or not implementation_dispatch.get(
+            "authorized"
+        ):
+            raise RuleFailure(
+                "Work Item requires explicit Implementation task dispatch authorization"
+            )
         if any(work_item["risk_flags"].values()) and work_item["rigor"] != "R2":
             raise RuleFailure("true risk flags require rigor R2")
         full_commit(repo, work_item["base_commit"])
@@ -139,7 +147,12 @@ def check_gate(
     elif gate == "implementation_approved":
         if state["rigor"] == "R2":
             artifact_file(directory, state, "pre_approval")
+    elif gate == "implementation_handoff_ready":
+        validate_implementation_handoff(repo, root, directory, state, True)
     elif gate == "implementation_ready":
+        handoff, handoff_reference = validate_implementation_handoff(
+            repo, root, directory, state
+        )
         implementation = validate_json_file(
             artifact_file(directory, state, "implementation"),
             root / "schemas" / "implementation.schema.json",
@@ -152,6 +165,11 @@ def check_gate(
         if (
             implementation["work_item_revision"] != revision
             or implementation["task_id"] != state["task_id"]
+            or implementation["artifact_attempt"] != handoff["artifact_attempt"]
+            or implementation["implementation_handoff_path"]
+            != handoff_reference["path"]
+            or implementation["implementation_handoff_sha256"]
+            != handoff_reference["sha256"]
             or implementation["subject_base_commit"] != state["subject"]["base_commit"]
             or implementation["subject_head_commit"] != state["subject"]["head_commit"]
             or implementation["subject_diff_hash"] != state["subject"]["diff_hash"]
@@ -167,9 +185,23 @@ def check_gate(
         if any(entry["status"] == "STALE" for entry in knowledge["entries"]):
             raise RuleFailure("Knowledge Delta contains unresolved STALE entries")
         check_subject(repo, state.get("subject"))
+        if (
+            knowledge["task_id"] != state["task_id"]
+            or knowledge["work_item_revision"] != revision
+            or knowledge["subject_base_commit"] != state["subject"]["base_commit"]
+            or knowledge["subject_head_commit"] != state["subject"]["head_commit"]
+            or knowledge["subject_diff_hash"] != state["subject"]["diff_hash"]
+        ):
+            raise RuleFailure("Knowledge Delta targets the wrong final documentation subject")
         from check_docs import check as check_documentation
 
-        check_documentation(repo, state["task_id"], knowledge_path)
+        check_documentation(
+            repo,
+            state["task_id"],
+            knowledge_path,
+            state["subject"]["base_commit"],
+            state["subject"]["head_commit"],
+        )
     elif gate == "review_package_ready":
         artifact_file(directory, state, "knowledge_delta")
         check_subject(repo, state.get("subject"))
@@ -349,6 +381,7 @@ def transition(
         if event_name == "REJECT_REVIEW" and destination == "IMPLEMENTING":
             for key in (
                 "implementation",
+                "implementation_handoff",
                 "knowledge_delta",
                 "review",
                 "review_2",
@@ -372,6 +405,7 @@ def transition(
                 )
             for key in (
                 "implementation",
+                "implementation_handoff",
                 "knowledge_delta",
                 "review",
                 "review_2",

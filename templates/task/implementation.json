@@ -3,6 +3,8 @@
     "work_item_revision": 1,
     "artifact_attempt": 1,
     "implementer_session_id": "TODO",
+    "implementation_handoff_path": "implementations/r001/handoff-001.json",
+    "implementation_handoff_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
     "subject_base_commit": "0000000000000000000000000000000000000000",
     "subject_head_commit": "0000000000000000000000000000000000000000",
     "subject_diff_hash": "0000000000000000000000000000000000000000000000000000000000000000",

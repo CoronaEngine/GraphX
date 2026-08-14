@@ -23,6 +23,7 @@ from polaris_core import (
     validate_json_file,
     validate_schema,
 )
+from implementation_protocol import validate_handoff as validate_implementation_handoff
 from review_protocol import (
     normalized_reference,
     validate_handoff,
@@ -124,7 +125,12 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
     if at_least(status, "PLANNED"):
         require_artifact(state, directory, "plan")
         require_artifact(state, directory, "working_set")
+    if status == "IMPLEMENTING" and "implementation_handoff" in state["artifacts"]:
+        validate_implementation_handoff(repo, root, directory, state)
     if at_least(status, "IMPLEMENTED"):
+        handoff, handoff_reference = validate_implementation_handoff(
+            repo, root, directory, state
+        )
         implementation_path = require_artifact(state, directory, "implementation")
         implementation = validate_json_file(
             implementation_path, root / "schemas" / "implementation.schema.json"
@@ -143,14 +149,24 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         head = full_commit(repo, subject["head_commit"])
         if subject_diff_hash(repo, base, head) != subject["diff_hash"]:
             raise RuleFailure("subject diff hash does not match Git commits")
-        if (
+        identity_mismatch = (
             implementation["task_id"] != task_id
             or implementation["work_item_revision"] != state["current_revision"]
-            or implementation["subject_base_commit"] != subject["base_commit"]
-            or implementation["subject_head_commit"] != subject["head_commit"]
+            or implementation["artifact_attempt"] != handoff["artifact_attempt"]
+            or implementation["implementation_handoff_path"]
+            != handoff_reference["path"]
+            or implementation["implementation_handoff_sha256"]
+            != handoff_reference["sha256"]
+        )
+        if identity_mismatch:
+            raise RuleFailure("Implementation artifact targets the wrong revision or subject")
+        if implementation["subject_base_commit"] != subject["base_commit"]:
+            raise RuleFailure("Implementation artifact has the wrong subject base")
+        if status == "IMPLEMENTED" and (
+            implementation["subject_head_commit"] != subject["head_commit"]
             or implementation["subject_diff_hash"] != subject["diff_hash"]
         ):
-            raise RuleFailure("Implementation artifact targets the wrong revision or subject")
+            raise RuleFailure("Implementation artifact targets the wrong implementation subject")
         validate_review_response(root, directory, state, implementation)
     if at_least(status, "DOCS_SYNCED"):
         knowledge_path = require_artifact(state, directory, "knowledge_delta")
@@ -159,6 +175,14 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         )
         if knowledge["work_item_revision"] != state["current_revision"]:
             raise RuleFailure("Knowledge Delta targets an obsolete Work Item revision")
+        if (
+            knowledge["task_id"] != task_id
+            or knowledge["artifact_attempt"] != implementation["artifact_attempt"]
+            or knowledge["subject_base_commit"] != state["subject"]["base_commit"]
+            or knowledge["subject_head_commit"] != state["subject"]["head_commit"]
+            or knowledge["subject_diff_hash"] != state["subject"]["diff_hash"]
+        ):
+            raise RuleFailure("Knowledge Delta targets the wrong final documentation subject")
         if any(entry["status"] == "STALE" for entry in knowledge["entries"]):
             raise RuleFailure("Knowledge Delta contains unresolved STALE entries")
     if status == "REVIEWING" or at_least(status, "REVIEWED"):

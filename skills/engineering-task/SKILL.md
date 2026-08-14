@@ -5,9 +5,7 @@ description: Run the Polaris repository workflow only when the user explicitly i
 
 # Engineering Task
 
-Require explicit user invocation of `$engineering-task`. If the user did not explicitly invoke this Skill, do not enter the Polaris workflow.
-
-Treat the repository as authority. Never infer state or completion from chat history.
+Require explicit user invocation of `$engineering-task`. If the user did not explicitly invoke this Skill, do not enter the Polaris workflow. Treat repository JSON as authority and never infer state or completion from chat history.
 
 ## Stable conversation contract
 
@@ -16,35 +14,52 @@ At every pause or completed workflow checkpoint, emit exactly one status block w
 1. `Task`: task ID or `Pending` before allocation.
 2. `Revision`: `rNNN` or `Pending`.
 3. `Rigor`: `R0`, `R1`, `R2`, or `Pending`.
-4. `State`: the repository state after the last successful transition.
+4. `State`: repository state after the last successful transition.
 5. `Outcome`: what this checkpoint established.
-6. `Authority`: paths to the controlling JSON and readable projections.
-7. `Remaining`: unresolved questions, Findings, failed acceptance criteria, or `None`.
-8. `Next`: the next legal graph action.
-9. `User action`: the exact decision/action required from the user, or `None`.
+6. `Authority`: controlling JSON and readable projections.
+7. `Remaining`: unresolved questions, work, Findings, failed acceptance criteria, or `None`.
+8. `Next`: next legal graph action.
+9. `User action`: exact user decision/action required, or `None`.
 
-Use only these markers: `POLARIS_STARTED`, `REQUIREMENTS_NEEDED`, `WORK_ITEM_PREVIEW`, `WORK_ITEM_QUALIFIED`, `PLAN_READY`, `IMPLEMENTATION_FINISHED`, `DOCS_SYNCED`, `REVIEW_HANDOFF_READY`, `REVIEW_SESSION_STARTED`, `REVIEW_ACCEPTED`, `REVIEW_REJECTED`, `VALIDATION_PASS`, `VALIDATION_FAIL`, `TASK_BLOCKED`, `TASK_CANCELLED`, and `TASK_CLOSED`.
+Use only these markers: `POLARIS_STARTED`, `REQUIREMENTS_NEEDED`, `WORK_ITEM_PREVIEW`, `WORK_ITEM_QUALIFIED`, `PLAN_READY`, `IMPLEMENTATION_HANDOFF_READY`, `IMPLEMENTATION_SESSION_STARTED`, `IMPLEMENTATION_PROGRESS`, `IMPLEMENTATION_FINISHED`, `DOCS_SYNCED`, `REVIEW_HANDOFF_READY`, `REVIEW_SESSION_STARTED`, `REVIEW_ACCEPTED`, `REVIEW_REJECTED`, `VALIDATION_PASS`, `VALIDATION_FAIL`, `TASK_BLOCKED`, `TASK_CANCELLED`, and `TASK_CLOSED`.
 
-Never report an anticipated state. Read authority again after each transition and report the state only when the script succeeds. Link the readable artifact when one exists. A stage may add checkpoint-specific details after the nine fixed fields, but may not rename, reorder, or omit them.
+Never report an anticipated state. Reload authority after every transition. A stage may append details after the nine fields but may not rename, reorder, or omit them. For bounded Human decisions, prefer `request_user_input` or equivalent structured choices. If the tool is unavailable, render identical text choices. Treat UI and text answers identically. Do not change host mode to obtain UI.
 
-For every bounded Human decision, prefer the host's structured choice UI when a user-input tool such as `request_user_input` is callable. Use one to three short questions, each with two or three mutually exclusive options; put the recommended option first and explain each impact. If the tool is unavailable, render the same questions and options as text. Never switch host modes merely to obtain the UI, and never block because the UI is unavailable. Treat UI and text answers identically when recording Authority.
+## Main-task ownership
 
-1. Locate `AGENTS.md`, `.polaris/project.json`, `.polaris/workflow.json`, and the active task state.
-2. For an existing task, run `tools/polaris/scripts/recover_task.py <task-id> --repo . --json`. Stop on validation, reference, or state conflicts.
-3. Load only the recovery result, frozen Work Item, `WORKING_SET.md`, and paths justified by that set.
-4. For a new request, invoke `$requirement-analysis` before changing code.
-5. Follow `.polaris/workflow.json`. Invoke the stage Skill matching the current node.
-6. Use `transition_task.py` for every state transition. Never edit `state.json` directly.
-7. At `DOCS_SYNCED`, build and register an immutable reviewer handoff, run `START_REVIEW`, and report `REVIEW_HANDOFF_READY`. R0 performs an explicit isolated same-session pass. For R1/R2, stop all implementation and Review work in this context; it may only dispatch Reviewer tasks, wait, reload repository authority, and apply transitions from their immutable Review artifacts.
-8. Require the frozen Work Item to contain `review_dispatch.mode=auto_new_task`, `fallback=manual_handoff`, `same_local_project=true`, and `authorized=true`. This records the user's `Confirm and execute` answer as explicit authorization to create every Reviewer task required for the confirmed revision, including follow-up attempts up to the graph limit. Do not create Reviewer tasks without that authority.
-9. When the host can list, create, and wait for Codex tasks, resolve the current local project and dispatch a fresh task in that same local checkout. Never fork the implementation conversation and do not use a separate worktree by default. Use the exact title `Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>`.
-10. Before creating a Reviewer task, first accept a valid deterministic Review artifact already produced for that slot; otherwise reuse one unique existing task with the exact title. Never create a duplicate for the same task, revision, attempt, and Reviewer slot. If multiple exact matches exist, use the manual fallback instead of guessing.
-11. Give the Reviewer only the task ID, Reviewer slot, registered handoff path, and the instruction to invoke `$adversarial-review` from repository authority. Use this exact prompt: `Use $adversarial-review for <TASK>, Reviewer slot <SLOT>. Load only <HANDOFF> and its package. Write the immutable Review JSON and return its verdict and path. Do not modify implementation or run task transitions.` Do not include implementation explanations, summaries, chat history, proposed findings, or expected verdicts. After dispatch, emit `REVIEW_SESSION_STARTED` with the nine fixed fields plus `Review task`, `Reviewer slot`, `Handoff`, and `Dispatch mode`; set `User action` to `None` while the task is running.
-12. Wait for each Reviewer task to finish, then reload and validate its immutable Review JSON before doing anything else. If it needs user attention, report the exact task and required action without performing Review here. If task creation, lookup, or waiting is unavailable or fails, keep state `REVIEWING`, report `REVIEW_HANDOFF_READY`, and provide the exact manual new-task prompt; do not enter `BLOCKED` solely because host automation is unavailable.
-13. Dispatch required Reviewers sequentially. Stop the round on the first `REJECT`, register that artifact as `review`, and run `REJECT_REVIEW`. When all required Reviewers `ACCEPT`, register slot 1 as `review` and slot 2 as `review_2` when required, then run `ACCEPT_REVIEW`. Reviewer session IDs must be distinct. After either transition, reload state and emit `REVIEW_ACCEPTED` or `REVIEW_REJECTED`; on rework, generate a new handoff and new deterministic Reviewer task title.
-14. Do not invoke `$adversarial-review` from an R1/R2 implementer context and never write a Review verdict here. Only Reviewer contexts write `ACCEPT` or `REJECT`; this orchestrator only validates, registers, and transitions their artifacts.
-15. Stop at Human or mechanical gates. Record a blocker instead of guessing.
-16. When a gate cannot proceed, record the blocker when the graph permits it and report `TASK_BLOCKED`; do not silently stop or guess.
-17. Never declare the task complete from prose or stage output. Report `TASK_CLOSED` only after `transition_task.py` has successfully reached `CLOSED`; otherwise report the current checkpoint marker.
+1. Locate `AGENTS.md`, `.polaris/project.json`, `.polaris/workflow.json`, and active task state.
+2. Recover existing work with `recover_task.py <task-id> --repo . --json`; stop on validation, reference, or state conflicts.
+3. Load only the recovery result, frozen Work Item, Working Set, and paths justified by it.
+4. Invoke `$requirement-analysis` for a new request and `$architecture-planning` at `QUALIFIED` or returned `PLANNED`.
+5. Use `transition_task.py` for every state transition. Never edit `state.json` directly.
+6. Act as the user-facing controller: dispatch workers, validate artifacts, apply transitions, answer status queries, and surface exact user actions. On the automatic path, do not modify subject code, tests, build files, or project documentation.
 
-Use `$architecture-planning`, `$implementation`, `$documentation-sync`, `$adversarial-review`, and `$validation` only at their legal graph nodes. Give each conversation an opaque stable session ID; if the host exposes none, generate one once and reuse it only within that conversation.
+## Independent Implementation
+
+7. Before Implementation, require frozen `implementation_dispatch` authority with `mode=auto_new_task`, `fallback=same_session`, `same_local_project=true`, and `authorized=true`. The same `Confirm and execute` answer authorizes every Implementer task for the revision, including rework attempts up to the graph limit.
+8. Run `START_IMPLEMENTATION` after required R2 pre-approval. Build `implementations/rNNN/handoff-NNN.json`, register it with `DISPATCH_IMPLEMENTATION`, then emit `IMPLEMENTATION_HANDOFF_READY`.
+9. When the host can list, create, wait for, and continue Codex tasks, resolve the current local project and dispatch a fresh task in that same local checkout. Never fork the main conversation and do not use a separate worktree by default. Use the exact title `Polaris Implement · <TASK> · <REVISION> · attempt <N>`.
+10. Before creation, first reuse a valid Implementation artifact bound to the registered handoff; otherwise reuse one unique task with the exact title. Never create a duplicate for the same task, revision, and attempt. Multiple exact matches require the same-session fallback rather than guessing.
+11. Give the Implementer only the task ID and registered handoff path. Use this exact prompt: `Use $implementation for <TASK>. Load only <HANDOFF> and its package as task context; read state.json only to verify the registered handoff. Work in the shared local checkout, update the live progress files at every required event, write the immutable Implementation JSON at output_path, and return its path. Do not run task transitions, Review, Validation, or close the task.` Do not include main-chat history or implementation advice.
+12. Initialize the ignored live snapshot with `update_implementation_progress.py`, then emit `IMPLEMENTATION_SESSION_STARTED` with the nine fixed fields plus `Implementation task`, `Handoff`, `Progress`, and `Dispatch mode`; set `User action` to `None` while work is proceeding.
+13. While `IMPLEMENTING`, answer status requests by validating `.polaris/runtime/<TASK>/progress.json` and showing its Markdown projection. Emit `IMPLEMENTATION_PROGRESS` with the latest phase, current action, completed steps, remaining steps, checks, blocker, timestamp, and task link. Do not invent percentages or infer progress from elapsed time. A status query must not cancel or duplicate the worker.
+14. Wait for the Implementer result, validate the bound immutable Implementation JSON, register it, run `FINISH_IMPLEMENTATION`, and reload state. Continue the same Implementer task with `$documentation-sync`; it writes Knowledge Delta and any documentation checkpoint without running transitions. Register that artifact, run `SYNC_DOCS`, reload state, and emit `DOCS_SYNCED`. Only then is the Implementer task finished.
+15. If task management is unavailable or dispatch fails, use the registered handoff in this main task, invoke `$implementation` and `$documentation-sync` locally, and keep writing the same progress snapshots. Report `Dispatch mode: same_session_fallback` and that immediate status responses may be delayed; do not block solely because host automation is unavailable.
+16. If an Implementer requests permission or hits a blocker, show the exact Implementer task and `User action`. The Implementer never advances the graph, reviews itself, validates acceptance, or closes the task.
+
+## Independent Review
+
+17. At `DOCS_SYNCED`, build and register an immutable Reviewer handoff, run `START_REVIEW`, and emit `REVIEW_HANDOFF_READY`. R0 performs an explicit isolated same-session pass. For R1/R2, the main task only dispatches Reviewers, waits, reloads authority, and applies transitions. Never fork the implementation conversation.
+18. Require frozen `review_dispatch` authority with `mode=auto_new_task`, `fallback=manual_handoff`, `same_local_project=true`, and `authorized=true`. Do not create Reviewer tasks without it.
+19. Use the exact title `Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>`. Before creating it, first accept a valid deterministic Review artifact, then reuse one unique exact-title task. Never create a duplicate; multiple exact matches use manual fallback.
+20. Give the Reviewer only the task ID, Reviewer slot, registered handoff path. Use this exact prompt: `Use $adversarial-review for <TASK>, Reviewer slot <SLOT>. Load only <HANDOFF> and its package. Write the immutable Review JSON and return its verdict and path. Do not modify implementation or run task transitions.` Do not include implementation explanations, chat history, proposed findings, or expected verdicts.
+21. After dispatch, emit `REVIEW_SESSION_STARTED` with the nine fields plus `Review task`, `Reviewer slot`, `Handoff`, and `Dispatch mode`; set `User action` to `None` while the task is running. If task creation, lookup, or waiting fails, keep state `REVIEWING`, emit `REVIEW_HANDOFF_READY`, and provide the exact manual new-task prompt; do not enter `BLOCKED` solely because host automation is unavailable.
+22. Dispatch required Reviewers sequentially. On the first `REJECT`, register the artifact and run `REJECT_REVIEW`; on rework, generate a new handoff and a fresh Implementer attempt. When all required Reviewers `ACCEPT`, register slot 1 as `review` and slot 2 as `review_2` when required, then run `ACCEPT_REVIEW`. Reviewer session IDs must be distinct from each other and the Implementer.
+23. Never write a Review verdict in the main or Implementer task. Only Reviewer tasks write `ACCEPT` or `REJECT`.
+
+## Completion and gates
+
+24. Invoke `$validation` only at `VALIDATING`. Stop at Human or mechanical gates and record a blocker instead of guessing.
+25. Report `TASK_CLOSED` only after `transition_task.py` actually reaches `CLOSED`; otherwise report the current checkpoint.
+
+Give each conversation an opaque stable session ID. If the host exposes none, generate one once and reuse it only within that conversation.

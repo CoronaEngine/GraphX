@@ -1,6 +1,6 @@
 # Polaris v0.1 —— AI Engineering Workflow System 实施计划
 
-> 状态：Ready to implement
+> 状态：Implementation underway
 > 目标版本：v0.1
 > 产品形态：Repo-native Skill System
 > 宿主 Runtime：Codex
@@ -45,6 +45,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - `.polaris/` 仓库状态协议、模板与默认工作流图。
 - Work Item 修订、任务状态、事件账本、工作集、Review、Validation、Result。
 - 项目初始化、任务初始化、状态转换、结构校验、文档影响检查、工作集生成脚本。
+- 独立 Codex Implementer 任务、不可变 Implementation handoff 与事件驱动实时进度快照。
 - 独立 Codex 会话的对抗审查协议。
 - Fresh-session / fresh-clone 的渐进恢复协议。
 - `R0 / R1 / R2` 三档渐进式严谨度。
@@ -57,7 +58,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - Dashboard、TUI、IDE 或独立 App
 - 自定义 Agent Runtime、模型适配层或进程生命周期管理
 - 数据库、向量库、知识图谱服务或事件服务
-- 通用自动多任务调度、跨项目管理、实时进度百分比；当前 TASK 内由宿主创建必要的独立 Review 会话不属于通用调度
+- 通用自动多任务调度、跨项目管理、实时进度百分比；当前 TASK 内由宿主创建必要的独立 Implementer / Review 任务不属于通用调度
 - Task DAG、任务归档和跨任务依赖调度
 - 通用领域 Skill 市场
 - 自动合并、发布或远程 CI 编排
@@ -68,17 +69,20 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 Human
   │  owns intent, hard constraints, approvals
   ▼
-Codex + Polaris Workflow Skills
-  │  interpret graph, execute node-local loops
-  ├───────────────┐
-  ▼               ▼
-Repository Code   .polaris/ authority state
-  │               │
-  └──── evidence ─┘
-          │
-          ▼
-Deterministic Python scripts
-  schema / references / gates / transitions / verdict
+Main Codex task + Polaris Workflow Skills
+  │  owns orchestration, status, gates and transitions
+  ├───────────── host dispatch ─────────────┐
+  ▼                                         ▼
+Fresh Implementer task                 Fresh Reviewer task(s)
+  │  code / tests / docs / progress         │  immutable verdict
+  └────────── same local checkout ──────────┘
+                      │
+                      ▼
+        Repository Code + .polaris authority
+                      │
+                      ▼
+           Deterministic Python scripts
+        schema / references / gates / transitions
 ```
 
 v0.1 没有常驻控制器，因此 Graph 的控制力来自三层：Skill 必须解释 Graph；脚本拒绝非法转换；验收标准要求所有任务通过脚本。不能防止恶意手改状态文件，这不是 v0.1 要解决的问题。
@@ -188,6 +192,10 @@ target-repo/
     │   ├── CD-*.json              # append-only，权威 Human Decision/Approval
     │   └── CD-*.md                # 可选可读投影
     ├── explorations/EXP-*.json    # 可跨任务复用的失败探索
+    ├── runtime/                    # 本机实时状态；默认 Git ignored
+    │   └── TASK-0001/
+    │       ├── progress.json       # 实时进度 JSON 权威快照
+    │       └── STATUS.md           # 人类可读投影
     ├── tasks/
     │   └── TASK-0001/
     │       ├── state.json         # 可由事件重建的当前状态投影
@@ -197,6 +205,7 @@ target-repo/
     │       ├── PLAN.md
     │       ├── WORKING_SET.md
     │       ├── implementations/r001/
+    │       │   ├── handoff-001.json
     │       │   ├── attempt-001.json
     │       │   └── IMPLEMENTATION-001.md
     │       ├── knowledge/r001/
@@ -216,7 +225,7 @@ target-repo/
     │       └── explorations/EXP-*.json
 ```
 
-`.agents/skills/`、`tools/polaris/` 和 `.polaris/` 均纳入 Git。前两者是 vendored 协议包，`.polaris/` 是项目运行状态。`project.json` 必须记录 `polaris_version` 和 `workflow_version`。v0.1 开工前使用最小 fixture 验证宿主能够发现仓库内 `.agents/skills/`；如果宿主发现规则不同，只调整 vendoring 路径，不改变 Skills 随目标仓库版本化的决定。
+`.agents/skills/`、`tools/polaris/` 和 `.polaris/` 的耐久状态均纳入 Git；唯一例外是 `.polaris/runtime/`，它保存当前电脑上的实时进度并默认忽略，不参与阶段门禁或 Fresh Clone 恢复。前两者是 vendored 协议包，`.polaris/` 其余内容是项目运行状态。`project.json` 必须记录 `polaris_version` 和 `workflow_version`。v0.1 开工前使用最小 fixture 验证宿主能够发现仓库内 `.agents/skills/`；如果宿主发现规则不同，只调整 vendoring 路径，不改变 Skills 随目标仓库版本化的决定。
 
 JSON 文件是机械门禁的权威输入；同名 Markdown 只用于人类阅读，不参与状态判定。旧 revision 和旧 attempt 文件不可覆盖，`state.json` 仅保存当前有效 artifact 的指针。
 
@@ -224,23 +233,23 @@ JSON 文件是机械门禁的权威输入；同名 Markdown 只用于人类阅�
 
 | Skill | 责任 | 禁止事项 |
 |---|---|---|
-| `engineering-task` | 用户显式调用 `$engineering-task` 后的总入口；恢复状态；选择 rigor；解析 Graph；调用阶段 Skill；遇门禁停止 | 不隐式触发，不直接宣布完成，不绕过 transition 脚本 |
+| `engineering-task` | 用户显式调用后的主控制任务；恢复、选择 rigor、派发/续接 Worker、汇总实时状态、验证 artifact、执行转换 | 自动路径不修改 subject；不隐式触发，不直接宣布完成，不绕过 transition 脚本 |
 | `requirement-analysis` | 澄清目标、验收、范围、硬约束、Decision Owner；生成并冻结 Work Item revision | 不替 Human 决定目标、破坏性边界或产品取舍 |
 | `architecture-planning` | 构造最小工作集；调查代码；形成 delta-oriented Plan、风险与验证映射 | 不把推测写成项目事实，不无界加载仓库 |
-| `implementation` | 按冻结 revision 和 Plan 小步实现；运行节点内 build/test/fix loop；记录偏差和证据 | 不修改 Work Item；不把本地测试通过等同完成 |
+| `implementation` | 独立 Implementer 只依据注册 handoff 小步实现；运行 build/test/fix loop；写实时进度与 Implementation artifact | 不读取主聊天，不执行状态转换，不修改 Work Item，不自审或关闭任务 |
 | `adversarial-review` | 在独立会话审查 spec compliance 与 engineering quality；管理 finding 生命周期 | 不接受作者自证；不依赖原实现会话的隐式上下文 |
 | `validation` | 把 acceptance criterion 映射到可复现证据；运行规定验证；产出 verdict 输入 | 不弱化验收条件，不用主观总结代替命令结果 |
-| `documentation-sync` | 分析知识 delta；更新或标记 stale 文档；提升可复用 Decision / Exploration | 不自动把未确认推断升级为权威知识 |
+| `documentation-sync` | 在同一 Implementer 任务中继续分析知识 delta、更新文档并写 Knowledge Delta | 不执行状态转换，不自动把未确认推断升级为权威知识 |
 
 Skill 描述应按触发边界编写，而不是做技术能力菜单。七个 Polaris Skills 都必须设置 `policy.allow_implicit_invocation: false`：用户仅通过显式调用 `$engineering-task` 进入 Polaris，阶段 Skills 只由已启动的工作流在合法节点显式分派，R1/R2 Reviewer 只从已注册 handoff 显式调用。普通工程请求不进入 Polaris。Skill 本身使用 fixture 做回归测试。
 
 ### 稳定对话协议
 
-`engineering-task` 负责所有用户可见检查点的一致性。每次暂停、Human gate、阶段完成、Review/Validation verdict 和终态都必须输出一个以 `[POLARIS:<MARKER>]` 开头的状态块，并按固定顺序包含 `Task / Revision / Rigor / State / Outcome / Authority / Remaining / Next / User action`。空字段写 `None`，不得省略；状态只能在转换脚本成功后重新读取 Authority 再报告，不得提前宣布。`REVIEW_SESSION_STARTED` 表示宿主已创建独立 Reviewer 任务，状态仍为 `REVIEWING`，并额外显示 Review task、Reviewer slot、handoff 和 dispatch mode。
+`engineering-task` 负责所有用户可见检查点的一致性。每次暂停、Human gate、阶段完成、Review/Validation verdict 和终态都必须输出一个以 `[POLARIS:<MARKER>]` 开头的状态块，并按固定顺序包含 `Task / Revision / Rigor / State / Outcome / Authority / Remaining / Next / User action`。空字段写 `None`，不得省略；状态只能在转换脚本成功后重新读取 Authority 再报告，不得提前宣布。`IMPLEMENTATION_SESSION_STARTED` 表示宿主已创建或复用独立 Implementer 任务；`IMPLEMENTATION_PROGRESS` 从本机进度 JSON 展示最近有效的 phase、当前动作、完成项、剩余项、检查与 blocker；`REVIEW_SESSION_STARTED` 表示宿主已创建独立 Reviewer 任务。两类任务启动标记均附带确定性任务标题、handoff、dispatch mode，并在无需用户处理时显示 `User action: None`。
 
-需求分析每轮最多询问三个会实质影响方案或验收的问题。每个问题必须给出两到三个互斥选项，推荐项排在第一位并逐项说明影响，同时允许用户提供选项之外的精确答案。宿主提供 `request_user_input` 或等效结构化交互工具时优先弹出选择面板；不可调用时必须显示内容相同的文本选项，不得为获得 UI 自行切换宿主模式或阻塞流程。两种回答写入相同 Authority；未回答项进入 `known_unknowns`，任务保持 `DRAFT`。信息完整后必须先展示 `WORK_ITEM_PREVIEW`，完整列出目标、范围、硬约束、rigor、风险、Human-owned 决策和每个 AC 的 statement/evidence，并以相同的 UI-first/text-fallback 规则等待用户明确确认。推荐确认项为“确认并执行”，其说明必须明确：确认会冻结 Work Item，并授权 Polaris 在同一本地项目中自动创建当前 revision 所需的全部独立 Review 任务以及图允许范围内的后续 Review attempts。确认写入权威 JSON 的 `review_dispatch`，固定为 `mode=auto_new_task / fallback=manual_handoff / same_local_project=true / authorized=true`；新 revision 将 `authorized` 重置为 `false`。确认后才能执行 `QUALIFY` 或 `NEW_REVISION` 并输出 `WORK_ITEM_QUALIFIED`。已冻结后发生实质需求变化必须创建新 revision，不允许静默覆盖。
+需求分析每轮最多询问三个会实质影响方案或验收的问题。每个问题必须给出两到三个互斥选项，推荐项排在第一位并逐项说明影响，同时允许用户提供选项之外的精确答案。宿主提供 `request_user_input` 或等效结构化交互工具时优先弹出选择面板；不可调用时必须显示内容相同的文本选项，不得为获得 UI 自行切换宿主模式或阻塞流程。两种回答写入相同 Authority；未回答项进入 `known_unknowns`，任务保持 `DRAFT`。信息完整后必须先展示 `WORK_ITEM_PREVIEW`，完整列出目标、范围、硬约束、rigor、风险、Human-owned 决策和每个 AC 的 statement/evidence，并以相同的 UI-first/text-fallback 规则等待用户明确确认。推荐确认项为“确认并执行”，其说明必须明确：确认会冻结 Work Item，并授权 Polaris 在同一本地项目中自动创建当前 revision 所需的全部独立 Implementer / Review 任务以及图允许范围内的后续 attempts。确认分别写入 `implementation_dispatch=mode:auto_new_task / fallback:same_session / same_local_project:true / authorized:true` 与 `review_dispatch=mode:auto_new_task / fallback:manual_handoff / same_local_project:true / authorized:true`；新 revision 将两者的 `authorized` 重置为 `false`。确认后才能执行 `QUALIFY` 或 `NEW_REVISION` 并输出 `WORK_ITEM_QUALIFIED`。已冻结后发生实质需求变化必须创建新 revision，不允许静默覆盖。
 
-v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Review 任务创建完全复用宿主工具，文本与手动新会话回退保证跨宿主可用。稳定性由 Skill 指令、仓库 Authority、转换后重读和 fixture 测试共同保证。`transition_task.py` 必须机械拒绝 statement 或 evidence 为空白/`TODO` 的验收项。
+v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Worker 任务创建完全复用宿主工具。Implementer 派发不可用时回退主任务同会话执行并声明响应可能延迟；Reviewer 派发不可用时回退手动新任务。稳定性由 Skill 指令、仓库 Authority、转换后重读和 fixture 测试共同保证。`transition_task.py` 必须机械拒绝 statement 或 evidence 为空白/`TODO` 的验收项。
 
 ## 6. Work Item 与任务模型
 
@@ -293,6 +302,18 @@ v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Review �
     "agent": []
   },
   "approval_gates": [],
+  "implementation_dispatch": {
+    "mode": "auto_new_task",
+    "fallback": "same_session",
+    "same_local_project": true,
+    "authorized": false
+  },
+  "review_dispatch": {
+    "mode": "auto_new_task",
+    "fallback": "manual_handoff",
+    "same_local_project": true,
+    "authorized": false
+  },
   "known_unknowns": []
 }
 ```
@@ -353,8 +374,8 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 |---|---|---|
 | `QUALIFIED` | 用户确认的冻结 Work Item revision | 必填字段通过；AC statement/evidence 非空且非 `TODO`；Human-owned 未决项为零 |
 | `PLANNED` | Plan + Working Set | 每个 AC 有验证映射；风险与受影响文档已列出 |
-| `IMPLEMENTING` | `PLANNED` | R2 已获得实施前 Human approval |
-| `IMPLEMENTED` | Implementation record + checkpoint commit | 实现者检查通过；所有偏离 Plan 已记录；subject commit 和 diff hash 已冻结 |
+| `IMPLEMENTING` | `PLANNED`；随后注册 Implementation handoff | R2 已获得实施前 Human approval；`DISPATCH_IMPLEMENTATION` 校验 handoff 与当前 revision/attempt/Plan/Working Set 绑定 |
+| `IMPLEMENTED` | 绑定 handoff 的 Implementation record + checkpoint commit | 实现者检查通过；session、handoff hash、所有偏离、subject commit 和 diff hash 已冻结；只有主任务执行转换 |
 | `DOCS_SYNCED` | Knowledge Delta + docs checkpoint commit | 无未处置 STALE；必要 Decision/Exploration 已落盘；最终 Review subject 已冻结 |
 | `REVIEWING` | 冻结 revision + subject base/head commit + subject diff hash + evidence | R1/R2 Reviewer session 与 implementer session 独立；R0 可使用隔离式同会话 Review |
 | `REVIEWED` | 当前 revision/subject 对应的 Review JSON | verdict=`ACCEPT`；所需 Reviewer 数量满足；blocking findings 为零 |
@@ -390,7 +411,7 @@ AGENTS.md
 
 ## 9. 确定性脚本
 
-全部使用 Python 标准库；无安装器、无共享服务。权威产物采用 JSON，Validator 实现 Polaris v0.1 明确定义的有限 Schema 子集，只支持 `required / type / enum / pattern / items / additionalProperties` 等实际使用能力，不宣称兼容完整 JSON Schema 标准，也不解析 YAML 或任意 Markdown。统一退出码：`0=PASS`、`1=规则失败`、`2=输入/系统错误`，并支持 `--json` 输出。
+全部使用 Python 标准库；无安装器、无共享服务。权威产物采用 JSON，Validator 实现 Polaris v0.1 明确定义的有限 Schema 子集，只支持 `required / type / enum / const / pattern / items / additionalProperties` 等实际使用能力，不宣称兼容完整 JSON Schema 标准，也不解析 YAML 或任意 Markdown。统一退出码：`0=PASS`、`1=规则失败`、`2=输入/系统错误`，并支持 `--json` 输出。
 
 | 脚本 | 最小职责 |
 |---|---|
@@ -398,13 +419,15 @@ AGENTS.md
 | `init_task.py` | 分配 Task ID，创建 r001 与完整任务目录，追加事件 |
 | `new_revision.py` | 复制当前 revision 为下一不可变修订，记录失效范围 |
 | `build_working_set.py` | 根据 Work Item、模块索引和显式引用生成/刷新工作集骨架 |
+| `build_implementation_handoff.py` | 从当前 revision、Plan、Working Set 与 prior Review 构造不可变 Implementer 输入包 |
+| `update_implementation_progress.py` | 原子更新 ignored 的实时进度 JSON 与 Markdown 投影；拒绝 session 接管和非法 blocker |
 | `validate_project.py` | 检查目录、ID、索引链接、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
 | `transition_task.py` | 获取任务锁，校验合法边与 gate，追加带 sequence 的事件，再原子替换 `state.json` |
 | `rebuild_state.py` | 校验事件序列并从 `events.jsonl` 重建 `state.json` 投影 |
 | `check_docs.py` | 将 changed paths 与 Knowledge Delta 对照，拒绝未解释的文档影响 |
 
-Review、Validation 和 Result 的权威 JSON 必须绑定 `task_id / work_item_revision / artifact_attempt / subject_base_commit / subject_head_commit / subject_diff_hash`。`subject_*` 表示被审查和验证的代码、测试与项目文档 Patch。保存这些治理 JSON 后，后续 transition event 记录其 `artifact_path / artifact_content_hash / artifact_commit`；`artifact_commit` 不写进 artifact 自身，避免产生无法满足的提交自引用。治理产物自身不会改变 subject hash，从而避免 Review 必须审查自身的循环依赖。任何 subject path 变化都会生成新的 subject commit/hash，并使旧 Review 和 Validation 失效。
+Implementation、Knowledge Delta、Review、Validation 和 Result 的权威 JSON 必须绑定当前适用的 `task_id / work_item_revision / artifact_attempt / subject_base_commit / subject_head_commit / subject_diff_hash`。Implementation 绑定编码 checkpoint，Knowledge Delta 与后续 Review/Validation/Result 绑定包含最终项目文档的 subject。保存这些治理 JSON 后，后续 transition event 记录其 `artifact_path / artifact_content_hash / artifact_commit`；`artifact_commit` 不写进 artifact 自身，避免产生无法满足的提交自引用。治理产物自身不会改变 subject hash，从而避免 Review 必须审查自身的循环依赖。任何 subject path 变化都会生成新的 subject commit/hash，并使旧 Review 和 Validation 失效。
 
 Subject 默认包含 Work Item scope 内的源代码、测试、构建配置和 `docs/`；排除 `.polaris/tasks/<task-id>/` 中的 Review、Validation、event、state、Result 等治理产物。Vendored Skills、`tools/polaris/` 或 `.polaris/workflow.json` 的修改属于协议升级，不得夹带在普通工程 Task 中。
 
@@ -414,10 +437,25 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 
 测试必须包含：happy path、缺 Work Item、非法前进或回退、revision 过期、Review 对错 commit/diff、AC 缺证据、未处置 STALE、BLOCKED 恢复、事件/state 不一致重建、并发锁冲突、CLOSED 被手工伪造。
 
-## 10. 独立对抗 Review 协议
+## 10. 独立 Implementer 与对抗 Review 协议
 
-1. 实现者完成 Implementation checkpoint 和 Documentation Sync 后停止实现与审查，不得自审后直接进入 Validation；原会话只保留宿主调度、等待、Authority 重读和机械转换职责。
-2. R1/R2 优先由宿主在同一本地项目中自动创建新的可见 Codex Review 任务；Reviewer 不继承实现会话的聊天历史，只接收 task ID、Reviewer slot 和已注册 handoff 路径。不得使用继承历史的 fork，也不默认使用独立 worktree。R0 允许同会话，但必须重新加载冻结合同和最终 Patch，执行隔离式 adversarial pass。
+### Independent Implementation
+
+1. 主任务是唯一用户入口和状态机所有者；自动路径中不修改 subject，只负责生成/注册 handoff、派发或续接 Worker、等待、读取进度、校验产物和执行转换。
+2. `START_IMPLEMENTATION` 后生成 `implementations/rNNN/handoff-NNN.json`，再通过 `DISPATCH_IMPLEMENTATION` 自转换注册。handoff 冻结 Work Item、Plan、Working Set、项目规则、subject base、prior Review（返工时）、确定性输出路径和实时进度路径。
+3. Work Item 的 `implementation_dispatch.authorized=true` 是“确认并执行”对当前 revision 全部 Implementer attempts 的显式授权。宿主支持任务管理时，在同一本地项目和同一 checkout 创建可见的新任务；不 fork 主对话，也不默认使用 worktree。
+4. Implementer 标题固定为 `Polaris Implement · <TASK> · <REVISION> · attempt <N>`。创建前先复用与 handoff 绑定的有效 Implementation artifact，其次复用唯一同名任务；多条同名记录时不得猜测，回退同会话执行。
+5. Implementer 只接收 task ID 与已注册 handoff，不接收主聊天、实现建议或预期结果。它拥有本轮代码、测试、构建文件和项目文档的单写者权限，但不执行 Graph 转换、Review、Validation 或关闭。
+6. Implementer 在开始/完成实现步骤、测试结束、blocker、checkpoint 和 Documentation Sync 时，通过 `update_implementation_progress.py` 原子更新 `.polaris/runtime/<TASK>/progress.json`；`STATUS.md` 仅为投影。进度记录 phase、current action、completed、remaining、checks、blocker、user action 和更新时间，不生成主观百分比。
+7. `.polaris/runtime/` 默认 Git ignored，不影响工作树 checkpoint，也不承诺跨电脑恢复。正式 Implementation、Knowledge Delta、commit/diff 和 event 继续写入耐久 Authority。主任务可随时读取进度；若整个宿主停止运行，快照只代表最后一次成功更新。
+8. Implementation artifact 必须绑定 handoff path/hash 和 Implementer session。主任务验证后执行 `FINISH_IMPLEMENTATION`，再续接同一个 Implementer 任务执行 `$documentation-sync`；Worker 写回 Knowledge Delta 和最终 subject checkpoint，主任务执行 `SYNC_DOCS`。
+9. Review 或 Validation 返工生成新 attempt、新 handoff 和新的 Implementer 任务；prior Review 通过 handoff 传递，Implementer 写 Review Response。不同 attempt 不复用 Implementer session。
+10. 宿主缺少创建、查找、等待或续接能力时，主任务使用同一 handoff 执行 `same_session` fallback，仍更新进度文件并明确提示即时状态响应可能延迟；不得仅因宿主能力不足把业务任务置为 `BLOCKED`。
+
+### Independent Review
+
+1. Implementer 完成 Implementation checkpoint 和 Documentation Sync 后停止实现与审查，不得自审后直接进入 Validation；主任务只保留宿主调度、等待、Authority 重读和机械转换职责。
+2. R1/R2 优先由宿主在同一本地项目中自动创建新的可见 Codex Review 任务；Reviewer 不继承主任务或 Implementer 的聊天历史，只接收 task ID、Reviewer slot 和已注册 handoff 路径。不得使用继承历史的 fork，也不默认使用独立 worktree。R0 允许主任务同会话，但必须重新加载冻结合同和最终 Patch，执行隔离式 adversarial pass。
 3. Work Item 的 `review_dispatch.authorized=true` 是“确认并执行”对本 revision 自动创建全部必需 Review 任务的权威记录。宿主缺少创建、查找或等待能力，或者派发失败时，状态保持 `REVIEWING`，显示 `REVIEW_HANDOFF_READY` 和完整手动提示；不得仅因宿主不支持自动派发而进入 `BLOCKED`。
 4. Review 任务标题固定为 `Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>`。创建前先复用已有有效 Review artifact，其次复用唯一的同名任务；同一 key 不得重复创建，发现多个同名任务时回退人工处理。
 5. Reviewer 只接收：冻结 Work Item、Plan、Working Set、`subject_base_commit`、最终 `subject_head_commit`、`subject_diff_hash`、项目规则、相关模块文档、实现记录、Knowledge Delta 和可复现证据。
@@ -440,12 +478,13 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 - 当前状态、blocker、最后一个有效事件是什么？
 - 当前 recommended next action 是什么？
 - 完成该动作所需的最小 Working Set 是什么？
+- 当前处于 Implementation 时，最近一个有效实时进度快照是什么？
 
 只有状态冲突、引用损坏或证据缺失时才向历史扩展。聊天记录不得成为恢复前提。
 
 ### Durability checkpoint
 
-- Vendored Skills、`tools/polaris/`、`.polaris/` 和任务代码均纳入 Git。
+- Vendored Skills、`tools/polaris/`、`.polaris/` 的耐久状态和任务代码均纳入 Git；`.polaris/runtime/` 是明确忽略的本机瞬时例外。
 - `IMPLEMENTED`、`DOCS_SYNCED`、`REVIEWED`、`VERIFIED` 必须引用一个本地 checkpoint commit；Polaris 不自动 push、merge 或发布。
 - Fresh-session 可以继续当前工作树；Fresh-clone 只保证恢复到最近一次已提交的阶段边界，不承诺恢复尚未保存或尚未提交的编辑器内容。
 - Review 和 Validation 只接受 Git commit SHA，不接受 working-tree marker。创建 checkpoint 前必须识别并保护用户已有的无关改动，不能把不属于 Task scope 的变化混入证据 commit。
@@ -512,6 +551,8 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 ### M3 — Review、Recovery 与 Working Set（第 10–12 天）
 
+- [x] 实现独立 Implementer 自动派发、确定性任务复用、handoff/result 绑定和同会话回退
+- [x] 实现事件驱动实时进度 JSON/Markdown、本机忽略规则、session 所有权与恢复读取
 - [x] 实现绑定 revision、commit、diff hash 和 session attestation 的 reviewer handoff 与 finding lifecycle
 - [x] 实现渐进恢复与 Working Set 刷新
 - [x] 实现 failed exploration 的任务内记录与项目级提升
@@ -542,6 +583,8 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [ ] 目标仓库无需安装 Polaris 程序即可使用；vendored `.agents/skills/`、`tools/polaris/`、`.polaris/` 和 Python 足以运行。
 - [ ] 非平凡任务不会在 Work Item 冻结前进入 Implementation。
 - [ ] 每个暂停点和阶段结果都按固定字段展示，Work Item 未经用户确认不进入 `QUALIFIED`。
+- [ ] 自动路径中主任务保持为可查询控制入口；Implementer 只从冻结 handoff 工作并持续写入最近有效进度。
+- [ ] Implementation artifact 绑定当前 handoff path/hash；不同返工 attempt 使用新的确定性 Implementer 任务。
 - [ ] 每个前进、返工、阻塞、取消和新 revision 转换都可由 graph + artifact + gate 机械解释。
 - [ ] Agent 无法通过正常流程自行写入 `VERIFIED` 或 `CLOSED`。
 - [ ] R1/R2 Review 来自独立上下文；R0 使用隔离式 adversarial pass；全部覆盖 specification 与 engineering 两层。

@@ -1,19 +1,20 @@
 ---
 name: documentation-sync
-description: Internal Polaris stage for an explicitly started `$engineering-task` workflow. Invoke only in IMPLEMENTED or after implementation rework to reconcile documentation; do not activate from ordinary documentation requests.
+description: Internal Polaris worker stage for an explicitly started `$engineering-task` workflow. Invoke only by continuing the same dedicated Implementer task in IMPLEMENTED to reconcile documentation; do not activate from ordinary documentation requests.
 ---
 
 # Documentation Sync
 
-1. Compare changed subject paths with project documentation and the frozen Work Item.
-2. Write a Knowledge Delta JSON with an entry for every affected knowledge area: `ADD`, `UPDATE`, `STALE`, or `NO_CHANGE`.
-3. Update confirmed project documentation. Do not promote unverified inference to authority.
-4. Record failed attempts with `record_exploration.py`. Keep task-only conclusions in the task; promote reusable, evidence-backed conclusions to `.polaris/explorations/` with the same script.
-5. Leave no unresolved `STALE` entry.
-6. Create the final subject checkpoint and recompute the subject diff hash.
-7. Refresh the Working Set if a promoted exploration or documentation change alters the next stage's justified inputs.
-8. Run `check_docs.py`, then transition with `SYNC_DOCS`.
+1. Continue in the same Implementer conversation and reload the registered Implementation artifact and live progress. Set progress phase to `DOCUMENTING`.
+2. Compare changed subject paths with project documentation and the frozen Work Item.
+3. Write a Knowledge Delta JSON with an entry for every affected knowledge area: `ADD`, `UPDATE`, `STALE`, or `NO_CHANGE`.
+4. Update confirmed project documentation. Do not promote unverified inference to authority.
+5. Record failed attempts with `record_exploration.py`. Keep task-only conclusions in the task; promote reusable, evidence-backed conclusions to `.polaris/explorations/` with the same script.
+6. Leave no unresolved `STALE` entry.
+7. Create the final subject checkpoint and recompute the subject diff hash.
+8. Refresh the Working Set if a promoted exploration or documentation change alters the next stage's justified inputs.
+9. Run `check_docs.py` with the final subject base/head, set progress to `COMPLETED` with no remaining work or blocker, and return the Knowledge Delta path, final subject base/head, diff hash, changed documentation, promoted explorations, and check result.
 
-After the transition succeeds, reload state and emit `[POLARIS:DOCS_SYNCED]` with the nine fixed `$engineering-task` status fields. Include the Knowledge Delta, changed documentation, promoted explorations, subject diff hash, and documentation check result.
+Do not run `SYNC_DOCS` or emit a Polaris checkpoint marker. The main `$engineering-task` validates and registers the artifact, advances the graph, reloads state, and emits `[POLARIS:DOCS_SYNCED]`.
 
 Do not edit Review, Validation, Result, event, or state artifacts directly.

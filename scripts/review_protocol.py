@@ -116,9 +116,6 @@ def validate_review_response(
         directory / response_reference["path"],
         root / "schemas" / "review-response.schema.json",
     )
-    subject = state.get("subject")
-    if not isinstance(subject, dict):
-        raise RuleFailure("review_response requires a frozen rework subject")
     expected_identity = (
         state["task_id"],
         state["current_revision"],
@@ -141,11 +138,11 @@ def validate_review_response(
     ):
         raise RuleFailure("review_response does not bind the registered prior Review")
     if (
-        response["subject_base_commit"] != subject["base_commit"]
-        or response["subject_head_commit"] != subject["head_commit"]
-        or response["subject_diff_hash"] != subject["diff_hash"]
+        response["subject_base_commit"] != implementation["subject_base_commit"]
+        or response["subject_head_commit"] != implementation["subject_head_commit"]
+        or response["subject_diff_hash"] != implementation["subject_diff_hash"]
     ):
-        raise RuleFailure("review_response targets the wrong rework subject")
+        raise RuleFailure("review_response targets the wrong Implementation subject")
 
     expected_findings = {
         finding["id"] for finding in prior["findings"] if finding["status"] == "open"

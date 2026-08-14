@@ -1,0 +1,14 @@
+{
+    "task_id": "TASK-0001",
+    "work_item_revision": 1,
+    "artifact_attempt": 1,
+    "rigor": "R1",
+    "created_at": "1970-01-01T00:00:00Z",
+    "preferred_isolation": "fresh_session",
+    "subject_base_commit": "0000000000000000000000000000000000000000",
+    "previous_review": null,
+    "output_path": "implementations/r001/attempt-001.json",
+    "progress_json_path": ".polaris/runtime/TASK-0001/progress.json",
+    "progress_markdown_path": ".polaris/runtime/TASK-0001/STATUS.md",
+    "package": []
+}

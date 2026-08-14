@@ -1,8 +1,8 @@
 # Polaris 使用说明书
 
-本文面向希望在 Codex 中使用 Polaris 管理软件工程任务的项目成员。它从首次接入讲到日常提出需求、Review、验证、恢复与升级。
+本文面向希望在 Codex 中使用 Polaris 管理软件工程任务的项目成员。它从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.1。Polaris v0.1 是仓库原生的 Skills 与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.2。Polaris v0.1 是仓库原生的 Skills 与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -13,7 +13,7 @@ Polaris 把项目仓库作为权威事实来源：
 - `.polaris/` 保存项目配置、冻结工作流、任务状态、Work Item、计划、Review、Validation 和事件账本。
 - 普通 Git 提交保存实际代码、测试和文档。
 
-这三个目录都应提交 Git。不要把 `.polaris/` 当作缓存，也不要只提交代码而漏掉任务记录。
+这三个目录的耐久内容都应提交 Git。不要把 `.polaris/` 整体当作缓存，也不要只提交代码而漏掉任务记录。唯一例外是 `.polaris/runtime/`：它保存当前电脑上的实时 Implementation 进度，默认忽略，不参与阶段门禁。
 
 Polaris 不保存以下瞬时状态：
 
@@ -21,6 +21,7 @@ Polaris 不保存以下瞬时状态：
 - 编辑器窗口、断点和本地终端历史；
 - Codex 完整聊天记录；
 - 未写入任务产物的口头约定。
+- `.polaris/runtime/` 中最后一次本机进度快照在其他电脑上的延续。
 
 因此，“可恢复”是指从 Git 中恢复已提交的项目事实和任务状态，而不是还原另一台电脑上的整个桌面或聊天现场。
 
@@ -68,7 +69,7 @@ python scripts/vendor_project.py C:\path\to\target-repo --force
 python tools/polaris/scripts/init_project.py my-project --repo .
 ```
 
-该命令创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json`、恢复索引等文件；如果仓库没有 `AGENTS.md`，还会创建最小仓库规则。
+该命令创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json`、恢复索引等文件；如果仓库没有 `AGENTS.md`，还会创建最小仓库规则，并确保 `.gitignore` 包含 `.polaris/runtime/`。
 
 校验初始化结果：
 
@@ -118,6 +119,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 .transition.lock
+.polaris/runtime/
 ```
 
 ### 3.4 让 Codex 发现 Skills
@@ -180,7 +182,7 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 - 最好在 vendoring 后新开的 Codex 任务中工作；
 - 确认 Codex 能发现 `engineering-task` 等仓库 Skills；
 - 准备使用 Polaris 时，在请求中明确写出 `$engineering-task`；
-- 如果是 R1/R2 Review，不要复用实现会话，具体见第 9 节。
+- 如果是 R1/R2 Review，不要复用 Implementer 会话，具体见第 10 节。
 
 ### 5.4 准备需求信息
 
@@ -248,6 +250,9 @@ Polaris 每次暂停、等待用户决定或完成一个阶段时，都会在对
 - `REQUIREMENTS_NEEDED`：需求仍有会影响方案或验收的未知项；
 - `WORK_ITEM_PREVIEW`：Work Item 已整理好，等待用户确认冻结；
 - `WORK_ITEM_QUALIFIED`、`PLAN_READY`、`IMPLEMENTATION_FINISHED`、`DOCS_SYNCED`：阶段检查点；
+- `IMPLEMENTATION_HANDOFF_READY`：独立实现输入已冻结并注册；
+- `IMPLEMENTATION_SESSION_STARTED`：宿主已创建或复用独立 Implementer 任务；
+- `IMPLEMENTATION_PROGRESS`：展示最近有效的本机实现进度，不使用估算百分比；
 - `REVIEW_HANDOFF_READY`：handoff 已冻结；宿主无法自动派发时显示完整的手动新任务提示；
 - `REVIEW_SESSION_STARTED`：宿主已创建或复用独立 Review 任务，主任务正在等待；
 - `REVIEW_ACCEPTED` / `REVIEW_REJECTED`、`VALIDATION_PASS` / `VALIDATION_FAIL`：审查与验证结论；
@@ -256,7 +261,7 @@ Polaris 每次暂停、等待用户决定或完成一个阶段时，都会在对
 
 需求信息不完整时，`requirement-analysis` 每轮只问一到三个会实质影响结果的问题。每个问题会提供两到三个互斥选项，把推荐选项放在第一位，并逐项说明影响；如果选项都不合适，用户仍可直接给出精确答案。宿主提供 `request_user_input` 等结构化交互工具时，Polaris 优先在对话框中弹出选择面板；工具不可调用时，自动回退为内容相同的文本选项，不会为获得面板而自行切换模式或中断任务。
 
-无论通过面板还是文本回答，答案都会写入相同的 Work Item 字段，未回答项会写入 `known_unknowns`，任务停留在 `DRAFT`。信息完整后，无论原始需求多详细，Polaris 都会先展示 `WORK_ITEM_PREVIEW`，列出目标、范围、约束、严谨度、风险、所有验收标准及证据方式，然后等待用户明确确认。确认时同样优先显示“确认并执行（推荐）/要求修改”的选择面板；说明文字明确告知：确认会冻结 Work Item，并授权 Polaris 在同一本地项目中自动创建本 revision 所需的全部独立 Review 任务和后续 Review attempts。该授权写入 Work Item 的 `review_dispatch.authorized=true`；新 Revision 会重置为 `false` 并要求重新确认。未确认时不得进入 `QUALIFIED`，也不得创建 Review 任务。
+无论通过面板还是文本回答，答案都会写入相同的 Work Item 字段，未回答项会写入 `known_unknowns`，任务停留在 `DRAFT`。信息完整后，无论原始需求多详细，Polaris 都会先展示 `WORK_ITEM_PREVIEW`，列出目标、范围、约束、严谨度、风险、所有验收标准及证据方式，然后等待用户明确确认。确认时同样优先显示“确认并执行（推荐）/要求修改”的选择面板；说明文字明确告知：确认会冻结 Work Item，并授权 Polaris 在同一本地项目中自动创建本 revision 所需的全部独立 Implementer / Review 任务和后续 attempts。授权分别写入 `implementation_dispatch.authorized=true` 与 `review_dispatch.authorized=true`；新 Revision 会把两者重置为 `false` 并要求重新确认。未确认时不得进入 `QUALIFIED`，也不得创建 Worker 任务。
 
 询问示例：
 
@@ -282,7 +287,7 @@ Outcome: Work Item 草案已完整，等待冻结确认
 Authority: .polaris/tasks/TASK-0001/revisions/work-item-r001.json
 Remaining: None
 Next: QUALIFY
-User action: 请选择“确认并执行”以冻结上述内容并授权自动创建所需的独立 Review 任务；如需修改请逐项指出
+User action: 请选择“确认并执行”以冻结上述内容并授权自动创建所需的独立 Implementer / Review 任务；如需修改请逐项指出
 ```
 
 用户确认后，Polaris 校验 JSON、执行转换、重新读取状态，再输出 `WORK_ITEM_QUALIFIED`。后续若目标、范围、硬约束或验收标准发生实质变化，必须创建新 Revision 并重新确认，不能静默覆盖已冻结内容。
@@ -323,9 +328,9 @@ python tools/polaris/scripts/transition_task.py TASK-0001 <EVENT> --repo .
 
 Polaris 根据风险选择严谨度：
 
-- `R0`：低风险、小范围、易回退的变更；不要求独立 Reviewer，可在同一会话做明确隔离的审查 pass。
-- `R1`：常规非平凡工程变更；至少一个独立 Reviewer，宿主支持时自动创建可见新任务，否则回退手动新任务或隔离 reviewer agent。
-- `R2`：高风险变更；要求 Human 预批准和最终批准，并至少一个独立 Reviewer。安全、持久化格式或不可逆迁移等风险还可能要求两个 Reviewer。
+- `R0`：低风险、小范围、易回退的变更；宿主支持时仍使用独立 Implementer，但不要求独立 Reviewer，可在主任务做明确隔离的审查 pass。
+- `R1`：常规非平凡工程变更；独立 Implementer 加至少一个独立 Reviewer，宿主支持时自动创建可见新任务。
+- `R2`：高风险变更；独立 Implementer、Human 预批准和最终批准，并至少一个独立 Reviewer。安全、持久化格式或不可逆迁移等风险还可能要求两个 Reviewer。
 
 用户通常在这些位置参与：
 
@@ -338,9 +343,50 @@ Polaris 根据风险选择严谨度：
 
 如果实现期间目标或范围改变，不应悄悄修改原 Work Item。应创建新 Revision，并让任务回到 `QUALIFIED` 重新规划。
 
-## 9. 独立 Review：自动新任务与手动回退
+## 9. 独立 Implementation 与随时查看进度
 
-实现和 Documentation Sync 完成后，先由实现会话生成冻结 handoff：
+主任务在完成 Planning 和所需预批准后：
+
+1. 执行 `START_IMPLEMENTATION`；
+2. 生成不可变 `implementations/rNNN/handoff-NNN.json`；
+3. 通过 `DISPATCH_IMPLEMENTATION` 注册 handoff；
+4. 在同一本地项目和同一 checkout 创建独立 Implementer 任务；
+5. 等待并验证 Implementation artifact，由主任务执行 `FINISH_IMPLEMENTATION`；
+6. 续接同一个 Implementer 任务完成 Documentation Sync，再由主任务执行 `SYNC_DOCS`。
+
+自动 Implementer 标题固定为：
+
+```text
+Polaris Implement · TASK-0001 · r001 · attempt 1
+```
+
+Implementer 只接收 task ID 和已注册 handoff，不继承主任务聊天。它可以修改本次 subject 范围内的代码、测试、构建配置和项目文档，但不能运行状态转换、执行 Review/Validation 或关闭任务。Implementation JSON 必须绑定 handoff path/hash 和 Implementer session ID；未绑定的结果会被门禁拒绝。
+
+### 9.1 不发消息也能查看
+
+直接打开下面的 Markdown 文件：
+
+```text
+.polaris/runtime/TASK-0001/STATUS.md
+```
+
+它展示当前 phase、正在做什么、已完成、剩余、最近检查、blocker、用户动作和更新时间。相同目录的 `progress.json` 是这份本机快照的机械权威。Implementer 会在开始或完成步骤、测试结束、遇到 blocker、准备 checkpoint 和文档同步时更新；Polaris 不根据耗时猜测百分比。
+
+这个目录默认加入 `.gitignore`，因此不会污染工作树，也不会随 Git 在另一台电脑继续。换电脑后，耐久状态仍能恢复到最近 checkpoint；新 Implementer 会创建新的本机进度快照。
+
+### 9.2 其他查看方式
+
+- 在主任务询问“展示 TASK-0001 当前进度并继续”，主任务会验证 `progress.json` 后输出 `IMPLEMENTATION_PROGRESS`，不会取消或重复派发 Worker；
+- 在支持任务列表的 Codex 宿主中，点击确定性标题的 Implementer 任务查看它的实时输出；
+- 新主任务恢复时，`recover_task.py` 会在存在有效快照时返回 `live_implementation_progress`。
+
+宿主无法创建、查找、等待或续接任务时，Polaris 使用同一个 handoff 在主任务中执行，`Dispatch mode` 显示 `same_session_fallback`。流程仍可完成并继续写进度，但主任务正在执行长操作时，状态回答可能延迟。
+
+如果 Implementer 遇到权限、凭据、外部依赖或必须由 Human 决定的问题，进度会进入 `BLOCKED` 并同时填写 `blocker` 与 `user_action`；主任务据此告诉用户需要处理什么。
+
+## 10. 独立 Review：自动新任务与手动回退
+
+实现和 Documentation Sync 完成后，由主任务根据 Implementer 的最终产物生成冻结 handoff：
 
 ```powershell
 python tools/polaris/scripts/build_review_handoff.py TASK-0001 --repo . --implementer-session-id impl-20260813 --isolation fresh_session
@@ -350,8 +396,8 @@ python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . 
 然后按严谨度处理：
 
 - `R0`：允许同一会话执行明确隔离的审查 pass，handoff 使用 `r0_isolated_same_session`；
-- `R1/R2`：实现会话到这里停止实现和 Review 工作，只负责派发、等待、重读仓库 Authority 和执行机械转换；
-- 宿主可以管理 Codex 任务时，在同一本地项目中自动创建可见的新 Review 任务，不 fork 实现对话，也不默认使用独立 worktree；
+- `R1/R2`：Implementer 到这里停止工作；主任务只负责派发、等待、重读仓库 Authority 和执行机械转换；
+- 宿主可以管理 Codex 任务时，在同一本地项目中自动创建可见的新 Review 任务，不 fork 主任务或 Implementer 对话，也不默认使用独立 worktree；
 - 新 Reviewer 只接收已注册 handoff 路径，使用 `adversarial-review`，先查规格符合性，再查工程质量；
 - Reviewer session ID 必须与实现者不同，并如实记录隔离方式和聊天继承声明。
 
@@ -371,7 +417,7 @@ Polaris Review · TASK-0001 · r001 · attempt 1 · reviewer 1
 
 ```text
 请使用 $adversarial-review 独立审查 TASK-0001，Reviewer slot 1。
-只依据 .polaris/tasks/TASK-0001/reviews/r001/handoff-001.json，不继承或假设实现会话中的结论。
+只依据 .polaris/tasks/TASK-0001/reviews/r001/handoff-001.json，不继承或假设主任务、Implementer 会话中的结论。
 写入不可变 Review JSON 后返回 verdict 和路径，不要修改实现或执行状态转换。
 ```
 
@@ -385,11 +431,11 @@ Session ID 是审计声明，不是身份认证。如果宿主没有提供 ID，
 4. Reviewer 保留 Finding ID，复查完整新 patch，并填写 resolution；
 5. 第三次 Review 仍为 `REJECT` 时，状态机会把任务送入 Human-owned `BLOCKED`，不能继续自动循环。
 
-正常 R1 happy path 中，用户确认 Work Item 后不再需要手工创建审查任务或向新任务发送消息。R2 仍保留实施前批准和最终批准；权限请求、Human-owned 决策、手动回退或 `TASK_BLOCKED` 会产生额外交互。
+正常 R1 happy path 中，用户确认 Work Item 后不再需要手工创建 Implementer/Review 任务或向它们发送消息。R2 仍保留实施前批准和最终批准；权限请求、Human-owned 决策、Review 手动回退或 `TASK_BLOCKED` 会产生额外交互。
 
-## 10. 恢复工作
+## 11. 恢复工作
 
-### 10.1 同一电脑的新 Codex 任务
+### 11.1 同一电脑的新 Codex 任务
 
 在仓库根目录运行：
 
@@ -406,7 +452,7 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 
 Codex 应根据当前状态加载对应 Skill，而不是从聊天记忆猜测下一步。
 
-### 10.2 换一台电脑
+### 11.2 换一台电脑
 
 旧电脑离开前：
 
@@ -426,13 +472,13 @@ python tools/polaris/scripts/validate_project.py --repo .
 python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 ```
 
-再从仓库根目录新开 Codex 任务并请求恢复。只要 `.agents/skills/`、`tools/polaris/`、`.polaris/` 和 subject commits 都已提交并推送，就能恢复权威工作状态。
+再从仓库根目录新开 Codex 任务并请求恢复。只要 `.agents/skills/`、`tools/polaris/`、`.polaris/` 的耐久产物和 subject commits 都已提交并推送，就能恢复权威工作状态；ignored 的 `.polaris/runtime/` 会在继续实现时重新生成。
 
 无法通过 Git 恢复的内容包括：旧电脑上未提交/未推送的文件、编辑器状态和完整聊天记录。重要决定应写入 Work Item、Plan、Review Response、Knowledge Delta 或 Result，而不是只留在对话里。
 
-## 11. 更新项目中的 Polaris
+## 12. 更新项目中的 Polaris
 
-从新版 Polaris 源仓库运行：
+先比较源版本与目标项目的 `.polaris/project.json` / `.polaris/workflow.json`。只有版本兼容，或已经准备了单独迁移变更时，才从新版 Polaris 源仓库运行：
 
 ```powershell
 python scripts/vendor_project.py C:\path\to\target-repo --force
@@ -446,11 +492,11 @@ git diff -- .agents/skills tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。
+确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION` 和新的 handoff 绑定，不能把 0.1.2 工具直接覆盖到仍冻结在 0.1.1 的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先在 0.1.1 完成任务，或另行制定迁移。
 
-早期 v0.1 已冻结的 Work Item 可能没有 `review_dispatch`。这些任务仍可按手动 handoff 完成，但 Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成 `authorized=false` 的字段，用户再次“确认并执行”后才启用自动 Review 任务。
+早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 
-## 12. 失败探索与卡点
+## 13. 失败探索与卡点
 
 如果一个技术方向被证据否定，不要让结论只留在聊天中。记录任务内探索：
 
@@ -466,7 +512,7 @@ python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote 
 
 遇到需要用户决策、外部权限或环境变化的卡点时，应记录 blocker 并进入 `BLOCKED`，而不是伪造 PASS 或无限重试。
 
-## 13. 常见问题
+## 14. 常见问题
 
 ### Codex 没有发现 Polaris Skills
 
@@ -500,7 +546,7 @@ python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote 
 
 所有脚本都支持 `--json`。日志面向人阅读，JSON 结果和退出码用于机械判断。
 
-## 14. 最短日常清单
+## 15. 最短日常清单
 
 提出新需求前：
 
@@ -523,12 +569,20 @@ python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote 
 [ ] 新环境可运行 validate_project 和 recover_task
 ```
 
+Implementation 期间查看进度：
+
+```text
+[ ] 优先打开 .polaris/runtime/TASK-NNNN/STATUS.md
+[ ] 或在主任务请求展示 IMPLEMENTATION_PROGRESS 后继续
+[ ] 不用进度百分比替代 completed / current / remaining
+```
+
 R1/R2 Review 前：
 
 ```text
 [ ] Documentation Sync 已完成
 [ ] handoff 已生成并注册
-[ ] 实现会话已停止 Review 工作
+[ ] Implementer 任务已经结束，不再修改 subject 或执行 Review
 [ ] Reviewer 使用新会话或不继承聊天的隔离 agent
 [ ] Reviewer 只依据 handoff，并使用不同 session ID
 ```
