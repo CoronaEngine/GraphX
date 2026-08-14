@@ -238,9 +238,9 @@ Skill 描述应按触发边界编写，而不是做技术能力菜单。七个 P
 
 `engineering-task` 负责所有用户可见检查点的一致性。每次暂停、Human gate、阶段完成、Review/Validation verdict 和终态都必须输出一个以 `[POLARIS:<MARKER>]` 开头的状态块，并按固定顺序包含 `Task / Revision / Rigor / State / Outcome / Authority / Remaining / Next / User action`。空字段写 `None`，不得省略；状态只能在转换脚本成功后重新读取 Authority 再报告，不得提前宣布。
 
-需求分析每轮最多询问三个会实质影响方案或验收的问题。每个问题必须给出两到三个互斥选项，推荐项排在第一位并逐项说明影响，同时允许用户提供选项之外的精确答案；未回答项进入 `known_unknowns`，任务保持 `DRAFT`。信息完整后必须先展示 `WORK_ITEM_PREVIEW`，完整列出目标、范围、硬约束、rigor、风险、Human-owned 决策和每个 AC 的 statement/evidence，并等待用户明确确认。确认后才能执行 `QUALIFY` 或 `NEW_REVISION` 并输出 `WORK_ITEM_QUALIFIED`。已冻结后发生实质需求变化必须创建新 revision，不允许静默覆盖。
+需求分析每轮最多询问三个会实质影响方案或验收的问题。每个问题必须给出两到三个互斥选项，推荐项排在第一位并逐项说明影响，同时允许用户提供选项之外的精确答案。宿主提供 `request_user_input` 或等效结构化交互工具时优先弹出选择面板；不可调用时必须显示内容相同的文本选项，不得为获得 UI 自行切换宿主模式或阻塞流程。两种回答写入相同 Authority；未回答项进入 `known_unknowns`，任务保持 `DRAFT`。信息完整后必须先展示 `WORK_ITEM_PREVIEW`，完整列出目标、范围、硬约束、rigor、风险、Human-owned 决策和每个 AC 的 statement/evidence，并以相同的 UI-first/text-fallback 规则等待用户明确确认。确认后才能执行 `QUALIFY` 或 `NEW_REVISION` 并输出 `WORK_ITEM_QUALIFIED`。已冻结后发生实质需求变化必须创建新 revision，不允许静默覆盖。
 
-v0.1 不增加自定义对话 Runtime；稳定性由 Skill 指令、仓库 Authority、转换后重读和 fixture 测试共同保证。`transition_task.py` 必须机械拒绝 statement 或 evidence 为空白/`TODO` 的验收项。
+v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板完全复用宿主工具，文本回退保证跨宿主可用。稳定性由 Skill 指令、仓库 Authority、转换后重读和 fixture 测试共同保证。`transition_task.py` 必须机械拒绝 statement 或 evidence 为空白/`TODO` 的验收项。
 
 ## 6. Work Item 与任务模型
 

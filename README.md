@@ -74,7 +74,7 @@ v0.1 明确不实现：
 - Review Response 与跨 Attempt 的稳定 Finding 生命周期
 - Fresh-session Recovery、项目索引和可刷新 Working Set
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
-- 固定字段的对话检查点、带推荐选项的澄清问题、Work Item 预览确认和验收占位符门禁
+- 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
 - 25 个带场景日志的自动化测试
 
 仍在建设：

@@ -522,6 +522,14 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertIn("(Recommended)", requirement_text)
         self.assertIn("precise free-form answer", requirement_text)
+        self.assertIn("request_user_input", requirement_text)
+        self.assertIn("render the identical questions and options in text", requirement_text)
+        self.assertIn("Do not change host mode solely to obtain the panel", requirement_text)
+        self.assertIn("Confirm and qualify (Recommended)", requirement_text)
+
+        self.assertIn("request_user_input", entry_text)
+        self.assertIn("If the tool is unavailable", entry_text)
+        self.assertIn("Treat UI and text answers identically", entry_text)
 
         vendor(ROOT, self.repo, False)
         for skill_name, markers in expected_markers.items():

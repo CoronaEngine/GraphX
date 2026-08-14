@@ -9,7 +9,9 @@ Inspect the repository before asking questions. Ask only about unknowns that can
 
 ## Stable qualification interaction
 
-If material unknowns remain, keep the task in `DRAFT` and emit `REQUIREMENTS_NEEDED` using the `$engineering-task` status fields. After those fields, ask one to three focused questions per round. Every question must include two or three concrete, mutually exclusive answer options. Put the recommended option first, suffix its label with `(Recommended)`, and explain each option's consequence in one sentence. After the options, allow the user to provide a precise free-form answer when none fits; do not use `Other` as one of the numbered options. Record every unanswered item in `known_unknowns`; do not modify production code or run `QUALIFY` while any remain.
+If material unknowns remain, keep the task in `DRAFT` and emit `REQUIREMENTS_NEEDED` using the `$engineering-task` status fields. Prepare one to three focused questions per round. Every question must include two or three concrete, mutually exclusive answer options. Put the recommended option first, suffix its label with `(Recommended)`, and explain each option's consequence in one sentence.
+
+When `request_user_input` or an equivalent structured choice tool is callable, use it to display the questions as a UI panel and wait for the response. Keep each header short, keep option labels concise, and do not add an `Other` option when the host supplies a free-form choice automatically. When no such tool is callable, render the identical questions and options in text, followed by an invitation to provide a precise free-form answer. Do not change host mode solely to obtain the panel. Record UI and text answers through the same Work Item fields, keep every unanswered item in `known_unknowns`, and do not modify production code or run `QUALIFY` while any remain.
 
 When the draft is complete, always emit `WORK_ITEM_PREVIEW` before freezing it, even when the original request appeared complete. After the fixed status fields, show:
 
@@ -20,7 +22,7 @@ When the draft is complete, always emit `WORK_ITEM_PREVIEW` before freezing it, 
 - Human-owned decisions and approval gates;
 - remaining unknowns, which must be `None`.
 
-Ask the user to explicitly confirm this preview. Do not infer confirmation from silence or from the original request. Only after confirmation may you write the final draft, validate it, and run `QUALIFY` or `NEW_REVISION`. Then reload state and emit `WORK_ITEM_QUALIFIED` with the frozen JSON and Markdown projection paths. Any later substantive change to goal, scope, constraints, or acceptance creates a new immutable revision; never silently overwrite the qualified revision.
+Ask the user to explicitly confirm this preview. Prefer the structured choice UI with `Confirm and qualify (Recommended)` and `Request changes`; use the same choices as text when the UI is unavailable. Do not infer confirmation from silence or from the original request. Only after confirmation may you write the final draft, validate it, and run `QUALIFY` or `NEW_REVISION`. Then reload state and emit `WORK_ITEM_QUALIFIED` with the frozen JSON and Markdown projection paths. Any later substantive change to goal, scope, constraints, or acceptance creates a new immutable revision; never silently overwrite the qualified revision.
 
 1. Define an observable goal and motivation.
 2. Separate in-scope and out-of-scope work.
