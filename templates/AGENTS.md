@@ -4,6 +4,7 @@
 - Invoke stage Skills only from an already active Polaris workflow at their legal graph nodes; do not use them as implicit entry points.
 - Use the stable Polaris conversation checkpoints defined by `$engineering-task`; never pass a Human confirmation gate silently.
 - Treat `.polaris/` JSON and the frozen Work Item revision as workflow authority.
+- When the same content must serve mechanical validation and human reading, store only four-space-indented JSON and format it on demand; use Markdown only for independent prose, plans, rules, or instructions.
 - Follow `.polaris/workflow.json`; use vendored scripts for every state transition.
 - Do not edit `state.json`, `events.jsonl`, `VERIFIED`, or `CLOSED` directly.
 - Keep unrelated user changes out of task checkpoint commits.

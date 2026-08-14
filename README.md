@@ -29,7 +29,7 @@ Polaris 希望让 AI 从“生成代码”转向“可靠参与软件工程”�
 
 - Graph 决定合法流程，Agent 只负责节点内执行。
 - 聊天记录不是项目事实来源，权威状态保存在仓库中。
-- JSON 是机械判定依据，并保存项目索引、Working Set 和全部结构化 artifact；Markdown 只保存具有独立自然语言内容的实施计划、规则、Skills 和使用文档。
+- 同一内容同时需要机械校验和人类阅读时，优先只保存四格缩进 JSON，并在展示时按需格式化；Markdown 只保存具有独立自然语言内容的实施计划、规则、Skills 和使用文档。
 - Agent 不能自行宣布完成；只有门禁全部满足后，转换脚本才能写入 `VERIFIED` 或 `CLOSED`。
 - Review、Validation 与 Work Item Revision、Git commit 和 diff hash 绑定。
 - 新会话不依赖旧聊天，可以从仓库恢复任务状态。

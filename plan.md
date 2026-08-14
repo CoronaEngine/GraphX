@@ -35,6 +35,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 9. **Independent review is adversarial.** Reviewer 使用独立会话，从冻结合同、代码差异和证据出发，先检查“做对事情”，再检查“事情做对”。
 10. **Failed exploration is durable knowledge.** 失败尝试必须记录原因、证据和重试条件，避免跨会话重复踩坑。
 11. **Rigor is progressive.** 风险越高，所需产物、独立审查和人工门禁越严格。
+12. **Machine validation wins format decisions.** 同一内容同时需要机械校验和人类阅读时，默认只保存四格缩进 JSON，并在展示时按需格式化；只有独立自然语言内容无法用结构化字段清晰表达时才使用 Markdown。
 
 ## 2. MVP 范围
 
