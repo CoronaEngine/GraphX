@@ -14,6 +14,7 @@ from internal.polaris_core import (
     current_work_item_path,
     full_commit,
     read_json,
+    require_protocol_compatible,
     run_main,
     task_dir,
     write_json_atomic,
@@ -24,6 +25,7 @@ from internal.task_layout import state_path
 def create(repo: Path, task_id: str) -> dict[str, object]:
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
+    require_protocol_compatible(repo, state)
     revision = state["current_revision"] + 1
     destination = current_work_item_path(directory, revision)
     if destination.exists():

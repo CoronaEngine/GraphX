@@ -425,6 +425,8 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 
 版本升级必须先 vendoring 目标协议，再显式运行 vendored `migrate_project.py`。`workflow/migrations.json` 是迁移路径唯一且 append-only 的注册表，一次只执行一个从当前版本到目标版本的相邻步骤；历史步骤必须保留以校验已提交记录。v1 支持 `replace_version` 项目策略和 `append_version_event` 任务策略：后者为每个任务追加保持原状态的 `MIGRATE_POLARIS` 事件，不改写 append-only 历史。迁移以 `.polaris/migrations/MIG-*.json` 记录 `IN_PROGRESS/COMPLETED` 和各任务前后 sequence；重跑必须可恢复且不得重复事件。未知路径、跨版本跳跃、冻结 workflow 变化、任务集合并发变化和不完整记录都必须机械拒绝。改变 workflow 或数据形态的新迁移，必须先增加新的声明式策略和针对性测试。
 
+除初始化全新项目、vendoring 和显式迁移外，任何会写入项目、任务、artifact、恢复索引或实时进度的正常脚本，都必须先通过同一个协议兼容门禁：项目版本等于 vendored `VERSION`，冻结 workflow 等于项目 workflow，涉及任务时任务版本也必须一致。版本不匹配期间只允许校验、检查和显式迁移，不允许产生混合版本状态。
+
 ## 8. Context Bootstrap 与 Working Set
 
 固定恢复顺序：

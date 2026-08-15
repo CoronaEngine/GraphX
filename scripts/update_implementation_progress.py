@@ -15,6 +15,7 @@ from internal.polaris_core import (
     RuleFailure,
     protocol_root,
     read_json,
+    require_protocol_compatible,
     run_main,
     task_dir,
     utc_now,
@@ -111,6 +112,7 @@ def update(
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
+    require_protocol_compatible(repo, state)
     if state["status"] not in {"IMPLEMENTING", "IMPLEMENTED"}:
         raise RuleFailure("Implementation progress can only update while IMPLEMENTING or IMPLEMENTED")
     handoff, reference = validate_handoff(repo, root, directory, state)

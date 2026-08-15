@@ -15,6 +15,7 @@ from internal.polaris_core import (
     protocol_root,
     read_json,
     rebuild_state_value,
+    require_protocol_compatible,
     release_lock,
     run_main,
     task_dir,
@@ -66,6 +67,7 @@ def transition(
     try:
         state_path = task_state_path(directory)
         state = read_json(state_path)
+        require_protocol_compatible(repo, state)
         if rebuild_state_value(task_events_path(directory)) != state:
             raise RuleFailure("state.json differs from events.jsonl; rebuild before transition")
 

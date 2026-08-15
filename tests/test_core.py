@@ -36,6 +36,7 @@ from internal.polaris_core import (  # noqa: E402
     read_json,
     read_jsonl,
     rebuild_state_value,
+    require_protocol_compatible,
     subject_diff_hash,
     validate_schema,
     write_json_atomic,
@@ -869,6 +870,59 @@ class PolarisCoreTests(unittest.TestCase):
         write_json_atomic(project_path, project)
         with self.assertRaises(RuleFailure):
             validate_project(self.repo)
+        events_before = (self.task / "events.jsonl").read_text(encoding="utf-8")
+        with self.assertRaisesRegex(RuleFailure, "explicit migration"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "QUALIFY",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        with self.assertRaisesRegex(RuleFailure, "explicit migration"):
+            init_task(self.repo, "TASK-0002", "R1")
+        self.assertEqual(
+            (self.task / "events.jsonl").read_text(encoding="utf-8"),
+            events_before,
+        )
+        self.assertFalse((self.repo / ".polaris" / "tasks" / "TASK-0002").exists())
+
+    def test_every_normal_writer_uses_the_protocol_compatibility_gate(self) -> None:
+        """全部正常状态写入口共享项目、workflow 与任务版本门禁。"""
+        writers = (
+            "build_implementation_handoff.py",
+            "build_review_handoff.py",
+            "build_working_set.py",
+            "init_task.py",
+            "new_revision.py",
+            "rebuild_state.py",
+            "record_exploration.py",
+            "refresh_project_index.py",
+            "transition_task.py",
+            "update_implementation_progress.py",
+        )
+        for name in writers:
+            source = (SCRIPTS / name).read_text(encoding="utf-8")
+            self.assertIn("require_protocol_compatible", source, name)
+
+        workflow_path = self.repo / ".polaris" / "workflow.json"
+        workflow = read_json(workflow_path)
+        workflow["workflow_version"] = "0.1.99"
+        write_json_atomic(workflow_path, workflow)
+        with self.assertRaisesRegex(RuleFailure, "frozen workflow"):
+            require_protocol_compatible(self.repo)
+
+        workflow["workflow_version"] = "0.1.2"
+        write_json_atomic(workflow_path, workflow)
+        state = read_json(self.task / "state.json")
+        state["polaris_version"] = "0.1.10"
+        with self.assertRaisesRegex(RuleFailure, "task Polaris version"):
+            require_protocol_compatible(self.repo, state)
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""

@@ -195,6 +195,35 @@ def workflow_path(repo: Path) -> Path:
     return protocol_root(repo) / "workflow" / "default-workflow.json"
 
 
+def require_protocol_compatible(
+    repo: Path, state: dict[str, Any] | None = None
+) -> dict[str, str]:
+    """Reject normal writes while project, task, workflow, and tools disagree."""
+    root = protocol_root(repo)
+    version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    project = read_json(repo / ".polaris" / "project.json")
+    workflow = read_json(repo / ".polaris" / "workflow.json")
+    if project.get("polaris_version") != version:
+        raise RuleFailure(
+            "project Polaris version does not match vendored protocol; "
+            "run the explicit migration before writing"
+        )
+    workflow_version = project.get("workflow_version")
+    if not isinstance(workflow_version, str):
+        raise RuleFailure("project workflow version is missing or invalid")
+    if workflow.get("workflow_version") != workflow_version:
+        raise RuleFailure("project and frozen workflow versions do not match")
+    if state is not None:
+        if state.get("polaris_version") != version:
+            raise RuleFailure("task Polaris version does not match vendored protocol")
+        if state.get("workflow_version") != workflow_version:
+            raise RuleFailure("task workflow version does not match project workflow")
+    return {
+        "polaris_version": version,
+        "workflow_version": workflow_version,
+    }
+
+
 def task_dir(repo: Path, task_id: str) -> Path:
     if not re.fullmatch(r"TASK-[0-9]{4}", task_id):
         raise InputFailure(f"invalid task id: {task_id}")

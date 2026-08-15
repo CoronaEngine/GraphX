@@ -17,6 +17,7 @@ from internal.polaris_core import (
     file_sha256,
     protocol_root,
     read_json,
+    require_protocol_compatible,
     run_main,
     task_dir,
     utc_now,
@@ -54,6 +55,7 @@ def build(repo: Path, task_id: str) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
+    require_protocol_compatible(repo, state)
     if state["status"] != "IMPLEMENTING":
         raise RuleFailure("Implementation handoff can only be built from IMPLEMENTING")
     revision = state["current_revision"]

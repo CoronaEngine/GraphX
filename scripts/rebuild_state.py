@@ -7,7 +7,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from internal.polaris_core import rebuild_state_value, run_main, task_dir, write_json_atomic
+from internal.polaris_core import (
+    rebuild_state_value,
+    require_protocol_compatible,
+    run_main,
+    task_dir,
+    write_json_atomic,
+)
 from internal.recovery_protocol import refresh_project_index
 from internal.task_layout import events_path, state_path
 
@@ -17,6 +23,7 @@ def rebuild(repo: Path, task_id: str, check_only: bool) -> dict[str, object]:
     state = rebuild_state_value(events_path(directory))
     destination = state_path(directory)
     if not check_only:
+        require_protocol_compatible(repo, state)
         write_json_atomic(destination, state)
         refresh_project_index(repo)
     return {

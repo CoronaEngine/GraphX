@@ -14,6 +14,7 @@ from internal.polaris_core import (
     RuleFailure,
     protocol_root,
     read_json,
+    require_protocol_compatible,
     run_main,
     task_dir,
     utc_now,
@@ -71,6 +72,7 @@ def record(
         raise RuleFailure(f"exploration requires non-empty fields: {missing}")
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
+    require_protocol_compatible(repo, state)
     exploration_id = _next_id(repo)
     value = {
         "id": exploration_id,
@@ -105,6 +107,7 @@ def promote(repo: Path, task_id: str, exploration_id: str) -> dict[str, Any]:
     if re.fullmatch(r"EXP-[0-9]{4}", exploration_id) is None:
         raise InputFailure(f"invalid exploration ID: {exploration_id}")
     root = protocol_root(repo)
+    require_protocol_compatible(repo)
     directory = task_dir(repo, task_id)
     source = exploration_path(directory, exploration_id)
     value = validate_json_file(source, root / "schemas" / "exploration.schema.json")

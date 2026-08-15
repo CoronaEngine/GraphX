@@ -16,6 +16,7 @@ from internal.polaris_core import (
     file_sha256,
     protocol_root,
     read_json,
+    require_protocol_compatible,
     run_main,
     task_dir,
     utc_now,
@@ -77,6 +78,7 @@ def build(
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
+    require_protocol_compatible(repo, state)
     if state["status"] != "DOCS_SYNCED":
         raise RuleFailure("review handoff can only be built from DOCS_SYNCED")
     implementation_reference = normalized_reference(

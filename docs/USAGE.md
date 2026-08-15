@@ -539,6 +539,8 @@ python tools/polaris/scripts/migrate_project.py --repo .
 
 没有注册路径时不要手改版本号。应先取得包含所需相邻步骤的 Polaris 版本，逐级完成并分别提交；任何失败都先保留 `.polaris/migrations/` 和事件现场，修复原因后重跑同一迁移命令。
 
+从 vendoring 完成到迁移完成之间，所有正常写命令都会拒绝执行，包括新建任务、状态转换、生成 handoff、更新 Working Set/进度、记录探索和刷新索引。这是防止新工具向旧 Authority State 写入混合版本数据的硬门禁，不应绕过。
+
 然后检查：
 
 ```powershell

@@ -14,6 +14,7 @@ from internal.polaris_core import (
     full_commit,
     protocol_root,
     read_json,
+    require_protocol_compatible,
     run_main,
     task_dir,
     utc_now,
@@ -33,6 +34,7 @@ from internal.task_layout import (
 
 def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
     root = protocol_root(repo)
+    require_protocol_compatible(repo)
     directory = task_dir(repo, task_id)
     if directory.exists():
         raise InputFailure(f"task already exists: {directory}")

@@ -13,6 +13,7 @@ from internal.polaris_core import (
     current_work_item_path,
     protocol_root,
     read_json,
+    require_protocol_compatible,
     run_main,
     task_dir,
     validate_json_file,
@@ -85,6 +86,7 @@ def build(
 ) -> dict[str, Any]:
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
+    require_protocol_compatible(repo, state)
     work_item_path = current_work_item_path(directory, state["current_revision"])
     work_item = read_json(work_item_path)
     destination = working_set_path(directory)

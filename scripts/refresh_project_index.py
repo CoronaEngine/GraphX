@@ -7,11 +7,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from internal.polaris_core import run_main
+from internal.polaris_core import require_protocol_compatible, run_main
 from internal.recovery_protocol import refresh_project_index
 
 
 def refresh(repo: Path) -> dict[str, object]:
+    require_protocol_compatible(repo)
     result = refresh_project_index(repo)
     return {
         "message": f"refreshed project recovery map for {len(result['tasks'])} tasks",
