@@ -1,6 +1,6 @@
 {
     "project_id": "PROJECT_ID",
-    "polaris_version": "0.1.11",
+    "polaris_version": "0.1.12",
     "workflow_version": "0.1.2",
     "active_tasks": []
 }

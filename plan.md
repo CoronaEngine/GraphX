@@ -427,6 +427,8 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 
 迁移占用任务转换锁时必须写入结构化 owner：迁移 ID、任务 ID、主机名、PID 和创建时间。重跑只允许接管同一迁移在同一主机上、且原 PID 已确认不存在的锁；活跃 PID、其他迁移、其他主机、空锁或损坏锁一律拒绝。这样既能从进程崩溃或机器重启恢复，又不把真实并发误判为遗留锁。
 
+vendoring 更新必须先在目标仓库外的隔离事务目录中完成 Skill 渲染、协议复制、模板物化、安装清单生成与哈希校验，再备份全部受影响路径并进入替换阶段。事务 journal 使用 `STAGING/PREPARED/APPLYING/COMMITTED` 状态和主机/PID owner；普通异常立即恢复旧文件，同一主机上已死亡进程留下的 `PREPARED/APPLYING` 事务在下次运行前恢复，活跃或其他主机事务不得接管。强制更新默认先验证旧清单并拒绝受管文件漂移；丢弃漂移必须使用独立显式选项。
+
 除初始化全新项目、vendoring 和显式迁移外，任何会写入项目、任务、artifact、恢复索引或实时进度的正常脚本，都必须先通过同一个协议兼容门禁：项目版本等于 vendored `VERSION`，冻结 workflow 等于项目 workflow，涉及任务时任务版本也必须一致。版本不匹配期间只允许校验、检查和显式迁移，不允许产生混合版本状态。
 
 ## 8. Context Bootstrap 与 Working Set
@@ -584,7 +586,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和七个 Skill
 - [x] 建立版本化 `hosts/*/adapter.json` 契约，从宿主无关 Skills 生成 Codex/Claude Code 目录与 worker 文件，并将适配器、脚本、Schema、模板和 Workflow vendoring 到 `tools/polaris/`
 - [x] 将 Adapter 升级到 v2，校验真实入口、overlay 新增边界、symlink confinement 与宿主能力依赖
-- [x] 用安装清单登记 vendored 文件归属与 SHA-256，并在强制升级时清除旧版受管文件
+- [x] 用安装清单登记 vendored 文件归属与 SHA-256，并以预生成、备份、回滚和崩溃恢复事务执行强制升级
 - [x] 建立显式相邻迁移注册表、可恢复迁移记录与 append-only 任务版本事件
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills
 - [x] 用 Claude Code 2.1.220 实际验证 `/engineering-task` 项目 Skill 与 `polaris-reviewer` 非 fork subagent 的发现和拒绝无 handoff 调用

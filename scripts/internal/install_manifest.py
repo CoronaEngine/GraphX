@@ -1,4 +1,4 @@
-"""Create, validate, and clean Polaris-owned vendored files."""
+"""Create and validate the ownership manifest for vendored Polaris files."""
 
 from __future__ import annotations
 
@@ -91,6 +91,25 @@ def write_install_manifest(repo: Path, manifest: dict[str, Any]) -> None:
     )
 
 
+def install_manifest_paths(
+    repo: Path, manifest: dict[str, Any], field: str
+) -> tuple[Path, ...]:
+    if field == "managed_files":
+        values = [item["path"] for item in manifest[field]]
+    elif field == "preserved_files":
+        values = manifest[field]
+    else:
+        raise InputFailure(f"unsupported install manifest path field: {field}")
+    return tuple(
+        confined_target(
+            repo,
+            repo / _safe_relative_path(value),
+            f"install manifest {field}",
+        )
+        for value in values
+    )
+
+
 def validate_install_manifest(repo: Path, protocol_root: Path) -> dict[str, Any]:
     manifest = read_install_manifest(repo, protocol_root)
     version = (protocol_root / "VERSION").read_text(encoding="utf-8").strip()
@@ -121,25 +140,3 @@ def validate_install_manifest(repo: Path, protocol_root: Path) -> dict[str, Any]
         if not path.is_file():
             raise RuleFailure(f"preserved vendored file is missing: {value}")
     return manifest
-
-
-def remove_managed_files(repo: Path, manifest: dict[str, Any]) -> None:
-    """Remove only files claimed as managed by a previous manifest."""
-    for item in sorted(
-        manifest["managed_files"],
-        key=lambda value: len(Path(value["path"]).parts),
-        reverse=True,
-    ):
-        relative = _safe_relative_path(item["path"])
-        path = confined_target(
-            repo, repo / relative, "previously managed vendored file"
-        )
-        if path.is_symlink() or path.is_file():
-            path.unlink()
-        parent = path.parent
-        while parent != repo:
-            try:
-                parent.rmdir()
-            except OSError:
-                break
-            parent = parent.parent

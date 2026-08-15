@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +70,7 @@ from internal.task_layout import (  # noqa: E402
 )
 from validate_task import validate  # noqa: E402
 from validate_project import validate as validate_project  # noqa: E402
+import vendor_project as vendor_module  # noqa: E402
 from vendor_project import vendor  # noqa: E402
 
 
@@ -930,25 +932,25 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.10")
+        self.set_protocol_version("0.1.11")
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.10")
-        self.assertEqual(result["to"], "0.1.11")
+        self.assertEqual(result["from"], "0.1.11")
+        self.assertEqual(result["to"], "0.1.12")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.10")
+        self.assertEqual(events[0]["polaris_version"], "0.1.11")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.11")
+        self.assertEqual(events[1]["polaris_version"], "0.1.12")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.10-to-0.1.11.json"
+            / "MIG-0.1.11-to-0.1.12.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -956,15 +958,15 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.10")
+        self.set_protocol_version("0.1.11")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
             "record_version": 1,
-            "migration_id": "0.1.10-to-0.1.11",
-            "from_polaris_version": "0.1.10",
-            "to_polaris_version": "0.1.11",
+            "migration_id": "0.1.11-to-0.1.12",
+            "from_polaris_version": "0.1.11",
+            "to_polaris_version": "0.1.12",
             "from_workflow_version": "0.1.2",
             "to_workflow_version": "0.1.2",
             "status": "IN_PROGRESS",
@@ -982,7 +984,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.10-to-0.1.11.json",
+            / "MIG-0.1.11-to-0.1.12.json",
             record,
         )
         append_jsonl(
@@ -995,7 +997,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.11",
+                "polaris_version": "0.1.12",
                 "workflow_version": "0.1.2",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
@@ -1003,7 +1005,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.10-to-0.1.11",
+                "migration_id": "0.1.11-to-0.1.12",
             },
         )
 
@@ -1015,7 +1017,7 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
-        self.set_protocol_version("0.1.10")
+        self.set_protocol_version("0.1.11")
         vendor(ROOT, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
@@ -1023,7 +1025,7 @@ class PolarisCoreTests(unittest.TestCase):
             {
                 "lock_version": 1,
                 "kind": "polaris_migration",
-                "migration_id": "0.1.10-to-0.1.11",
+                "migration_id": "0.1.11-to-0.1.12",
                 "task_id": "TASK-0001",
                 "hostname": socket.gethostname(),
                 "pid": 2147483647,
@@ -1056,7 +1058,7 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_rejects_an_undeclared_version_jump(self) -> None:
         """没有注册的跨版本路径机械拒绝，且不创建部分迁移记录。"""
-        self.set_protocol_version("0.1.9")
+        self.set_protocol_version("0.1.10")
         vendor(ROOT, self.repo, False)
 
         with self.assertRaisesRegex(RuleFailure, "no explicit adjacent migration"):
@@ -1065,7 +1067,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertFalse((self.repo / ".polaris" / "migrations").exists())
         self.assertEqual(
             read_json(self.repo / ".polaris" / "project.json")["polaris_version"],
-            "0.1.9",
+            "0.1.10",
         )
 
     def test_risk_flag_requires_r2(self) -> None:
@@ -1095,6 +1097,8 @@ class PolarisCoreTests(unittest.TestCase):
     def test_install_manifest_detects_drift_and_preserves_project_owned_files(self) -> None:
         """清单哈希拒绝受管文件漂移，但不把项目自有文件冻结为模板内容。"""
         vendor(ROOT, self.repo, False)
+        with self.assertRaisesRegex(InputFailure, "requires --force"):
+            vendor(ROOT, self.repo, False, discard_managed_changes=True)
         manifest_path = self.repo / "tools" / "polaris" / "install-manifest.json"
         manifest = read_json(manifest_path)
         managed = {item["path"] for item in manifest["managed_files"]}
@@ -1120,11 +1124,117 @@ class PolarisCoreTests(unittest.TestCase):
 
         project_rules = self.repo / "CLAUDE.md"
         project_rules.write_text("# Project-owned rules\n", encoding="utf-8")
-        vendor(ROOT, self.repo, True)
+        with self.assertRaisesRegex(RuleFailure, "hash mismatch"):
+            vendor(ROOT, self.repo, True)
+        vendor(ROOT, self.repo, True, discard_managed_changes=True)
         self.assertEqual(
             project_rules.read_text(encoding="utf-8"), "# Project-owned rules\n"
         )
         self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
+    def test_vendor_rolls_back_after_partial_apply_failure(self) -> None:
+        """事务应用中途失败时恢复全部旧输出，不留下半更新安装。"""
+        vendor(ROOT, self.repo, False)
+        manifest_path = self.repo / "tools" / "polaris" / "install-manifest.json"
+        skill_path = self.repo / ".agents" / "skills" / "engineering-task" / "SKILL.md"
+        original_manifest = manifest_path.read_bytes()
+        original_skill = skill_path.read_bytes()
+        with tempfile.TemporaryDirectory(prefix="polaris-vendor-source-") as temp:
+            source = Path(temp) / "source"
+            shutil.copytree(
+                ROOT,
+                source,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+            )
+            canonical = source / "skills" / "engineering-task" / "SKILL.md"
+            canonical.write_text(
+                canonical.read_text(encoding="utf-8") + "\nTransaction test.\n",
+                encoding="utf-8",
+            )
+            original_copy = vendor_module._copy_install_path
+            copy_count = 0
+
+            def fail_after_copy(staged: Path, destination: Path) -> None:
+                nonlocal copy_count
+                original_copy(staged, destination)
+                copy_count += 1
+                if copy_count == 2:
+                    raise OSError("injected vendor apply failure")
+
+            with mock.patch.object(
+                vendor_module, "_copy_install_path", side_effect=fail_after_copy
+            ):
+                with self.assertRaisesRegex(OSError, "injected vendor apply failure"):
+                    vendor(source, self.repo, True)
+
+        self.assertEqual(manifest_path.read_bytes(), original_manifest)
+        self.assertEqual(skill_path.read_bytes(), original_skill)
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+        self.assertEqual(
+            list(
+                self.repo.parent.glob(
+                    f".{self.repo.name}-polaris-vendor-transaction-*"
+                )
+            ),
+            [],
+        )
+
+    def test_vendor_recovers_an_interrupted_apply_transaction(self) -> None:
+        """下次 vendoring 会先恢复已崩溃进程留下的 APPLYING 事务。"""
+        vendor(ROOT, self.repo, False)
+        manifest_path = self.repo / "tools" / "polaris" / "install-manifest.json"
+        original_manifest = manifest_path.read_bytes()
+        with tempfile.TemporaryDirectory(prefix="polaris-vendor-crash-") as temp:
+            source = Path(temp) / "source"
+            shutil.copytree(
+                ROOT,
+                source,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+            )
+
+            def interrupt_apply(
+                stage: Path, target: Path, affected: list[Path]
+            ) -> None:
+                destination = affected[0]
+                staged = stage / destination.relative_to(target)
+                vendor_module._remove_path(destination)
+                vendor_module._copy_install_path(staged, destination)
+                raise SystemExit("simulated process crash")
+
+            with mock.patch.object(
+                vendor_module, "_apply_staged_install", side_effect=interrupt_apply
+            ):
+                with self.assertRaisesRegex(SystemExit, "simulated process crash"):
+                    vendor(source, self.repo, True)
+
+            transactions = list(
+                self.repo.parent.glob(
+                    f".{self.repo.name}-polaris-vendor-transaction-*"
+                )
+            )
+            self.assertEqual(len(transactions), 1)
+            journal_path = transactions[0] / "journal.json"
+            journal = read_json(journal_path)
+            self.assertEqual(journal["status"], "APPLYING")
+            with self.assertRaisesRegex(InputFailure, "still running"):
+                vendor(source, self.repo, True)
+            journal["pid"] = 2147483647
+            write_json_atomic(journal_path, journal)
+            (source / "VERSION").unlink()
+
+            with self.assertRaisesRegex(RuleFailure, "Polaris VERSION"):
+                vendor(source, self.repo, True)
+
+        self.assertEqual(manifest_path.read_bytes(), original_manifest)
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+        self.assertEqual(
+            list(
+                self.repo.parent.glob(
+                    f".{self.repo.name}-polaris-vendor-transaction-*"
+                )
+            ),
+            [],
+        )
 
     def test_force_vendor_removes_files_owned_by_previous_manifest(self) -> None:
         """强制升级按旧清单清除已淘汰受管文件，不遗留历史产物。"""

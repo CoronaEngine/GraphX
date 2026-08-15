@@ -427,7 +427,7 @@ def acquire_lock(path: Path) -> int:
         raise InputFailure(f"task is locked: {path}") from exc
 
 
-def _process_is_running(pid: int) -> bool:
+def process_is_running(pid: int) -> bool:
     if os.name == "nt":
         import ctypes
         from ctypes import wintypes
@@ -506,7 +506,7 @@ def acquire_migration_lock(path: Path, migration_id: str, task_id: str) -> int:
         pid = existing.get("pid")
         if not isinstance(pid, int) or pid < 1:
             raise InputFailure(f"migration lock has an invalid owner PID: {path}") from exc
-        if _process_is_running(pid):
+        if process_is_running(pid):
             raise InputFailure(f"migration lock owner is still running: {path}") from exc
         try:
             path.unlink()
