@@ -36,6 +36,7 @@ from internal.polaris_core import (
     run_main,
     utc_now,
     write_json_atomic,
+    write_text_atomic,
 )
 from internal.path_security import (
     confined_target,
@@ -250,14 +251,14 @@ def _stage_install(
             )
             shutil.copytree(source_skill, destination, ignore=ignore_generated)
             skill_path = destination / "SKILL.md"
-            skill_path.write_text(
+            write_text_atomic(
+                skill_path,
                 render_skill(
                     skill_path.read_text(encoding="utf-8"),
                     name,
                     adapter,
                     set(skills),
                 ),
-                encoding="utf-8",
             )
             overlay_root = adapter["skill_overlay_root"]
             if overlay_root is not None:
