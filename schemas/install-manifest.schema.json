@@ -11,7 +11,11 @@
     "additionalProperties": false,
     "properties": {
         "manifest_version": {
-            "const": 1
+            "type": "integer",
+            "enum": [
+                1,
+                2
+            ]
         },
         "polaris_version": {
             "type": "string",
@@ -31,6 +35,13 @@
                     "path": {
                         "type": "string",
                         "minLength": 1
+                    },
+                    "hash_mode": {
+                        "type": "string",
+                        "enum": [
+                            "byte_sha256",
+                            "text_lf_sha256"
+                        ]
                     },
                     "sha256": {
                         "type": "string",

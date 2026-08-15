@@ -27,6 +27,11 @@ from internal.host_adapters import (  # noqa: E402
     load_host_adapters,
     render_skill,
 )
+from internal.install_manifest import (  # noqa: E402
+    BYTE_HASH_MODE,
+    TEXT_HASH_MODE,
+    managed_file_sha256,
+)
 from build_working_set import build as build_working_set  # noqa: E402
 from build_implementation_handoff import build as build_implementation_handoff  # noqa: E402
 from build_review_handoff import build as build_review_handoff  # noqa: E402
@@ -1200,26 +1205,26 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.12")
+        self.set_protocol_version("0.1.13")
         (self.repo / ".polaris" / "task-locations.json").unlink()
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.12")
-        self.assertEqual(result["to"], "0.1.13")
+        self.assertEqual(result["from"], "0.1.13")
+        self.assertEqual(result["to"], "0.1.14")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.12")
+        self.assertEqual(events[0]["polaris_version"], "0.1.13")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.13")
+        self.assertEqual(events[1]["polaris_version"], "0.1.14")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.12-to-0.1.13.json"
+            / "MIG-0.1.13-to-0.1.14.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -1231,15 +1236,15 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.12")
+        self.set_protocol_version("0.1.13")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
             "record_version": 1,
-            "migration_id": "0.1.12-to-0.1.13",
-            "from_polaris_version": "0.1.12",
-            "to_polaris_version": "0.1.13",
+            "migration_id": "0.1.13-to-0.1.14",
+            "from_polaris_version": "0.1.13",
+            "to_polaris_version": "0.1.14",
             "from_workflow_version": "0.1.2",
             "to_workflow_version": "0.1.2",
             "status": "IN_PROGRESS",
@@ -1257,7 +1262,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.12-to-0.1.13.json",
+            / "MIG-0.1.13-to-0.1.14.json",
             record,
         )
         append_jsonl(
@@ -1270,7 +1275,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.13",
+                "polaris_version": "0.1.14",
                 "workflow_version": "0.1.2",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
@@ -1278,7 +1283,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.12-to-0.1.13",
+                "migration_id": "0.1.13-to-0.1.14",
             },
         )
 
@@ -1290,7 +1295,7 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
-        self.set_protocol_version("0.1.12")
+        self.set_protocol_version("0.1.13")
         vendor(ROOT, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
@@ -1298,7 +1303,7 @@ class PolarisCoreTests(unittest.TestCase):
             {
                 "lock_version": 1,
                 "kind": "polaris_migration",
-                "migration_id": "0.1.12-to-0.1.13",
+                "migration_id": "0.1.13-to-0.1.14",
                 "task_id": "TASK-0001",
                 "hostname": socket.gethostname(),
                 "pid": 2147483647,
@@ -1374,8 +1379,8 @@ class PolarisCoreTests(unittest.TestCase):
             vendor(ROOT, self.repo, False, discard_managed_changes=True)
         manifest_path = self.repo / "tools" / "polaris" / "install-manifest.json"
         manifest = read_json(manifest_path)
-        managed = {item["path"] for item in manifest["managed_files"]}
-        self.assertEqual(manifest["manifest_version"], 1)
+        managed = {item["path"]: item for item in manifest["managed_files"]}
+        self.assertEqual(manifest["manifest_version"], 2)
         self.assertEqual(
             manifest["polaris_version"],
             (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
@@ -1385,12 +1390,20 @@ class PolarisCoreTests(unittest.TestCase):
             managed,
         )
         self.assertIn("tools/polaris/scripts/validate_project.py", managed)
+        self.assertEqual(
+            managed[".agents/skills/engineering-task/SKILL.md"]["hash_mode"],
+            TEXT_HASH_MODE,
+        )
         self.assertIn("CLAUDE.md", manifest["preserved_files"])
         self.assertIn(".gitignore", manifest["preserved_files"])
 
         managed_skill = (
             self.repo / ".agents" / "skills" / "engineering-task" / "SKILL.md"
         )
+        lf_content = managed_skill.read_bytes().replace(b"\r\n", b"\n")
+        managed_skill.write_bytes(lf_content.replace(b"\n", b"\r\n"))
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
         managed_skill.write_text("tampered\n", encoding="utf-8")
         with self.assertRaisesRegex(RuleFailure, "hash mismatch"):
             validate_project(self.repo)
@@ -1404,6 +1417,81 @@ class PolarisCoreTests(unittest.TestCase):
             project_rules.read_text(encoding="utf-8"), "# Project-owned rules\n"
         )
         self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
+    def test_install_manifest_upgrades_v1_newlines_and_keeps_binary_hashes_strict(
+        self,
+    ) -> None:
+        """旧清单只兼容文本换行；v2 未知二进制资产仍执行原始字节哈希。"""
+        vendor(ROOT, self.repo, False)
+        manifest_path = self.repo / "tools" / "polaris" / "install-manifest.json"
+        manifest = read_json(manifest_path)
+        managed_skill = (
+            self.repo / ".agents" / "skills" / "engineering-task" / "SKILL.md"
+        )
+        lf_content = managed_skill.read_bytes().replace(b"\r\n", b"\n")
+        managed_skill.write_bytes(lf_content)
+        manifest["manifest_version"] = 1
+        for item in manifest["managed_files"]:
+            item.pop("hash_mode")
+            item["sha256"] = file_sha256(self.repo / item["path"])
+        write_json_atomic(manifest_path, manifest)
+
+        managed_skill.write_bytes(lf_content.replace(b"\n", b"\r\n"))
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+        vendor(ROOT, self.repo, True)
+
+        manifest = read_json(manifest_path)
+        binary_path = self.repo / "tools" / "polaris" / "opaque.bin"
+        binary_path.write_bytes(b"\x00line\n")
+        manifest["managed_files"].append(
+            {
+                "path": binary_path.relative_to(self.repo).as_posix(),
+                "hash_mode": BYTE_HASH_MODE,
+                "sha256": managed_file_sha256(binary_path, BYTE_HASH_MODE),
+            }
+        )
+        manifest["managed_files"].sort(key=lambda item: item["path"])
+        write_json_atomic(manifest_path, manifest)
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
+        binary_path.write_bytes(b"\x00line\r\n")
+        with self.assertRaisesRegex(RuleFailure, "hash mismatch"):
+            validate_project(self.repo)
+
+    def test_install_manifest_rejects_invalid_hash_contracts(self) -> None:
+        """清单版本、必填模式、路径分类和文本编码必须机械一致。"""
+        vendor(ROOT, self.repo, False)
+        manifest_path = self.repo / "tools" / "polaris" / "install-manifest.json"
+        manifest = read_json(manifest_path)
+        skill_relative = ".agents/skills/engineering-task/SKILL.md"
+        skill_item = next(
+            item
+            for item in manifest["managed_files"]
+            if item["path"] == skill_relative
+        )
+        managed_skill = self.repo / skill_relative
+
+        manifest["manifest_version"] = 1
+        write_json_atomic(manifest_path, manifest)
+        with self.assertRaisesRegex(RuleFailure, "v1 must not declare hash_mode"):
+            validate_project(self.repo)
+
+        manifest["manifest_version"] = 2
+        skill_item.pop("hash_mode")
+        write_json_atomic(manifest_path, manifest)
+        with self.assertRaisesRegex(RuleFailure, "lacks hash_mode"):
+            validate_project(self.repo)
+
+        skill_item["hash_mode"] = BYTE_HASH_MODE
+        write_json_atomic(manifest_path, manifest)
+        with self.assertRaisesRegex(RuleFailure, "hash mode mismatch"):
+            validate_project(self.repo)
+
+        skill_item["hash_mode"] = TEXT_HASH_MODE
+        write_json_atomic(manifest_path, manifest)
+        managed_skill.write_bytes(b"\xff")
+        with self.assertRaisesRegex(InputFailure, "not UTF-8"):
+            validate_project(self.repo)
 
     def test_vendor_rolls_back_after_partial_apply_failure(self) -> None:
         """事务应用中途失败时恢复全部旧输出，不留下半更新安装。"""
@@ -1520,7 +1608,8 @@ class PolarisCoreTests(unittest.TestCase):
         manifest["managed_files"].append(
             {
                 "path": stale.relative_to(self.repo).as_posix(),
-                "sha256": file_sha256(stale),
+                "hash_mode": TEXT_HASH_MODE,
+                "sha256": managed_file_sha256(stale, TEXT_HASH_MODE),
             }
         )
         write_json_atomic(manifest_path, manifest)
@@ -2668,17 +2757,30 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn("set `User action` to `None` while the worker is running", entry_text)
 
     def test_fresh_clone_recovers_the_committed_task_boundary(self) -> None:
-        """Fresh Clone 仅凭已提交的 vendored 协议和仓库状态恢复最近阶段边界。"""
+        """Fresh Clone 经 Git 换行转换后仍可恢复已提交的阶段边界。"""
         vendor(ROOT, self.repo, False)
         run_git(self.repo, "add", "-A")
         run_git(self.repo, "commit", "-q", "-m", "Polaris checkpoint")
         with tempfile.TemporaryDirectory(prefix="polaris-clone-") as clone_temp:
             clone = Path(clone_temp) / "repo"
-            subprocess.run(
-                ["git", "clone", "-q", str(self.repo), str(clone)],
-                check=True,
+            cloned = subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.autocrlf=true",
+                    "clone",
+                    "-q",
+                    str(self.repo),
+                    str(clone),
+                ],
                 text=True,
+                encoding="utf-8",
                 capture_output=True,
+            )
+            self.assertEqual(
+                cloned.returncode,
+                0,
+                f"git clone failed\nstdout:\n{cloned.stdout}\nstderr:\n{cloned.stderr}",
             )
             completed = subprocess.run(
                 [
@@ -2689,10 +2791,15 @@ class PolarisCoreTests(unittest.TestCase):
                     str(clone),
                     "--json",
                 ],
-                check=True,
                 text=True,
                 encoding="utf-8",
                 capture_output=True,
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                "recover_task.py failed\n"
+                f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
             )
             recovered = json.loads(completed.stdout)
         self.assertEqual(recovered["status"], "PASS")

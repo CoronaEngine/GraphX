@@ -8,7 +8,7 @@ Polaris 是一套运行在受支持 Coding Agent 宿主之上的、以仓库为�
 
 Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须按当前宿主适配器的语法主动调用 `engineering-task`（Codex 为 `$engineering-task`，Claude Code 为 `/engineering-task`）。其他阶段 Skills 只能由已启动的工作流在合法节点分派。
 
-> 当前版本：`0.1.13`（开发中）
+> 当前版本：`0.1.14`（开发中）
 
 ## 核心目标
 
@@ -83,7 +83,7 @@ v0.1 明确不实现：
 - Fresh-session Recovery、项目索引和可刷新 Working Set
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 74 个带场景日志的自动化测试；symlink 安全场景通过跨平台模拟覆盖，不要求主机能够创建 symlink
+- 76 个带场景日志的自动化测试；GitHub Actions 使用 Python 3.10 在 Linux、Windows 和 macOS 运行，symlink 安全场景通过跨平台模拟覆盖
 
 仍在建设：
 
@@ -187,7 +187,7 @@ python -m compileall -q scripts tests
 python scripts/vendor_project.py C:\path\to\target-repo
 ```
 
-该操作读取所有 `hosts/*/adapter.json`，把 `skills/` 按各宿主的调用语法、frontmatter、overlay 和 appendix 渲染到清单声明的目标目录，同时复制宿主专用文件。`hosts/`、`scripts/`、`schemas/`、`skills/`、`templates/`、`workflow/` 和 `VERSION` 会一起进入 `tools/polaris/`，使目标仓库能够独立初始化、升级和校验适配器。生成的 `tools/polaris/install-manifest.json` 记录所有 Polaris 受管文件的 SHA-256，以及 `CLAUDE.md`、`.gitignore` 这类仅保证存在、内容归项目所有的保留文件。
+该操作读取所有 `hosts/*/adapter.json`，把 `skills/` 按各宿主的调用语法、frontmatter、overlay 和 appendix 渲染到清单声明的目标目录，同时复制宿主专用文件。`hosts/`、`scripts/`、`schemas/`、`skills/`、`templates/`、`workflow/` 和 `VERSION` 会一起进入 `tools/polaris/`，使目标仓库能够独立初始化、升级和校验适配器。生成的 `tools/polaris/install-manifest.json` 记录所有 Polaris 受管文件的 SHA-256 与哈希模式；文本使用 LF 规范化哈希，二进制保持严格字节哈希。`CLAUDE.md`、`.gitignore` 这类文件只保证存在，内容仍归项目所有。
 
 目标仓库已经存在 vendored 文件时，显式使用 `--force` 才会更新：
 
@@ -197,7 +197,7 @@ python scripts/vendor_project.py C:\path\to\target-repo --force
 
 `--force` 会先校验旧安装清单，再在隔离事务目录中完整生成并校验新版；只有预生成成功后才替换目标文件。应用失败或进程崩溃时会从备份回滚/恢复，已从新版移除的受管文件不会残留，项目自有文件与清单外宿主配置不会被删除。受管文件有本地修改时默认拒绝覆盖；确认丢弃这些修改时必须额外传入 `--discard-managed-changes`。项目校验会拒绝受管文件缺失、哈希漂移或归属声明缺失。
 
-已初始化的 `0.1.12` 项目升级到当前版本时，在 vendoring 后显式执行：
+已初始化的 `0.1.13` 项目升级到当前版本时，在 vendoring 后显式执行：
 
 ```powershell
 python tools/polaris/scripts/migrate_project.py --repo .
@@ -205,7 +205,7 @@ python tools/polaris/scripts/migrate_project.py --repo .
 
 迁移只接受 `workflow/migrations.json` 中声明的相邻版本步骤；活动任务通过追加 `MIGRATE_POLARIS` 事件升级，不改写旧事件。迁移记录保存在 `.polaris/migrations/`，中断后重复同一命令会继续未完成步骤。没有声明的跨版本跳跃和 workflow 版本变化会被拒绝。
 
-`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code；`0.1.8` 补齐有限 Schema 子集；`0.1.9` 引入安装清单；`0.1.10` 引入显式迁移协议；`0.1.11` 加固 Adapter v2 的入口、overlay、symlink 与能力声明；`0.1.12` 统一写操作版本门禁、恢复迁移崩溃锁，并提供事务化 vendoring；`0.1.13` 引入 Plan Human 决策门禁，并解耦逻辑任务路径与物理目录。Workflow Graph 协议仍是 `0.1.2`。
+`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code；`0.1.8` 补齐有限 Schema 子集；`0.1.9` 引入安装清单；`0.1.10` 引入显式迁移协议；`0.1.11` 加固 Adapter v2 的入口、overlay、symlink 与能力声明；`0.1.12` 统一写操作版本门禁、恢复迁移崩溃锁，并提供事务化 vendoring；`0.1.13` 引入 Plan Human 决策门禁，并解耦逻辑任务路径与物理目录；`0.1.14` 让 vendored 文本哈希兼容 Git 的跨平台换行转换，同时保持二进制严格校验。Workflow Graph 协议仍是 `0.1.2`。
 
 ### 2. 初始化项目状态
 

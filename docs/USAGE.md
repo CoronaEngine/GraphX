@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.13。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.14。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -63,7 +63,7 @@ target-repo/
 python scripts/vendor_project.py C:\path\to\target-repo --force
 ```
 
-首次安装会生成 `tools/polaris/install-manifest.json`。其中 `managed_files` 保存 Polaris 完全拥有的输出及其 SHA-256；`preserved_files` 保存由 Polaris 创建或要求存在、但内容归项目维护的文件，例如 `CLAUDE.md` 和 `.gitignore`。项目校验会拒绝受管文件缺失、内容漂移和必要输出未登记。
+首次安装会生成 `tools/polaris/install-manifest.json`。其中 `managed_files` 保存 Polaris 完全拥有的输出、SHA-256 和 `hash_mode`：UTF-8 文本使用 `text_lf_sha256`，在哈希前把 CRLF/CR 规范化为 LF；未知或二进制资产使用 `byte_sha256`，保持严格字节校验。`preserved_files` 保存由 Polaris 创建或要求存在、但内容归项目维护的文件，例如 `CLAUDE.md` 和 `.gitignore`。项目校验会拒绝受管文件缺失、实际内容漂移、错误哈希模式和必要输出未登记。旧 v1 清单升级时只对已知文本路径兼容 LF/CRLF 转换，不放宽二进制校验。
 
 `--force` 会先验证旧清单中的 SHA-256，再在目标仓库外的隔离事务目录中生成 Skills、宿主文件、协议工具与新清单并完成哈希校验。预生成成功后才开始替换；应用失败会立即回滚，进程崩溃留下的本机事务会在下次运行时恢复。新版已移除的受管文件不会残留，保留文件和清单外项目配置不会被删除。检测到受管文件漂移时默认拒绝覆盖；只有明确接受丢弃这些修改时才使用 `--force --discard-managed-changes`。旧安装没有清单时仍使用已知目标目录的兼容更新逻辑。
 
@@ -560,7 +560,7 @@ git diff -- .agents/skills .claude/skills .claude/agents tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议；v0.1.11 加固 Adapter v2；v0.1.12 统一版本门禁、迁移锁恢复和事务化 vendoring；v0.1.13 增加 Plan Human 决策登记、CD 绑定、交接包传播和可移动任务根。Workflow 版本仍为 v0.1.2。
+确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议；v0.1.11 加固 Adapter v2；v0.1.12 统一版本门禁、迁移锁恢复和事务化 vendoring；v0.1.13 增加 Plan Human 决策登记、CD 绑定、交接包传播和可移动任务根；v0.1.14 增加跨平台文本哈希模式和旧清单换行兼容。Workflow 版本仍为 v0.1.2。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 

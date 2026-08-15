@@ -271,7 +271,7 @@ target-repo/
 
 新任务默认映射到 `.polaris/tasks/<TASK>`。位置路径必须位于 `.polaris/` 下、以 Task ID 结尾、使用 POSIX 分隔符、不得重复、越界或穿过 symlink。项目校验要求注册表与 `project.json.active_tasks` 完全一致，并继续对实际目录运行完整任务校验。旧 handoff 和 Working Set 保持原逻辑路径即可；改变 physical location 不得改写历史 artifact。v0.1.13 只建立可移动任务根和兼容迁移，不提供归档/恢复命令或归档可见性语义；后续物理归档应在此层之上增加事务化移动和 append-only Archive Event。
 
-每次 vendoring 必须生成并提交 `tools/polaris/install-manifest.json`。清单把完整归 Polaris 所有的输出登记为带 SHA-256 的 `managed_files`，把内容归项目维护但安装要求存在的文件登记为 `preserved_files`。项目校验必须验证受管文件存在、哈希一致且必要适配器输出已登记；强制升级必须先按旧清单删除旧受管文件，再生成新清单，不删除保留文件或清单外文件。没有旧清单的早期安装只能走已知目录的兼容更新，不能猜测并删除未知文件。
+每次 vendoring 必须生成并提交 `tools/polaris/install-manifest.json`。清单把完整归 Polaris 所有的输出登记为带 SHA-256 与明确 `hash_mode` 的 `managed_files`，把内容归项目维护但安装要求存在的文件登记为 `preserved_files`。已知 UTF-8 文本使用 `text_lf_sha256`，哈希前统一 CRLF/CR 为 LF，以保持 Git Fresh Clone 跨平台稳定；未知或二进制资产使用 `byte_sha256`，不得放宽字节校验。旧 v1 清单只允许已知文本文件按 LF/CRLF 等价验证，以便安全升级到 v2。项目校验必须验证受管文件存在、哈希模式与路径类型一致、哈希一致且必要适配器输出已登记；强制升级必须先按旧清单删除旧受管文件，再生成新清单，不删除保留文件或清单外文件。没有旧清单的早期安装只能走已知目录的兼容更新，不能猜测并删除未知文件。
 
 ### 宿主适配契约
 
@@ -604,7 +604,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和七个 Skill
 - [x] 建立版本化 `hosts/*/adapter.json` 契约，从宿主无关 Skills 生成 Codex/Claude Code 目录与 worker 文件，并将适配器、脚本、Schema、模板和 Workflow vendoring 到 `tools/polaris/`
 - [x] 将 Adapter 升级到 v2，校验真实入口、overlay 新增边界、symlink confinement 与宿主能力依赖
-- [x] 用安装清单登记 vendored 文件归属与 SHA-256，并以预生成、备份、回滚和崩溃恢复事务执行强制升级
+- [x] 用安装清单登记 vendored 文件归属、跨平台文本哈希/严格字节哈希，并以预生成、备份、回滚和崩溃恢复事务执行强制升级
 - [x] 建立显式相邻迁移注册表、可恢复迁移记录与 append-only 任务版本事件
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills
 - [x] 用 Claude Code 2.1.220 实际验证 `/engineering-task` 项目 Skill 与 `polaris-reviewer` 非 fork subagent 的发现和拒绝无 handoff 调用
