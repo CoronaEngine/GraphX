@@ -13,6 +13,7 @@ from internal.host_adapters import (
     load_host_adapters,
 )
 from internal.install_manifest import validate_install_manifest
+from internal.migration_protocol import validate_completed_migrations
 from internal.polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
 from internal.recovery_protocol import project_index_value
 from internal.task_layout import TASKS_ROOT
@@ -85,6 +86,7 @@ def validate(repo: Path) -> dict[str, object]:
 
     if root == repo / "tools" / "polaris":
         install_manifest = validate_install_manifest(repo, root)
+        validate_completed_migrations(repo, root)
         managed_paths = {
             item["path"] for item in install_manifest["managed_files"]
         }

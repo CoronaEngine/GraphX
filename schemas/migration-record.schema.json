@@ -1,0 +1,86 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris project migration record",
+    "type": "object",
+    "required": [
+        "record_version",
+        "migration_id",
+        "from_polaris_version",
+        "to_polaris_version",
+        "from_workflow_version",
+        "to_workflow_version",
+        "status",
+        "started_at",
+        "completed_at",
+        "tasks"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "record_version": {
+            "const": 1
+        },
+        "migration_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9.-]+-to-[a-z0-9.-]+$"
+        },
+        "from_polaris_version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "to_polaris_version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "from_workflow_version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "to_workflow_version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "status": {
+            "type": "string",
+            "enum": [
+                "IN_PROGRESS",
+                "COMPLETED"
+            ]
+        },
+        "started_at": {
+            "type": "string",
+            "minLength": 1
+        },
+        "completed_at": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "tasks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "task_id",
+                    "source_sequence",
+                    "migration_sequence"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "pattern": "^TASK-[0-9]{4}$"
+                    },
+                    "source_sequence": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "migration_sequence": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            }
+        }
+    }
+}

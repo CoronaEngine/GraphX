@@ -30,11 +30,14 @@ from internal.polaris_core import (  # noqa: E402
     file_sha256,
     protocol_root,
     read_json,
+    read_jsonl,
     rebuild_state_value,
     subject_diff_hash,
     validate_schema,
     write_json_atomic,
+    write_text_atomic,
 )
+from migrate_project import migrate as migrate_project  # noqa: E402
 from rebuild_state import rebuild  # noqa: E402
 from recover_task import recover  # noqa: E402
 from record_exploration import promote as promote_exploration  # noqa: E402
@@ -110,6 +113,28 @@ class PolarisCoreTests(unittest.TestCase):
         value["implementation_dispatch"]["authorized"] = True
         value["review_dispatch"]["authorized"] = True
         write_json_atomic(path, value)
+
+    def set_protocol_version(self, version: str) -> None:
+        """Rewrite the minimal test fixture as an older internally consistent project."""
+        project_path = self.repo / ".polaris" / "project.json"
+        project = read_json(project_path)
+        project["polaris_version"] = version
+        write_json_atomic(project_path, project)
+        state_path = self.task / "state.json"
+        state = read_json(state_path)
+        state["polaris_version"] = version
+        write_json_atomic(state_path, state)
+        event_path = self.task / "events.jsonl"
+        events = read_jsonl(event_path)
+        for event in events:
+            event["polaris_version"] = version
+        write_text_atomic(
+            event_path,
+            "".join(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for event in events
+            ),
+        )
 
     def dispatch_implementation(self) -> tuple[dict[str, object], dict[str, str]]:
         state = read_json(self.task / "state.json")
@@ -837,6 +862,102 @@ class PolarisCoreTests(unittest.TestCase):
         write_json_atomic(project_path, project)
         with self.assertRaises(RuleFailure):
             validate_project(self.repo)
+
+    def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
+        """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
+        self.set_protocol_version("0.1.9")
+        vendor(ROOT, self.repo, False)
+
+        result = migrate_project(self.repo)
+
+        self.assertEqual(result["from"], "0.1.9")
+        self.assertEqual(result["to"], "0.1.10")
+        self.assertEqual(result["migrated_tasks"], 1)
+        events = read_jsonl(self.task / "events.jsonl")
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["polaris_version"], "0.1.9")
+        self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
+        self.assertEqual(events[1]["from"], events[1]["to"])
+        self.assertEqual(events[1]["polaris_version"], "0.1.10")
+        record = read_json(
+            self.repo
+            / ".polaris"
+            / "migrations"
+            / "MIG-0.1.9-to-0.1.10.json"
+        )
+        self.assertEqual(record["status"], "COMPLETED")
+        self.assertIsNotNone(record["completed_at"])
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
+    def test_migration_resumes_after_event_append_without_duplication(self) -> None:
+        """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
+        self.set_protocol_version("0.1.9")
+        vendor(ROOT, self.repo, False)
+        state = read_json(self.task / "state.json")
+        started_at = "2026-08-15T00:00:00Z"
+        record = {
+            "record_version": 1,
+            "migration_id": "0.1.9-to-0.1.10",
+            "from_polaris_version": "0.1.9",
+            "to_polaris_version": "0.1.10",
+            "from_workflow_version": "0.1.2",
+            "to_workflow_version": "0.1.2",
+            "status": "IN_PROGRESS",
+            "started_at": started_at,
+            "completed_at": None,
+            "tasks": [
+                {
+                    "task_id": "TASK-0001",
+                    "source_sequence": 0,
+                    "migration_sequence": 1,
+                }
+            ],
+        }
+        write_json_atomic(
+            self.repo
+            / ".polaris"
+            / "migrations"
+            / "MIG-0.1.9-to-0.1.10.json",
+            record,
+        )
+        append_jsonl(
+            self.task / "events.jsonl",
+            {
+                "sequence": 1,
+                "timestamp": started_at,
+                "event": "MIGRATE_POLARIS",
+                "gate": "explicit_protocol_migration",
+                "from": state["status"],
+                "to": state["status"],
+                "task_id": "TASK-0001",
+                "polaris_version": "0.1.10",
+                "workflow_version": "0.1.2",
+                "current_revision": state["current_revision"],
+                "rigor": state["rigor"],
+                "blocked_from": state["blocked_from"],
+                "blocker": state["blocker"],
+                "artifacts": state["artifacts"],
+                "subject": state["subject"],
+                "migration_id": "0.1.9-to-0.1.10",
+            },
+        )
+
+        migrate_project(self.repo)
+
+        self.assertEqual(len(read_jsonl(self.task / "events.jsonl")), 2)
+        self.assertEqual(read_json(self.task / "state.json")["sequence"], 1)
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
+    def test_migration_rejects_an_undeclared_version_jump(self) -> None:
+        """没有注册的跨版本路径机械拒绝，且不创建部分迁移记录。"""
+        self.set_protocol_version("0.1.8")
+        vendor(ROOT, self.repo, False)
+
+        with self.assertRaisesRegex(RuleFailure, "no explicit adjacent migration"):
+            migrate_project(self.repo)
+
+        self.assertFalse((self.repo / ".polaris" / "migrations").exists())
+        self.assertEqual(read_json(self.repo / ".polaris" / "project.json")["polaris_version"], "0.1.8")
 
     def test_risk_flag_requires_r2(self) -> None:
         """任一高风险标记为 true 时，非 R2 Work Item 会被机械拒绝。"""

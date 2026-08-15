@@ -421,7 +421,9 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 | `VERIFIED` | 当前 subject 对应的 Validation JSON | 所有 AC 为 PASS；验证命令退出码有效 |
 | `CLOSED` | Result JSON | `validate_task.py` 全 PASS；R2 已获最终 Human approval |
 
-`.polaris/workflow.json` 保存当前项目实际使用且版本锁定的节点、边、依赖和门禁 ID；`tools/polaris/workflow/default-workflow.json` 只用于初始化。`transition_task.py` 只接受图中边并先运行对应 validators，Skill 不直接编辑 `state` 字段。v0.1 遇到 `polaris_version` 或 `workflow_version` 不匹配时拒绝执行，不自动迁移。
+`.polaris/workflow.json` 保存当前项目实际使用且版本锁定的节点、边、依赖和门禁 ID；`tools/polaris/workflow/default-workflow.json` 只用于初始化。`transition_task.py` 只接受图中边并先运行对应 validators，Skill 不直接编辑 `state` 字段。v0.1 遇到 `polaris_version` 或 `workflow_version` 不匹配时拒绝正常执行，不做隐式迁移。
+
+版本升级必须先 vendoring 目标协议，再显式运行 vendored `migrate_project.py`。`workflow/migrations.json` 是迁移路径唯一且 append-only 的注册表，一次只执行一个从当前版本到目标版本的相邻步骤；历史步骤必须保留以校验已提交记录。v1 支持 `replace_version` 项目策略和 `append_version_event` 任务策略：后者为每个任务追加保持原状态的 `MIGRATE_POLARIS` 事件，不改写 append-only 历史。迁移以 `.polaris/migrations/MIG-*.json` 记录 `IN_PROGRESS/COMPLETED` 和各任务前后 sequence；重跑必须可恢复且不得重复事件。未知路径、跨版本跳跃、冻结 workflow 变化、任务集合并发变化和不完整记录都必须机械拒绝。改变 workflow 或数据形态的新迁移，必须先增加新的声明式策略和针对性测试。
 
 ## 8. Context Bootstrap 与 Working Set
 
@@ -578,6 +580,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和七个 Skill
 - [x] 建立版本化 `hosts/*/adapter.json` 契约，从宿主无关 Skills 生成 Codex/Claude Code 目录与 worker 文件，并将适配器、脚本、Schema、模板和 Workflow vendoring 到 `tools/polaris/`
 - [x] 用安装清单登记 vendored 文件归属与 SHA-256，并在强制升级时清除旧版受管文件
+- [x] 建立显式相邻迁移注册表、可恢复迁移记录与 append-only 任务版本事件
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills
 - [x] 用 Claude Code 2.1.220 实际验证 `/engineering-task` 项目 Skill 与 `polaris-reviewer` 非 fork subagent 的发现和拒绝无 handoff 调用
 - [x] `engineering-task` 实现仅显式触发、恢复、分派、门禁停止规则

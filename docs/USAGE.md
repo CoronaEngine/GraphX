@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.9。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.10。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -516,13 +516,29 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 
 ## 12. 更新项目中的 Polaris
 
-先比较源版本与目标项目的 `.polaris/project.json` / `.polaris/workflow.json`。只有版本兼容，或已经准备了单独迁移变更时，才从新版 Polaris 源仓库运行：
+升级必须从干净、已提交的目标仓库开始，并把 vendoring 与 Authority State 迁移视为同一个可审查变更。先比较源版本与目标项目的 `.polaris/project.json` / `.polaris/workflow.json`，再从新版 Polaris 源仓库运行：
 
 ```powershell
 python scripts/vendor_project.py C:\path\to\target-repo --force
 ```
 
-然后在目标仓库检查并校验：
+如果 `.polaris/project.json` 的版本已经等于新 `VERSION`，无需迁移。否则进入目标仓库，执行且只执行 vendored 新版本提供的迁移脚本：
+
+```powershell
+python tools/polaris/scripts/migrate_project.py --repo .
+```
+
+迁移协议具有以下固定规则：
+
+1. `workflow/migrations.json` 是支持路径的唯一、append-only 注册表；历史步骤必须保留，以便校验已提交的迁移记录。一次命令只允许从当前项目版本迁移到 vendored 版本的一个显式相邻步骤，不推断、不跨级。
+2. 注册步骤同时绑定源/目标 `polaris_version` 与 `workflow_version`。v1 迁移策略不改变冻结 workflow；需要改变 workflow 时必须先升级迁移协议和策略实现。
+3. 项目版本由 `replace_version` 策略更新；每个现有任务由 `append_version_event` 策略追加同状态的 `MIGRATE_POLARIS` 事件，旧 `events.jsonl` 行不可修改。
+4. `.polaris/migrations/MIG-<from>-to-<to>.json` 先写为 `IN_PROGRESS`，全部投影更新后改为 `COMPLETED`。若进程在中间终止，重新执行同一命令会验证并复用已经追加的事件，不会重复迁移。
+5. 迁移完成后脚本自动运行项目校验；`validate_project.py` 会拒绝未完成记录、缺失/伪造的任务迁移事件或版本不一致。
+
+没有注册路径时不要手改版本号。应先取得包含所需相邻步骤的 Polaris 版本，逐级完成并分别提交；任何失败都先保留 `.polaris/migrations/` 和事件现场，修复原因后重跑同一迁移命令。
+
+然后检查：
 
 ```powershell
 git status --short
@@ -530,7 +546,7 @@ git diff -- .agents/skills .claude/skills .claude/agents tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后提交宿主 Skills/agents 与 `tools/polaris/`。安装清单也必须随 vendored 输出一起提交；`validate_project.py` 会用它校验受管文件哈希。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入版本化声明式宿主适配器并内置 Codex 与 Claude Code；v0.1.8 补齐有限 Schema 子集的长度、数量、唯一性和 JSON 实例相等规则；v0.1.9 引入带 SHA-256 的 vendored 安装清单与旧受管文件清理。Workflow 版本仍为 v0.1.2。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
+确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议。Workflow 版本仍为 v0.1.2。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 

@@ -32,6 +32,9 @@
         "gate": {
             "type": "string"
         },
+        "migration_id": {
+            "type": "string"
+        },
         "from": {
             "type": [
                 "string",
