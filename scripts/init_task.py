@@ -16,12 +16,16 @@ from internal.polaris_core import (
     read_json,
     require_protocol_compatible,
     run_main,
-    task_dir,
     utc_now,
     write_json_atomic,
 )
 from internal.recovery_protocol import refresh_project_index
 from internal.plan_decision_protocol import empty_plan_decisions
+from internal.task_location_protocol import (
+    canonical_task_directory,
+    load_task_locations,
+    register_task_location,
+)
 from materialize_task_layout import materialize_task_directories
 from internal.task_layout import (
     events_path,
@@ -37,7 +41,12 @@ from internal.task_layout import (
 def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
     root = protocol_root(repo)
     require_protocol_compatible(repo)
-    directory = task_dir(repo, task_id)
+    existing_locations = load_task_locations(repo)
+    if task_id in existing_locations:
+        raise InputFailure(
+            f"task already exists at its registered location: {existing_locations[task_id]}"
+        )
+    directory = canonical_task_directory(repo, task_id)
     if directory.exists():
         raise InputFailure(f"task already exists: {directory}")
     project_path = repo / ".polaris" / "project.json"
@@ -76,6 +85,7 @@ def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
         "subject": None,
     }
     append_jsonl(events_path(directory), event)
+    register_task_location(repo, task_id, directory)
     project.setdefault("active_tasks", []).append(task_id)
     write_json_atomic(project_path, project)
     refresh_project_index(repo)

@@ -15,6 +15,7 @@ from .polaris_core import (
 )
 from .review_response_protocol import validate_review_response
 from .task_layout import evidence_dir
+from .task_location_protocol import logical_repo_path, resolve_repo_reference
 
 
 MAX_REVIEW_ATTEMPTS = 3
@@ -136,55 +137,50 @@ def validate_handoff(
     )
     expected_paths = {
         "project_rules": "AGENTS.md",
-        "work_item": current_work_item_path(
-            directory, state["current_revision"]
-        ).relative_to(repo).as_posix(),
-        "plan": (directory / plan_reference["path"]).relative_to(repo).as_posix(),
-        "working_set": (
-            directory / working_set_reference["path"]
-        ).relative_to(repo).as_posix(),
-        "implementation": (
-            directory / implementation_reference["path"]
-        ).relative_to(repo).as_posix(),
-        "knowledge_delta": (
-            directory / knowledge_reference["path"]
-        ).relative_to(repo).as_posix(),
-        "evidence": evidence_dir(
-            directory, state["current_revision"]
-        ).relative_to(repo).as_posix(),
+        "work_item": logical_repo_path(
+            repo, current_work_item_path(directory, state["current_revision"])
+        ),
+        "plan": logical_repo_path(repo, directory / plan_reference["path"]),
+        "working_set": logical_repo_path(
+            repo, directory / working_set_reference["path"]
+        ),
+        "implementation": logical_repo_path(
+            repo, directory / implementation_reference["path"]
+        ),
+        "knowledge_delta": logical_repo_path(
+            repo, directory / knowledge_reference["path"]
+        ),
+        "evidence": logical_repo_path(
+            repo, evidence_dir(directory, state["current_revision"])
+        ),
     }
     plan_decisions_reference = state_reference(
         directory, state, "plan_decisions", required=False
     )
     if plan_decisions_reference is not None:
-        expected_paths["plan_decisions"] = (
-            directory / plan_decisions_reference["path"]
-        ).relative_to(repo).as_posix()
+        expected_paths["plan_decisions"] = logical_repo_path(
+            repo, directory / plan_decisions_reference["path"]
+        )
     elif "plan_decisions" in items_by_role:
         raise RuleFailure("legacy review handoff must not invent Plan decisions")
     if prior_reference is not None:
-        expected_paths["previous_review"] = (
-            directory / prior_reference["path"]
-        ).relative_to(repo).as_posix()
+        expected_paths["previous_review"] = logical_repo_path(
+            repo, directory / prior_reference["path"]
+        )
         response_reference = state_reference(
             directory, state, "review_response", required=False
         )
         if response_reference is not None:
-            expected_paths["review_response"] = (
-                directory / response_reference["path"]
-            ).relative_to(repo).as_posix()
+            expected_paths["review_response"] = logical_repo_path(
+                repo, directory / response_reference["path"]
+            )
     for role, expected_path in expected_paths.items():
         entries = items_by_role.get(role, [])
         if len(entries) != 1 or entries[0]["path"] != expected_path:
             raise RuleFailure(f"review handoff role {role} targets the wrong path")
 
-    repo_root = repo.resolve()
     for item in handoff["package"]:
-        path = (repo_root / item["path"]).resolve()
-        try:
-            path.relative_to(repo_root)
-        except ValueError as exc:
-            raise RuleFailure(f"review package path escapes repository: {item['path']}") from exc
+        path = resolve_repo_reference(repo, item["path"])
         if item["kind"] == "file":
             if not path.is_file() or item["sha256"] != file_sha256(path):
                 raise RuleFailure(f"review package file changed or is missing: {item['path']}")

@@ -26,6 +26,7 @@ from internal.working_set_protocol import validate_working_set, working_set_entr
 from validate_project import validate as validate_project
 from validate_task import validate as validate_task
 from internal.task_layout import events_path, progress_path, state_path, working_set_path
+from internal.task_location_protocol import logical_repo_path
 
 
 def recover(repo: Path, task_id: str) -> dict[str, Any]:
@@ -58,19 +59,19 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
         },
         {
             "section": "Bootstrap",
-            "path": state_path(directory).relative_to(repo).as_posix(),
+            "path": logical_repo_path(repo, state_path(directory)),
             "reason": "current authority projection",
             "discovered_from": "active task index",
         },
         {
             "section": "Bootstrap",
-            "path": work_item_path.relative_to(repo).as_posix(),
+            "path": logical_repo_path(repo, work_item_path),
             "reason": "frozen execution contract",
             "discovered_from": "current task revision",
         },
         {
             "section": "Bootstrap",
-            "path": task_working_set_path.relative_to(repo).as_posix(),
+            "path": logical_repo_path(repo, task_working_set_path),
             "reason": "bounded task context cache",
             "discovered_from": "fixed recovery order",
         },
@@ -95,13 +96,13 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
                 progress = validate_progress(repo, task_id)
                 live_progress = {
                     "available": True,
-                    "path": task_progress_path.relative_to(repo).as_posix(),
+                    "path": logical_repo_path(repo, task_progress_path),
                     "value": progress,
                 }
             except (RuleFailure, InputFailure) as exc:
                 live_progress = {
                     "available": False,
-                    "path": task_progress_path.relative_to(repo).as_posix(),
+                    "path": logical_repo_path(repo, task_progress_path),
                     "reason": str(exc),
                 }
     return {

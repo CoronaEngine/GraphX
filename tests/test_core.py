@@ -58,7 +58,12 @@ from record_plan_decision import record as record_plan_decision  # noqa: E402
 from transition_task import transition  # noqa: E402
 from internal.transition_effects import apply_event_effects  # noqa: E402
 from update_implementation_progress import update as update_implementation_progress  # noqa: E402
-from internal.implementation_protocol import step_results, validate_progress  # noqa: E402
+from internal.implementation_protocol import (  # noqa: E402
+    step_results,
+    validate_handoff as validate_implementation_handoff,
+    validate_progress,
+)
+from internal.task_location_protocol import load_task_locations  # noqa: E402
 from materialize_task_layout import (  # noqa: E402
     materialize_template_tree,
     validate_materialized_template_tree,
@@ -635,6 +640,29 @@ class PolarisCoreTests(unittest.TestCase):
         state_text = (self.task / "state.json").read_text(encoding="utf-8")
         self.assertIn('\n    "task_id":', state_text)
 
+    def test_task_location_registry_is_validated_without_real_symlinks(self) -> None:
+        """任务位置登记拒绝重复位置和 symlink，安全测试不依赖平台创建能力。"""
+        registry_path = self.repo / ".polaris" / "task-locations.json"
+        locations = load_task_locations(self.repo)
+        self.assertEqual(locations, {"TASK-0001": self.task.absolute()})
+
+        duplicate = read_json(registry_path)
+        duplicate["locations"].append(copy.deepcopy(duplicate["locations"][0]))
+        write_json_atomic(registry_path, duplicate)
+        with self.assertRaises(RuleFailure):
+            load_task_locations(self.repo)
+
+        duplicate["locations"].pop()
+        write_json_atomic(registry_path, duplicate)
+        with simulated_symlinks(registry_path):
+            with self.assertRaises(RuleFailure):
+                load_task_locations(self.repo)
+        with self.assertRaises(InputFailure):
+            init_task(self.repo, "../TASK-0002", "R1")
+        registry_path.unlink()
+        with self.assertRaises(InputFailure):
+            validate(self.repo, "TASK-0001")
+
     def test_legal_and_eight_illegal_work_item_fixtures(self) -> None:
         """合法 Work Item 通过，八类字段、ID、Revision 和风险格式错误被拒绝。"""
         fixture = read_json(ROOT / "tests" / "fixtures" / "work-item-cases.json")
@@ -1173,6 +1201,7 @@ class PolarisCoreTests(unittest.TestCase):
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
         self.set_protocol_version("0.1.12")
+        (self.repo / ".polaris" / "task-locations.json").unlink()
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
@@ -1194,6 +1223,10 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
+        self.assertEqual(
+            set(load_task_locations(self.repo)),
+            {"TASK-0001"},
+        )
         self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
@@ -2168,6 +2201,86 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(result["to"], "IMPLEMENTED")
 
+    def test_frozen_task_references_survive_physical_root_relocation(self) -> None:
+        """任务整体搬迁后，逻辑路径、handoff、进度、探索与恢复仍可解析。"""
+        self.enter_implementing()
+        handoff, _ = self.dispatch_implementation()
+        recorded = record_exploration(
+            self.repo,
+            "TASK-0001",
+            "scripts",
+            "The task root may be movable",
+            "Freeze a handoff before relocating the complete task directory",
+            "The location resolver can rebind logical task references",
+            "inconclusive",
+            "Physical relocation had not yet been tested",
+            "Retry after introducing the location registry",
+            [],
+        )
+        promote_exploration(self.repo, "TASK-0001", recorded["exploration_id"])
+        task_package_paths = {
+            item["path"]
+            for item in handoff["package"]
+            if item["path"].startswith(".polaris/tasks/TASK-0001/")
+        }
+        self.assertTrue(task_package_paths)
+
+        old_directory = self.task
+        relocated = self.repo / ".polaris" / "archive" / "tasks" / "TASK-0001"
+        relocated.parent.mkdir(parents=True)
+        shutil.move(str(old_directory), str(relocated))
+        registry_path = self.repo / ".polaris" / "task-locations.json"
+        registry = read_json(registry_path)
+        registry["locations"][0]["path"] = (
+            ".polaris/archive/tasks/TASK-0001"
+        )
+        write_json_atomic(registry_path, registry)
+
+        self.assertEqual(load_task_locations(self.repo)["TASK-0001"], relocated.absolute())
+        with self.assertRaises(InputFailure):
+            init_task(self.repo, "TASK-0001", "R1")
+        self.assertFalse(old_directory.exists())
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "IMPLEMENTING")
+        state = read_json(relocated / "state.json")
+        validate_implementation_handoff(
+            self.repo,
+            protocol_root(self.repo),
+            relocated,
+            state,
+            True,
+        )
+
+        title = "Polaris Implement · TASK-0001 · r001 · attempt 1"
+        progress = update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "Pending",
+            "INITIALIZE",
+        )
+        self.assertTrue((relocated / "runtime" / "progress.json").is_file())
+        self.assertEqual(
+            run_git(
+                self.repo,
+                "check-ignore",
+                ".polaris/archive/tasks/TASK-0001/runtime/progress.json",
+            ),
+            ".polaris/archive/tasks/TASK-0001/runtime/progress.json",
+        )
+        self.assertEqual(progress["value"]["handoff_path"], (
+            ".polaris/tasks/TASK-0001/implementations/r001/handoff-001.json"
+        ))
+        recovered = recover(self.repo, "TASK-0001")
+        self.assertTrue(recovered["live_implementation_progress"]["available"])
+        recovered_paths = {
+            item["path"] for item in recovered["minimum_working_set"]["entries"]
+        }
+        self.assertIn(
+            ".polaris/tasks/TASK-0001/revisions/work-item-r001.json",
+            recovered_paths,
+        )
+
     def test_live_implementation_progress_is_queryable_and_ignored(self) -> None:
         """事件驱动进度只生成四空格 JSON，并默认排除出 Git。"""
         self.enter_implementing()
@@ -2983,6 +3096,26 @@ class PolarisCoreTests(unittest.TestCase):
                 None,
                 None,
             )
+
+    def test_review_handoff_survives_physical_root_relocation(self) -> None:
+        """Reviewer 冻结包使用逻辑任务路径，整体搬迁不改变其内容或校验结果。"""
+        self.test_implementation_and_final_documentation_subjects_are_bound()
+        handoff, _ = self.start_review()
+        self.assertIn(
+            ".polaris/tasks/TASK-0001/PLAN.md",
+            {item["path"] for item in handoff["package"]},
+        )
+        old_directory = self.task
+        relocated = self.repo / ".polaris" / "archive" / "tasks" / "TASK-0001"
+        relocated.parent.mkdir(parents=True)
+        shutil.move(str(old_directory), str(relocated))
+        registry_path = self.repo / ".polaris" / "task-locations.json"
+        registry = read_json(registry_path)
+        registry["locations"][0]["path"] = ".polaris/archive/tasks/TASK-0001"
+        write_json_atomic(registry_path, registry)
+
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "REVIEWING")
 
     def test_validation_rework_supersedes_the_accepted_review(self) -> None:
         """Validation 返工保留已接受 Review，下一 handoff 递增 attempt 且无需伪造 Review Response。"""

@@ -25,6 +25,7 @@ from internal.polaris_core import (
     write_json_atomic,
 )
 from internal.artifact_protocol import normalized_reference
+from internal.task_location_protocol import logical_repo_path, resolve_repo_reference
 from internal.task_layout import (
     implementation_handoff_path,
     implementation_relative_path,
@@ -36,10 +37,7 @@ from internal.working_set_protocol import validate_working_set
 
 def _entry(repo: Path, role: str, path: Path) -> dict[str, Any]:
     resolved = path.resolve()
-    try:
-        relative = resolved.relative_to(repo.resolve()).as_posix()
-    except ValueError as exc:
-        raise RuleFailure(f"Implementation package path escapes repository: {path}") from exc
+    relative = logical_repo_path(repo, resolved)
     if resolved.is_file():
         kind = "file"
         digest = file_sha256(resolved)
@@ -92,13 +90,7 @@ def build(repo: Path, task_id: str) -> dict[str, Any]:
         raw_path = working_entry["path"]
         if raw_path == ".polaris/project-index.json":
             continue
-        candidate = (repo / raw_path).resolve()
-        try:
-            candidate.relative_to(repo.resolve())
-        except ValueError as exc:
-            raise RuleFailure(
-                f"Working Set path escapes repository: {raw_path}"
-            ) from exc
+        candidate = resolve_repo_reference(repo, raw_path)
         if candidate.exists():
             entry = _entry(repo, "working_set_reference", candidate)
             if entry["path"] not in seen_paths:

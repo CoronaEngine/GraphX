@@ -22,6 +22,7 @@ from internal.polaris_core import (
     write_json_atomic,
 )
 from internal.task_layout import TASKS_ROOT, exploration_path, state_path, task_relative_path
+from internal.task_location_protocol import load_task_locations, logical_repo_path
 
 
 EXPLORATION_ID = re.compile(r"^EXP-([0-9]{4})\.json$")
@@ -30,11 +31,18 @@ EXPLORATION_ID = re.compile(r"^EXP-([0-9]{4})\.json$")
 def _next_id(repo: Path) -> str:
     numbers: list[int] = []
     roots = [repo / ".polaris" / "explorations"]
-    roots.extend(
-        (repo / TASKS_ROOT).glob(
-            f"TASK-*/{task_relative_path('explorations').as_posix()}"
+    locations = load_task_locations(repo, required=False)
+    if locations:
+        roots.extend(
+            directory / task_relative_path("explorations")
+            for directory in locations.values()
         )
-    )
+    else:
+        roots.extend(
+            (repo / TASKS_ROOT).glob(
+                f"TASK-*/{task_relative_path('explorations').as_posix()}"
+            )
+        )
     for root in roots:
         if not root.is_dir():
             continue
@@ -118,7 +126,7 @@ def promote(repo: Path, task_id: str, exploration_id: str) -> dict[str, Any]:
         raise InputFailure(f"project exploration is immutable and already exists: {destination}")
     promoted = dict(value)
     promoted["scope"] = "project"
-    promoted["promoted_from"] = source.relative_to(repo).as_posix()
+    promoted["promoted_from"] = logical_repo_path(repo, source)
     write_json_atomic(destination, promoted)
     validate_json_file(destination, root / "schemas" / "exploration.schema.json")
     return {

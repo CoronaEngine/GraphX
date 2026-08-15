@@ -17,7 +17,7 @@ from internal.install_manifest import validate_install_manifest
 from internal.migration_protocol import validate_completed_migrations
 from internal.polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
 from internal.recovery_protocol import project_index_value
-from internal.task_layout import TASKS_ROOT
+from internal.task_location_protocol import resolve_repo_reference, validate_task_locations
 from validate_task import validate as validate_task
 
 
@@ -125,15 +125,8 @@ def validate(repo: Path) -> dict[str, object]:
                         f"{relative}"
                     )
 
-    task_root = repo / TASKS_ROOT
     listed = set(project["active_tasks"])
-    actual = {path.name for path in task_root.glob("TASK-[0-9][0-9][0-9][0-9]") if path.is_dir()}
-    orphaned = actual - listed
-    missing = listed - actual
-    if orphaned or missing:
-        raise RuleFailure(
-            f"task index mismatch; orphaned={sorted(orphaned)}, missing={sorted(missing)}"
-        )
+    validate_task_locations(repo, listed)
     for task_id in sorted(listed):
         validate_task(repo, task_id)
     exploration_schema = root / "schemas" / "exploration.schema.json"
@@ -141,13 +134,7 @@ def validate(repo: Path) -> dict[str, object]:
         exploration = validate_json_file(exploration_path, exploration_schema)
         if exploration["scope"] != "project" or not exploration["promoted_from"]:
             raise RuleFailure(f"invalid project exploration scope: {exploration_path}")
-        source_path = (repo / exploration["promoted_from"]).resolve()
-        try:
-            source_path.relative_to(repo.resolve())
-        except ValueError as exc:
-            raise RuleFailure(
-                f"project exploration source escapes repository: {exploration_path}"
-            ) from exc
+        source_path = resolve_repo_reference(repo, exploration["promoted_from"])
         if not source_path.is_file():
             raise RuleFailure(f"project exploration source is missing: {source_path}")
         source = validate_json_file(source_path, exploration_schema)

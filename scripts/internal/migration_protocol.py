@@ -10,6 +10,7 @@ from .polaris_core import (
     RuleFailure,
     acquire_migration_lock,
     append_jsonl,
+    ensure_gitignore_rule,
     load_events_checked,
     read_json,
     rebuild_state_value,
@@ -20,7 +21,8 @@ from .polaris_core import (
     write_json_atomic,
 )
 from .recovery_protocol import refresh_project_index
-from .task_layout import events_path, state_path
+from .task_location_protocol import initialize_task_locations
+from .task_layout import ARCHIVED_RUNTIME_IGNORE_PATTERN, events_path, state_path
 
 
 MIGRATIONS_ROOT = Path(".polaris/migrations")
@@ -340,6 +342,8 @@ def migrate_project(repo: Path, protocol_root: Path) -> dict[str, Any]:
 
         project["polaris_version"] = step["to_polaris_version"]
         project["workflow_version"] = step["to_workflow_version"]
+        initialize_task_locations(repo, project["active_tasks"])
+        ensure_gitignore_rule(repo, ARCHIVED_RUNTIME_IGNORE_PATTERN)
         write_json_atomic(project_path, project)
         refresh_project_index(repo)
         record["status"] = "COMPLETED"

@@ -22,6 +22,7 @@ from internal.polaris_core import (
     write_json_atomic,
 )
 from internal.task_layout import state_path, task_root_relative_path
+from internal.task_location_protocol import resolve_repo_reference
 
 
 PHASES = (
@@ -116,7 +117,7 @@ def update(
     if state["status"] not in {"IMPLEMENTING", "IMPLEMENTED"}:
         raise RuleFailure("Implementation progress can only update while IMPLEMENTING or IMPLEMENTED")
     handoff, reference = validate_handoff(repo, root, directory, state)
-    progress_path = repo / handoff["progress_json_path"]
+    progress_path = resolve_repo_reference(repo, handoff["progress_json_path"])
     existing = read_json(progress_path) if progress_path.exists() else None
 
     if event == "INITIALIZE":

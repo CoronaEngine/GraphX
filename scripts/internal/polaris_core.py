@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .task_layout import task_root_relative_path
 from .task_layout import work_item_path as current_work_item_path
 
 
@@ -228,7 +227,9 @@ def require_protocol_compatible(
 def task_dir(repo: Path, task_id: str) -> Path:
     if not re.fullmatch(r"TASK-[0-9]{4}", task_id):
         raise InputFailure(f"invalid task id: {task_id}")
-    return repo / task_root_relative_path(task_id)
+    from .task_location_protocol import resolve_task_directory
+
+    return resolve_task_directory(repo, task_id)
 
 
 def _matches_type(value: Any, expected: str) -> bool:

@@ -13,6 +13,7 @@ from .polaris_core import (
     validate_schema,
 )
 from .task_layout import state_path, working_set_path
+from .task_location_protocol import resolve_repo_reference
 
 
 SECTIONS = ["Documents", "Code", "Tests", "Decisions", "Explorations", "Unknowns"]
@@ -34,7 +35,6 @@ def validate_working_set_value(
         raise RuleFailure("Working Set targets the wrong Work Item revision")
 
     seen_paths: set[str] = set()
-    repo_root = repo.resolve()
     for entry in value["entries"]:
         raw_path = entry["path"]
         if raw_path in seen_paths:
@@ -42,11 +42,7 @@ def validate_working_set_value(
         seen_paths.add(raw_path)
         if raw_path.startswith("<") and raw_path.endswith(">"):
             continue
-        candidate = (repo / raw_path).resolve()
-        try:
-            candidate.relative_to(repo_root)
-        except ValueError as exc:
-            raise RuleFailure(f"Working Set path escapes repository: {raw_path}") from exc
+        resolve_repo_reference(repo, raw_path)
     return value
 
 

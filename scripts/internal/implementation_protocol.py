@@ -18,6 +18,7 @@ from .polaris_core import (
     validate_schema,
 )
 from .artifact_protocol import normalized_reference
+from .task_location_protocol import logical_repo_path, resolve_repo_reference
 from .task_layout import (
     implementation_relative_path,
     state_path,
@@ -66,13 +67,7 @@ def _validate_package(repo: Path, package: list[dict[str, Any]]) -> None:
     if len(paths) != len(set(paths)):
         raise RuleFailure("Implementation handoff package contains duplicate paths")
     for entry in package:
-        path = (repo / entry["path"]).resolve()
-        try:
-            path.relative_to(repo.resolve())
-        except ValueError as exc:
-            raise RuleFailure(
-                f"Implementation handoff path escapes repository: {entry['path']}"
-            ) from exc
+        path = resolve_repo_reference(repo, entry["path"])
         if entry["kind"] == "file" and path.is_file():
             actual_hash = file_sha256(path)
         elif entry["kind"] == "directory" and path.is_dir():
@@ -153,7 +148,7 @@ def validate_handoff_value(
         entry = package.get(role)
         if entry is None:
             raise RuleFailure(f"Implementation handoff package lacks role: {role}")
-        expected_path = path.resolve().relative_to(repo.resolve()).as_posix()
+        expected_path = logical_repo_path(repo, path)
         if entry["path"] != expected_path or (
             verify_package and entry["sha256"] != file_sha256(path)
         ):
@@ -291,7 +286,7 @@ def validate_progress(repo: Path, task_id: str) -> dict[str, Any]:
             "Live implementation progress is valid only while IMPLEMENTING or IMPLEMENTED"
         )
     handoff, reference = validate_handoff(repo, root, directory, state)
-    path = repo / handoff["progress_json_path"]
+    path = resolve_repo_reference(repo, handoff["progress_json_path"])
     progress = validate_json_file(
         path, root / "schemas" / "implementation-progress.schema.json"
     )

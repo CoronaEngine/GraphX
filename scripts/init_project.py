@@ -17,7 +17,11 @@ from internal.polaris_core import (
     run_main,
     write_json_atomic,
 )
-from internal.task_layout import RUNTIME_IGNORE_PATTERN, TASKS_ROOT
+from internal.task_layout import (
+    ARCHIVED_RUNTIME_IGNORE_PATTERN,
+    RUNTIME_IGNORE_PATTERN,
+    TASKS_ROOT,
+)
 
 
 def initialize(repo: Path, project_id: str) -> dict[str, str]:
@@ -31,6 +35,10 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
     template = read_json(root / "templates" / "project.json")
     template["project_id"] = project_id
     write_json_atomic(polaris / "project.json", template)
+    write_json_atomic(
+        polaris / "task-locations.json",
+        read_json(root / "templates" / "task-locations.json"),
+    )
     shutil.copyfile(root / "workflow" / "default-workflow.json", polaris / "workflow.json")
     index = read_json(root / "templates" / "project-index.json")
     index["project_id"] = project_id
@@ -47,6 +55,7 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(adapter["adapter_root"] / item["source"], destination)
     ensure_gitignore_rule(repo, RUNTIME_IGNORE_PATTERN)
+    ensure_gitignore_rule(repo, ARCHIVED_RUNTIME_IGNORE_PATTERN)
     return {"message": f"initialized Polaris project {project_id}"}
 
 

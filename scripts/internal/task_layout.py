@@ -102,6 +102,7 @@ TEMPLATE_SOURCE_PATHS = {
 RUNTIME_IGNORE_PATTERN = (
     task_root_relative_path("*") / task_relative_path("progress").parent
 ).as_posix() + "/"
+ARCHIVED_RUNTIME_IGNORE_PATTERN = ".polaris/archive/tasks/*/runtime/"
 
 
 def template_path(protocol_root: Path, artifact: str) -> Path:

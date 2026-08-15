@@ -24,17 +24,14 @@ from internal.polaris_core import (
     write_json_atomic,
 )
 from internal.artifact_protocol import normalized_reference
+from internal.task_location_protocol import logical_repo_path, resolve_repo_reference
 from internal.review_protocol import MAX_REVIEW_ATTEMPTS
 from internal.task_layout import evidence_dir, review_handoff_path, state_path
 from internal.working_set_protocol import validate_working_set
 
 
 def _repo_relative(repo: Path, path: Path) -> str:
-    resolved = path.resolve()
-    try:
-        return resolved.relative_to(repo.resolve()).as_posix()
-    except ValueError as exc:
-        raise RuleFailure(f"review package path escapes repository: {path}") from exc
+    return logical_repo_path(repo, path)
 
 
 def _entry(repo: Path, role: str, path: Path) -> dict[str, Any]:
@@ -163,11 +160,7 @@ def build(
         raw_path = working_entry["path"]
         if raw_path == ".polaris/project-index.json":
             continue
-        candidate = (repo / raw_path).resolve()
-        try:
-            candidate.relative_to(repo.resolve())
-        except ValueError as exc:
-            raise RuleFailure(f"Working Set path escapes repository: {raw_path}") from exc
+        candidate = resolve_repo_reference(repo, raw_path)
         if candidate.exists():
             item = _entry(repo, "working_set_reference", candidate)
             if item["path"] not in seen_paths:

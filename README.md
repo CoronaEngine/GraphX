@@ -71,6 +71,7 @@ v0.1 明确不实现：
 - Git subject commit/diff hash 绑定
 - 可恢复、验收标准绑定的线性 `implementation_steps`，以及冻结到 Implementation artifact 的 `step_results`
 - 由 `scripts/internal/task_layout.py` 定义唯一目录结构，`scripts/materialize_task_layout.py` 同时生成模板树和真实任务目录
+- 由 `.polaris/task-locations.json` 解耦稳定逻辑任务路径与实际目录，为物理归档保留可移动任务根
 - Documentation impact 检查
 - R1 Review → Validation → Result → CLOSED 的机械闭环
 - 不可变 Reviewer handoff、独立会话声明和三轮 Review 上限
@@ -82,7 +83,7 @@ v0.1 明确不实现：
 - Fresh-session Recovery、项目索引和可刷新 Working Set
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 69 个带场景日志的自动化测试；真实 symlink 集成场景在平台不支持时明确跳过
+- 74 个带场景日志的自动化测试；symlink 安全场景通过跨平台模拟覆盖，不要求主机能够创建 symlink
 
 仍在建设：
 
@@ -204,7 +205,7 @@ python tools/polaris/scripts/migrate_project.py --repo .
 
 迁移只接受 `workflow/migrations.json` 中声明的相邻版本步骤；活动任务通过追加 `MIGRATE_POLARIS` 事件升级，不改写旧事件。迁移记录保存在 `.polaris/migrations/`，中断后重复同一命令会继续未完成步骤。没有声明的跨版本跳跃和 workflow 版本变化会被拒绝。
 
-`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code；`0.1.8` 补齐有限 Schema 子集；`0.1.9` 引入安装清单；`0.1.10` 引入显式迁移协议；`0.1.11` 加固 Adapter v2 的入口、overlay、symlink 与能力声明；`0.1.12` 统一写操作版本门禁、恢复迁移崩溃锁，并提供事务化 vendoring；`0.1.13` 引入绑定 Plan 哈希的 Human 决策登记与机械门禁。Workflow Graph 协议仍是 `0.1.2`。
+`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code；`0.1.8` 补齐有限 Schema 子集；`0.1.9` 引入安装清单；`0.1.10` 引入显式迁移协议；`0.1.11` 加固 Adapter v2 的入口、overlay、symlink 与能力声明；`0.1.12` 统一写操作版本门禁、恢复迁移崩溃锁，并提供事务化 vendoring；`0.1.13` 引入 Plan Human 决策门禁，并解耦逻辑任务路径与物理目录。Workflow Graph 协议仍是 `0.1.2`。
 
 ### 2. 初始化项目状态
 
@@ -214,7 +215,7 @@ python tools/polaris/scripts/migrate_project.py --repo .
 python tools/polaris/scripts/init_project.py my-project --repo .
 ```
 
-这会创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 或 `CLAUDE.md` 时还会创建对应的最小仓库规则，并在 `.gitignore` 中加入 `.polaris/tasks/*/runtime/`。
+这会创建 `.polaris/project.json`、`.polaris/task-locations.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 或 `CLAUDE.md` 时还会创建对应的最小仓库规则，并在 `.gitignore` 中加入活动与未来归档任务的 `runtime/` 忽略规则。
 
 ### 3. 初始化任务
 

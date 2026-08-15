@@ -228,6 +228,7 @@ target-repo/
 └── .polaris/
     ├── project.json
     ├── project-index.json         # 保持短小，只做结构化恢复地图
+    ├── task-locations.json        # Task ID 到实际目录的可校验映射
     ├── workflow.json
     ├── decisions/
     │   └── CD-*.json              # append-only，权威 Human Decision/Approval
@@ -259,6 +260,16 @@ target-repo/
 ```
 
 宿主渲染目录、`tools/polaris/` 和 `.polaris/` 的耐久状态均纳入 Git；唯一例外是各任务目录下的 `.polaris/tasks/<TASK>/runtime/`，它保存当前电脑上的实时进度并默认忽略，不参与阶段门禁或 Fresh Clone 恢复。宿主目录与 `tools/polaris/` 是 vendored 协议包，`.polaris/` 其余内容是项目运行状态。`project.json` 必须记录 `polaris_version` 和 `workflow_version`。Codex 从 `.agents/skills/` 发现 `$skill-name`，Claude Code 从 `.claude/skills/` 发现 `/skill-name`；两份 Skill 由宿主无关的 `skills/` 单一来源生成。
+
+### 任务路径模型
+
+任务引用分为三层，不得混用：
+
+1. Task-relative：`state.json` artifacts、Implementation/Review 关联等任务内部字段，以当前任务根目录为基准，例如 `reviews/r001/review-001.json`。
+2. Logical repo-relative：handoff package、Working Set、实时进度和提升后的 Exploration 使用稳定逻辑地址 `.polaris/tasks/<TASK>/...`。它是持久身份，不表示文件必须物理位于该目录。
+3. Physical location：`.polaris/task-locations.json` 保存 Task ID 到实际仓库目录的映射。所有脚本必须通过 `task_dir()`、`logical_repo_path()` 或 `resolve_repo_reference()` 解析，不得自行拼接或用 `repo / logical_path` 打开任务文件。
+
+新任务默认映射到 `.polaris/tasks/<TASK>`。位置路径必须位于 `.polaris/` 下、以 Task ID 结尾、使用 POSIX 分隔符、不得重复、越界或穿过 symlink。项目校验要求注册表与 `project.json.active_tasks` 完全一致，并继续对实际目录运行完整任务校验。旧 handoff 和 Working Set 保持原逻辑路径即可；改变 physical location 不得改写历史 artifact。v0.1.13 只建立可移动任务根和兼容迁移，不提供归档/恢复命令或归档可见性语义；后续物理归档应在此层之上增加事务化移动和 append-only Archive Event。
 
 每次 vendoring 必须生成并提交 `tools/polaris/install-manifest.json`。清单把完整归 Polaris 所有的输出登记为带 SHA-256 的 `managed_files`，把内容归项目维护但安装要求存在的文件登记为 `preserved_files`。项目校验必须验证受管文件存在、哈希一致且必要适配器输出已登记；强制升级必须先按旧清单删除旧受管文件，再生成新清单，不删除保留文件或清单外文件。没有旧清单的早期安装只能走已知目录的兼容更新，不能猜测并删除未知文件。
 

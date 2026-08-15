@@ -20,6 +20,7 @@ from internal.polaris_core import (
     write_json_atomic,
 )
 from internal.working_set_protocol import SECTIONS, validate_working_set_value
+from internal.task_location_protocol import logical_repo_path
 from internal.task_layout import explorations_dir, plan_path, state_path, working_set_path
 
 
@@ -107,14 +108,14 @@ def build(
     _add(
         entries,
         "Documents",
-        work_item_path.relative_to(repo).as_posix(),
+        logical_repo_path(repo, work_item_path),
         "frozen execution contract",
         "task state",
     )
     _add(
         entries,
         "Documents",
-        plan_path(directory).relative_to(repo).as_posix(),
+        logical_repo_path(repo, plan_path(directory)),
         "delta plan and acceptance mapping",
         "task state",
     )
@@ -141,7 +142,7 @@ def build(
         _add(
             entries,
             "Explorations",
-            path.relative_to(repo).as_posix(),
+            logical_repo_path(repo, path),
             "task-local failed exploration",
             "task exploration index",
         )
@@ -150,7 +151,7 @@ def build(
         _add(
             entries,
             "Explorations",
-            path.relative_to(repo).as_posix(),
+            logical_repo_path(repo, path),
             "project exploration matching an affected module",
             "work-item.affected_modules",
         )
