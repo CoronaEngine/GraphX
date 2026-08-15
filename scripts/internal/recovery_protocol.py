@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from polaris_core import current_work_item_path, read_json, task_dir, write_json_atomic
-from task_layout import state_path
+from .polaris_core import current_work_item_path, read_json, task_dir, write_json_atomic
+from .task_layout import state_path
 
 
 NEXT_ACTIONS = {

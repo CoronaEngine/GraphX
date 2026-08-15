@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from implementation_protocol import validate_handoff, validate_progress_value
-from polaris_core import (
+from internal.implementation_protocol import validate_handoff, validate_progress_value
+from internal.polaris_core import (
     InputFailure,
     RuleFailure,
     protocol_root,
@@ -20,7 +20,7 @@ from polaris_core import (
     utc_now,
     write_json_atomic,
 )
-from task_layout import state_path, task_root_relative_path
+from internal.task_layout import state_path, task_root_relative_path
 
 
 PHASES = (

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from polaris_core import (
+from .polaris_core import (
     RuleFailure,
     current_work_item_path,
     directory_sha256,
@@ -17,8 +17,8 @@ from polaris_core import (
     validate_json_file,
     validate_schema,
 )
-from artifact_protocol import normalized_reference
-from task_layout import (
+from .artifact_protocol import normalized_reference
+from .task_layout import (
     implementation_relative_path,
     state_path,
     task_repo_relative_path,

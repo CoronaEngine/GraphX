@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from polaris_core import (
+from internal.polaris_core import (
     InputFailure,
     append_jsonl,
     full_commit,
@@ -19,9 +19,9 @@ from polaris_core import (
     utc_now,
     write_json_atomic,
 )
-from recovery_protocol import refresh_project_index
+from internal.recovery_protocol import refresh_project_index
 from materialize_task_layout import materialize_task_directories
-from task_layout import (
+from internal.task_layout import (
     events_path,
     plan_path,
     state_path,

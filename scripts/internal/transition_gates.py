@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from implementation_protocol import (
+from .implementation_protocol import (
     step_results,
     validate_handoff as validate_implementation_handoff,
     validate_progress,
 )
-from polaris_core import (
+from .polaris_core import (
     RuleFailure,
     current_work_item_path,
     file_sha256,
@@ -18,8 +18,8 @@ from polaris_core import (
     subject_diff_hash,
     validate_json_file,
 )
-from review_protocol import validate_handoff, validate_review, validate_review_response
-from working_set_protocol import validate_working_set
+from .review_protocol import validate_handoff, validate_review, validate_review_response
+from .working_set_protocol import validate_working_set
 
 
 def artifact_file(directory: Path, state: dict[str, Any], name: str) -> Path:

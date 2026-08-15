@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from implementation_protocol import expected_attempt, validate_handoff_value
-from polaris_core import (
+from internal.implementation_protocol import expected_attempt, validate_handoff_value
+from internal.polaris_core import (
     InputFailure,
     RuleFailure,
     current_work_item_path,
@@ -23,14 +23,14 @@ from polaris_core import (
     validate_json_file,
     write_json_atomic,
 )
-from artifact_protocol import normalized_reference
-from task_layout import (
+from internal.artifact_protocol import normalized_reference
+from internal.task_layout import (
     implementation_handoff_path,
     implementation_relative_path,
     state_path,
     task_repo_relative_path,
 )
-from working_set_protocol import validate_working_set
+from internal.working_set_protocol import validate_working_set
 
 
 def _entry(repo: Path, role: str, path: Path) -> dict[str, Any]:

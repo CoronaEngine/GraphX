@@ -140,11 +140,11 @@ Polaris 源仓库也可以选择用 Polaris 管理，但自举不是默认状态
 
 自举与普通目标项目的差别只有来源位置：
 
-- 开发 vendoring 工具本身时，源文件位于 `skills/`、`scripts/`、`schemas/`、`templates/` 和 `workflow/`；`scripts/task_layout.py` 是任务相对路径的唯一权威，平铺的 `templates/task-sources/` 只保存模板正文，`templates/task/` 是 `scripts/materialize_task_layout.py` 生成的样例投影，禁止手改；
+- 开发 vendoring 工具本身时，源文件位于 `skills/`、`scripts/`、`schemas/`、`templates/` 和 `workflow/`；`scripts/internal/task_layout.py` 是任务相对路径的唯一权威，平铺的 `templates/task-sources/` 只保存模板正文，`templates/task/` 是 `scripts/materialize_task_layout.py` 生成的样例投影，禁止手改；
 - 执行本仓库任务时，使用已锁定的 `.agents/skills/` 与 `tools/polaris/`；
 - 修改源实现后，需要按版本升级流程重新 vendoring，确认两份内容一致。
 
-目录结构变更只修改 `scripts/task_layout.py`，模板正文只修改平铺的
+目录结构变更只修改 `scripts/internal/task_layout.py`，模板正文只修改平铺的
 `templates/task-sources/`。开发仓库运行
 `python scripts/materialize_task_layout.py` 后会重建并校验
 `templates/task/`；任务初始化、新 Revision 和 vendoring 调用同一个物化模块，

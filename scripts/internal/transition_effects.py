@@ -6,8 +6,8 @@ import copy
 from pathlib import Path
 from typing import Any
 
-from artifact_protocol import load_registered, normalized_reference
-from polaris_core import (
+from .artifact_protocol import load_registered, normalized_reference
+from .polaris_core import (
     RuleFailure,
     current_work_item_path,
     file_sha256,
@@ -16,7 +16,7 @@ from polaris_core import (
     subject_diff_hash,
     utc_now,
 )
-from review_protocol import MAX_REVIEW_ATTEMPTS
+from .review_protocol import MAX_REVIEW_ATTEMPTS
 
 
 IMPLEMENTATION_DOWNSTREAM_ARTIFACTS = frozenset(

@@ -7,9 +7,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from polaris_core import rebuild_state_value, run_main, task_dir, write_json_atomic
-from recovery_protocol import refresh_project_index
-from task_layout import events_path, state_path
+from internal.polaris_core import rebuild_state_value, run_main, task_dir, write_json_atomic
+from internal.recovery_protocol import refresh_project_index
+from internal.task_layout import events_path, state_path
 
 
 def rebuild(repo: Path, task_id: str, check_only: bool) -> dict[str, object]:

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from polaris_core import (
+from internal.polaris_core import (
     InputFailure,
     RuleFailure,
     protocol_root,
@@ -20,7 +20,7 @@ from polaris_core import (
     validate_json_file,
     write_json_atomic,
 )
-from task_layout import TASKS_ROOT, exploration_path, state_path, task_relative_path
+from internal.task_layout import TASKS_ROOT, exploration_path, state_path, task_relative_path
 
 
 EXPLORATION_ID = re.compile(r"^EXP-([0-9]{4})\.json$")

@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from task_layout import task_root_relative_path
-from task_layout import work_item_path as current_work_item_path
+from .task_layout import task_root_relative_path
+from .task_layout import work_item_path as current_work_item_path
 
 
 class RuleFailure(Exception):
@@ -167,7 +167,7 @@ def protocol_root(repo: Path) -> Path:
     vendored = repo / "tools" / "polaris"
     if vendored.is_dir():
         return vendored
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def workflow_path(repo: Path) -> Path:

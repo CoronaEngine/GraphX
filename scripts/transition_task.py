@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from polaris_core import (
+from internal.polaris_core import (
     RuleFailure,
     acquire_lock,
     append_jsonl,
@@ -20,17 +20,17 @@ from polaris_core import (
     task_dir,
     write_json_atomic,
 )
-from recovery_protocol import refresh_project_index
-from task_layout import events_path as task_events_path
-from task_layout import state_path as task_state_path
-from transition_effects import (
+from internal.recovery_protocol import refresh_project_index
+from internal.task_layout import events_path as task_events_path
+from internal.task_layout import state_path as task_state_path
+from internal.transition_effects import (
     apply_event_effects,
     build_event,
     parse_artifacts,
     prepare_next_state,
     resolve_destination,
 )
-from transition_gates import check_gate
+from internal.transition_gates import check_gate
 
 
 def _transition_rule(

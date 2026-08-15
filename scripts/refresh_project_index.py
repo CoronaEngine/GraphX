@@ -7,8 +7,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from polaris_core import run_main
-from recovery_protocol import refresh_project_index
+from internal.polaris_core import run_main
+from internal.recovery_protocol import refresh_project_index
 
 
 def refresh(repo: Path) -> dict[str, object]:

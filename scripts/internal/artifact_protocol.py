@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from polaris_core import RuleFailure, file_sha256, validate_json_file
+from .polaris_core import RuleFailure, file_sha256, validate_json_file
 
 
 def artifact_path(directory: Path, reference: Any) -> Path:

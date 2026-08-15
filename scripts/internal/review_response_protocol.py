@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from artifact_protocol import state_reference
-from polaris_core import RuleFailure, validate_json_file
+from .artifact_protocol import state_reference
+from .polaris_core import RuleFailure, validate_json_file
 
 
 def _nonempty(value: Any) -> bool:

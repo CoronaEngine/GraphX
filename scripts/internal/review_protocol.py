@@ -9,20 +9,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from artifact_protocol import (
+from .artifact_protocol import (
     artifact_path,
     load_registered,
     normalized_reference,
     state_reference,
 )
-from polaris_core import RuleFailure, validate_json_file
-from review_handoff_protocol import (
+from .polaris_core import RuleFailure, validate_json_file
+from .review_handoff_protocol import (
     INDEPENDENT_ISOLATION_MODES,
     MAX_REVIEW_ATTEMPTS,
     REQUIRED_PACKAGE_ROLES,
     validate_handoff,
 )
-from review_response_protocol import validate_review_response
+from .review_response_protocol import validate_review_response
 
 
 def _nonempty(value: Any) -> bool:

@@ -16,17 +16,18 @@ sys.path.insert(0, str(SCRIPTS))
 
 from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
-from artifact_protocol import normalized_reference  # noqa: E402
+from internal.artifact_protocol import normalized_reference  # noqa: E402
 from build_working_set import build as build_working_set  # noqa: E402
 from build_implementation_handoff import build as build_implementation_handoff  # noqa: E402
 from build_review_handoff import build as build_review_handoff  # noqa: E402
 from check_docs import check as check_docs  # noqa: E402
 from new_revision import create as new_revision  # noqa: E402
-from polaris_core import (  # noqa: E402
+from internal.polaris_core import (  # noqa: E402
     InputFailure,
     RuleFailure,
     append_jsonl,
     file_sha256,
+    protocol_root,
     read_json,
     rebuild_state_value,
     subject_diff_hash,
@@ -38,14 +39,14 @@ from recover_task import recover  # noqa: E402
 from record_exploration import promote as promote_exploration  # noqa: E402
 from record_exploration import record as record_exploration  # noqa: E402
 from transition_task import transition  # noqa: E402
-from transition_effects import apply_event_effects  # noqa: E402
+from internal.transition_effects import apply_event_effects  # noqa: E402
 from update_implementation_progress import update as update_implementation_progress  # noqa: E402
-from implementation_protocol import step_results, validate_progress  # noqa: E402
+from internal.implementation_protocol import step_results, validate_progress  # noqa: E402
 from materialize_task_layout import (  # noqa: E402
     materialize_template_tree,
     validate_materialized_template_tree,
 )
-from task_layout import (  # noqa: E402
+from internal.task_layout import (  # noqa: E402
     TEMPLATE_SAMPLE_PATHS,
     TEMPLATE_SOURCE_PATHS,
     task_repo_relative_path,
@@ -410,6 +411,22 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(result["state"], "DRAFT")
         rebuilt = rebuild_state_value(self.task / "events.jsonl")
         self.assertEqual(rebuilt, read_json(self.task / "state.json"))
+
+    def test_scripts_root_contains_only_runnable_command_entries(self) -> None:
+        """scripts 根目录只放可运行命令，internal 只放不可独立运行的实现模块。"""
+        self.assertEqual(protocol_root(ROOT), ROOT)
+        command_files = sorted((ROOT / "scripts").glob("*.py"))
+        self.assertTrue(command_files)
+        for path in command_files:
+            source = path.read_text(encoding="utf-8")
+            self.assertIn("def main(", source, path.name)
+            self.assertIn('if __name__ == "__main__":', source, path.name)
+
+        internal_files = sorted((ROOT / "scripts" / "internal").glob("*.py"))
+        self.assertGreater(len(internal_files), 1)
+        for path in internal_files:
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn('if __name__ == "__main__":', source, path.name)
 
     def test_artifact_protocol_rejects_escape_and_registered_hash_drift(self) -> None:
         """共享 artifact 引用层拒绝越界路径和注册后的内容漂移。"""

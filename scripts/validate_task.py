@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from polaris_core import (
+from internal.polaris_core import (
     RuleFailure,
     current_work_item_path,
     file_sha256,
@@ -23,12 +23,12 @@ from polaris_core import (
     validate_json_file,
     validate_schema,
 )
-from implementation_protocol import validate_handoff as validate_implementation_handoff
-from artifact_protocol import normalized_reference
-from review_protocol import validate_handoff, validate_review, validate_review_response
-from working_set_protocol import validate_working_set
-from task_layout import events_path, explorations_dir
-from task_layout import state_path as task_state_path
+from internal.implementation_protocol import validate_handoff as validate_implementation_handoff
+from internal.artifact_protocol import normalized_reference
+from internal.review_protocol import validate_handoff, validate_review, validate_review_response
+from internal.working_set_protocol import validate_working_set
+from internal.task_layout import events_path, explorations_dir
+from internal.task_layout import state_path as task_state_path
 
 
 ORDER = [

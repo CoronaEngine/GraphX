@@ -7,9 +7,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
-from recovery_protocol import project_index_value
-from task_layout import TASKS_ROOT
+from internal.polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
+from internal.recovery_protocol import project_index_value
+from internal.task_layout import TASKS_ROOT
 from validate_task import validate as validate_task
 
 

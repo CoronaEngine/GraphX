@@ -7,7 +7,7 @@ import argparse
 import shutil
 from pathlib import Path
 
-from task_layout import (
+from internal.task_layout import (
     TEMPLATE_SAMPLE_PATHS,
     TEMPLATE_SOURCE_PATHS,
     task_directories,

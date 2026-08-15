@@ -5,16 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from artifact_protocol import load_registered, state_reference
-from polaris_core import (
+from .artifact_protocol import load_registered, state_reference
+from .polaris_core import (
     RuleFailure,
     current_work_item_path,
     directory_sha256,
     file_sha256,
     validate_json_file,
 )
-from review_response_protocol import validate_review_response
-from task_layout import evidence_dir
+from .review_response_protocol import validate_review_response
+from .task_layout import evidence_dir
 
 
 MAX_REVIEW_ATTEMPTS = 3

@@ -5,14 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from polaris_core import (
+from .polaris_core import (
     RuleFailure,
     protocol_root,
     read_json,
     task_dir,
     validate_schema,
 )
-from task_layout import state_path, working_set_path
+from .task_layout import state_path, working_set_path
 
 
 SECTIONS = ["Documents", "Code", "Tests", "Decisions", "Explorations", "Unknowns"]

@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from implementation_protocol import validate_progress
-from polaris_core import (
+from internal.implementation_protocol import validate_progress
+from internal.polaris_core import (
     InputFailure,
     RuleFailure,
     current_work_item_path,
@@ -18,14 +18,14 @@ from polaris_core import (
     run_main,
     task_dir,
 )
-from recovery_protocol import (
+from internal.recovery_protocol import (
     recommended_action,
     refresh_project_index,
 )
-from working_set_protocol import validate_working_set, working_set_entries
+from internal.working_set_protocol import validate_working_set, working_set_entries
 from validate_project import validate as validate_project
 from validate_task import validate as validate_task
-from task_layout import events_path, progress_path, state_path, working_set_path
+from internal.task_layout import events_path, progress_path, state_path, working_set_path
 
 
 def recover(repo: Path, task_id: str) -> dict[str, Any]:

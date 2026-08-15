@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from polaris_core import (
+from internal.polaris_core import (
     RuleFailure,
     current_work_item_path,
     protocol_root,
@@ -18,8 +18,8 @@ from polaris_core import (
     validate_json_file,
     write_json_atomic,
 )
-from working_set_protocol import SECTIONS, validate_working_set_value
-from task_layout import explorations_dir, plan_path, state_path, working_set_path
+from internal.working_set_protocol import SECTIONS, validate_working_set_value
+from internal.task_layout import explorations_dir, plan_path, state_path, working_set_path
 
 
 def _existing(

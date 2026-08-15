@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from materialize_task_layout import materialize_task_directories
-from polaris_core import (
+from internal.polaris_core import (
     InputFailure,
     current_work_item_path,
     full_commit,
@@ -18,7 +18,7 @@ from polaris_core import (
     task_dir,
     write_json_atomic,
 )
-from task_layout import state_path
+from internal.task_layout import state_path
 
 
 def create(repo: Path, task_id: str) -> dict[str, object]:

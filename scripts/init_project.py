@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from polaris_core import (
+from internal.polaris_core import (
     InputFailure,
     ensure_gitignore_rule,
     protocol_root,
@@ -16,7 +16,7 @@ from polaris_core import (
     run_main,
     write_json_atomic,
 )
-from task_layout import RUNTIME_IGNORE_PATTERN, TASKS_ROOT
+from internal.task_layout import RUNTIME_IGNORE_PATTERN, TASKS_ROOT
 
 
 def initialize(repo: Path, project_id: str) -> dict[str, str]:

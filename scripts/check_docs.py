@@ -7,7 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from polaris_core import (
+from internal.polaris_core import (
     RuleFailure,
     full_commit,
     git,
@@ -18,7 +18,7 @@ from polaris_core import (
     task_dir,
     validate_json_file,
 )
-from task_layout import state_path
+from internal.task_layout import state_path
 
 
 def check(

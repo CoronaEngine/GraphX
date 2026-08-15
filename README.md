@@ -70,7 +70,7 @@ v0.1 明确不实现：
 - 状态转换、项目/任务校验、事件账本和状态重建
 - Git subject commit/diff hash 绑定
 - 可恢复、验收标准绑定的线性 `implementation_steps`，以及冻结到 Implementation artifact 的 `step_results`
-- 由 `scripts/task_layout.py` 定义唯一目录结构，`scripts/materialize_task_layout.py` 同时生成模板树和真实任务目录
+- 由 `scripts/internal/task_layout.py` 定义唯一目录结构，`scripts/materialize_task_layout.py` 同时生成模板树和真实任务目录
 - Documentation impact 检查
 - R1 Review → Validation → Result → CLOSED 的机械闭环
 - 不可变 Reviewer handoff、独立会话声明和三轮 Review 上限
@@ -97,7 +97,7 @@ v0.1 明确不实现：
 ```text
 Polaris/
 ├── skills/                 # 七个 Workflow Skills 的源文件
-├── scripts/                # 标准库实现的确定性辅助脚本
+├── scripts/                # 可执行辅助脚本；internal/ 保存不可独立运行的内部实现
 ├── schemas/                # 权威 JSON 数据结构
 ├── templates/              # task-sources 是正文源；task 是脚本生成的目录投影
 ├── workflow/               # 默认声明式 Workflow Graph
@@ -126,7 +126,7 @@ target-repo/
 
 Polaris v0.1 的 Python 代码只使用标准库，不需要安装第三方依赖。
 
-任务目录规则只修改 `scripts/task_layout.py`。模板正文只修改
+任务目录规则只修改 `scripts/internal/task_layout.py`。模板正文只修改
 `templates/task-sources/`；随后运行下列命令重建并校验生成的
 `templates/task/`，不要直接编辑生成目录：
 
@@ -138,7 +138,7 @@ python scripts/materialize_task_layout.py
 `vendor_project.py` 也会在复制后重建目标仓库中的模板树。
 
 状态转换仍只通过 `scripts/transition_task.py` 写入；门禁校验和候选状态效果分别位于
-`transition_gates.py` 与 `transition_effects.py`。Review 协议按 artifact 引用、response、
+`scripts/internal/transition_gates.py` 与 `scripts/internal/transition_effects.py`。Review 协议按 artifact 引用、response、
 handoff 和 finding lifecycle 分层，内部模块不得绕过 `transition_task.py` 直接写入状态。
 
 ## 开发与验证

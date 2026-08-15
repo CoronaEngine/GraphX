@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 from materialize_task_layout import materialize_template_tree
-from polaris_core import InputFailure, ensure_gitignore_rule, run_main
-from task_layout import RUNTIME_IGNORE_PATTERN
+from internal.polaris_core import InputFailure, ensure_gitignore_rule, run_main
+from internal.task_layout import RUNTIME_IGNORE_PATTERN
 
 
 SKILLS = [

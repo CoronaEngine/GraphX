@@ -36,7 +36,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 10. **Failed exploration is durable knowledge.** 失败尝试必须记录原因、证据和重试条件，避免跨会话重复踩坑。
 11. **Rigor is progressive.** 风险越高，所需产物、独立审查和人工门禁越严格。
 12. **Machine validation wins format decisions.** 同一内容同时需要机械校验和人类阅读时，默认只保存四格缩进 JSON，并在展示时按需格式化；只有独立自然语言内容无法用结构化字段清晰表达时才使用 Markdown。
-13. **Task layout has one source.** `scripts/task_layout.py` 是任务相对路径的唯一权威；`scripts/materialize_task_layout.py` 从该定义同时生成 `templates/task/` 样例树和真实任务目录。模板正文只维护在平铺的 `templates/task-sources/`，Schema 不重复硬编码目录正则。
+13. **Task layout has one source.** `scripts/internal/task_layout.py` 是任务相对路径的唯一权威；`scripts/materialize_task_layout.py` 从该定义同时生成 `templates/task/` 样例树和真实任务目录。模板正文只维护在平铺的 `templates/task-sources/`，Schema 不重复硬编码目录正则。
 
 ## 2. MVP 范围
 
@@ -158,7 +158,6 @@ polaris/
 ├── scripts/
 │   ├── init_project.py
 │   ├── init_task.py
-│   ├── task_layout.py
 │   ├── materialize_task_layout.py
 │   ├── new_revision.py
 │   ├── build_working_set.py
@@ -166,7 +165,12 @@ polaris/
 │   ├── validate_task.py
 │   ├── transition_task.py
 │   ├── rebuild_state.py
-│   └── check_docs.py
+│   ├── check_docs.py
+│   └── internal/                  # 不可独立运行的协议实现
+│       ├── task_layout.py
+│       ├── polaris_core.py
+│       ├── transition_gates.py
+│       └── transition_effects.py
 └── tests/
     ├── fixtures/
     └── test_*.py
@@ -425,8 +429,8 @@ AGENTS.md
 | `build_working_set.py` | 根据 Work Item、模块索引和显式引用生成/刷新结构化工作集 |
 | `refresh_project_index.py` | 从项目和任务 Authority 原子刷新结构化恢复索引 |
 | `build_implementation_handoff.py` | 从当前 revision、Plan、Working Set 与 prior Review 构造不可变 Implementer 输入包 |
-| `task_layout.py` | 集中定义所有任务相对路径、动态 revision/attempt 渲染和模板样例投影 |
-| `materialize_task_layout.py` | 从 `task_layout.py` 生成模板样例树和真实任务目录，并校验生成物与平铺模板正文一致 |
+| `internal/task_layout.py` | 集中定义所有任务相对路径、动态 revision/attempt 渲染和模板样例投影 |
+| `materialize_task_layout.py` | 从 `internal/task_layout.py` 生成模板样例树和真实任务目录，并校验生成物与平铺模板正文一致 |
 | `update_implementation_progress.py` | 通过明确事件原子更新 ignored 的线性步骤进度；拒绝 session 接管、跳步、回退、未知验收 ID 和非法 blocker |
 | `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
@@ -434,7 +438,7 @@ AGENTS.md
 | `rebuild_state.py` | 校验事件序列并从 `events.jsonl` 重建 `state.json` 投影 |
 | `check_docs.py` | 将 changed paths 与 Knowledge Delta 对照，拒绝未解释的文档影响 |
 
-`transition_task.py` 保持为唯一状态写入口，只负责编排锁、Workflow 规则、事件追加、`state.json` 原子替换和 Project Index 刷新。`transition_gates.py` 只读校验 gate，`transition_effects.py` 只计算候选状态、目标状态和事件内容，二者都不得直接写状态或事件。Review 校验按共享 artifact 引用、author response、冻结 handoff 和 finding lifecycle 分别放在 `artifact_protocol.py`、`review_response_protocol.py`、`review_handoff_protocol.py` 与 `review_protocol.py`；`review_protocol.py` 保留原有公开导入名称的兼容重导出。
+`transition_task.py` 保持为唯一状态写入口，只负责编排锁、Workflow 规则、事件追加、`state.json` 原子替换和 Project Index 刷新。`internal/transition_gates.py` 只读校验 gate，`internal/transition_effects.py` 只计算候选状态、目标状态和事件内容，二者都不得直接写状态或事件。Review 校验按共享 artifact 引用、author response、冻结 handoff 和 finding lifecycle 分别放在 `internal/artifact_protocol.py`、`internal/review_response_protocol.py`、`internal/review_handoff_protocol.py` 与 `internal/review_protocol.py`；`internal/review_protocol.py` 保留原有公开导入名称的兼容重导出。
 
 Implementation、Knowledge Delta、Review、Validation 和 Result 的权威 JSON 必须绑定当前适用的 `task_id / work_item_revision / artifact_attempt / subject_base_commit / subject_head_commit / subject_diff_hash`。Implementation 绑定编码 checkpoint，Knowledge Delta 与后续 Review/Validation/Result 绑定包含最终项目文档的 subject。保存这些治理 JSON 后，后续 transition event 记录其 `artifact_path / artifact_content_hash / artifact_commit`；`artifact_commit` 不写进 artifact 自身，避免产生无法满足的提交自引用。治理产物自身不会改变 subject hash，从而避免 Review 必须审查自身的循环依赖。任何 subject path 变化都会生成新的 subject commit/hash，并使旧 Review 和 Validation 失效。
 
