@@ -17,7 +17,11 @@ sys.path.insert(0, str(SCRIPTS))
 from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
 from internal.artifact_protocol import normalized_reference  # noqa: E402
-from internal.host_adapters import load_host_adapters, render_skill  # noqa: E402
+from internal.host_adapters import (  # noqa: E402
+    discover_skills,
+    load_host_adapters,
+    render_skill,
+)
 from build_working_set import build as build_working_set  # noqa: E402
 from build_implementation_handoff import build as build_implementation_handoff  # noqa: E402
 from build_review_handoff import build as build_review_handoff  # noqa: E402
@@ -60,7 +64,10 @@ from internal.task_layout import (  # noqa: E402
 )
 from validate_task import validate  # noqa: E402
 from validate_project import validate as validate_project  # noqa: E402
-from vendor_project import SKILLS, vendor  # noqa: E402
+from vendor_project import vendor  # noqa: E402
+
+
+SKILLS = discover_skills(ROOT)
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -865,25 +872,25 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.9")
+        self.set_protocol_version("0.1.10")
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.9")
-        self.assertEqual(result["to"], "0.1.10")
+        self.assertEqual(result["from"], "0.1.10")
+        self.assertEqual(result["to"], "0.1.11")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.9")
+        self.assertEqual(events[0]["polaris_version"], "0.1.10")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.10")
+        self.assertEqual(events[1]["polaris_version"], "0.1.11")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.9-to-0.1.10.json"
+            / "MIG-0.1.10-to-0.1.11.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -891,15 +898,15 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.9")
+        self.set_protocol_version("0.1.10")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
             "record_version": 1,
-            "migration_id": "0.1.9-to-0.1.10",
-            "from_polaris_version": "0.1.9",
-            "to_polaris_version": "0.1.10",
+            "migration_id": "0.1.10-to-0.1.11",
+            "from_polaris_version": "0.1.10",
+            "to_polaris_version": "0.1.11",
             "from_workflow_version": "0.1.2",
             "to_workflow_version": "0.1.2",
             "status": "IN_PROGRESS",
@@ -917,7 +924,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.9-to-0.1.10.json",
+            / "MIG-0.1.10-to-0.1.11.json",
             record,
         )
         append_jsonl(
@@ -930,7 +937,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.10",
+                "polaris_version": "0.1.11",
                 "workflow_version": "0.1.2",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
@@ -938,7 +945,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.9-to-0.1.10",
+                "migration_id": "0.1.10-to-0.1.11",
             },
         )
 
@@ -950,14 +957,17 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_rejects_an_undeclared_version_jump(self) -> None:
         """没有注册的跨版本路径机械拒绝，且不创建部分迁移记录。"""
-        self.set_protocol_version("0.1.8")
+        self.set_protocol_version("0.1.9")
         vendor(ROOT, self.repo, False)
 
         with self.assertRaisesRegex(RuleFailure, "no explicit adjacent migration"):
             migrate_project(self.repo)
 
         self.assertFalse((self.repo / ".polaris" / "migrations").exists())
-        self.assertEqual(read_json(self.repo / ".polaris" / "project.json")["polaris_version"], "0.1.8")
+        self.assertEqual(
+            read_json(self.repo / ".polaris" / "project.json")["polaris_version"],
+            "0.1.9",
+        )
 
     def test_risk_flag_requires_r2(self) -> None:
         """任一高风险标记为 true 时，非 R2 Work Item 会被机械拒绝。"""
@@ -1167,12 +1177,19 @@ class PolarisCoreTests(unittest.TestCase):
 
         def adapter(host_id: str) -> dict[str, object]:
             return {
-                "adapter_version": 1,
+                "adapter_version": 2,
                 "host_id": host_id,
                 "display_name": host_id,
                 "skill_target": f".{host_id}/skills",
                 "invocation_prefix": "!",
                 "entry_skill": "engineering-task",
+                "capabilities": {
+                    "structured_user_input": False,
+                    "worker_create": False,
+                    "worker_status": False,
+                    "worker_resume": False,
+                    "stable_worker_identity": False,
+                },
                 "entry_frontmatter": [],
                 "skill_overlay_root": None,
                 "skill_appendix_root": None,
@@ -1187,7 +1204,7 @@ class PolarisCoreTests(unittest.TestCase):
 
         cases = {
             "unknown version": lambda first, _second: first.update(
-                {"adapter_version": 2}
+                {"adapter_version": 3}
             ),
             "blank prefix": lambda first, _second: first.update(
                 {"invocation_prefix": ""}
@@ -1209,6 +1226,7 @@ class PolarisCoreTests(unittest.TestCase):
                     ROOT / "schemas" / "host-adapter.schema.json",
                     root / "schemas" / "host-adapter.schema.json",
                 )
+                shutil.copytree(ROOT / "skills", root / "skills")
                 first = adapter("host-a")
                 second = adapter("host-b")
                 mutate(first, second)
@@ -1221,6 +1239,90 @@ class PolarisCoreTests(unittest.TestCase):
                     write_json_atomic(host_root / "adapter.json", value)
                 with self.assertRaises(RuleFailure):
                     load_host_adapters(root)
+
+    def test_host_adapter_hardening_rejects_entry_overlay_and_capability_errors(self) -> None:
+        """入口必须存在，overlay 不得覆写 Skill，worker 能力依赖必须自洽。"""
+        cases = {
+            "missing entry": (
+                lambda adapter, _source: adapter.update(
+                    {"entry_skill": "not-installed"}
+                ),
+                "entry_skill is not installed",
+            ),
+            "SKILL overlay": (
+                lambda _adapter, source: (
+                    source
+                    / "hosts"
+                    / "codex"
+                    / "skill-overlays"
+                    / "engineering-task"
+                    / "SKILL.md"
+                ).write_text("override\n", encoding="utf-8"),
+                "must not replace SKILL.md",
+            ),
+            "inconsistent capabilities": (
+                lambda adapter, _source: adapter["capabilities"].update(
+                    {"worker_create": False}
+                ),
+                "worker_status requires worker_create",
+            ),
+        }
+        for name, (mutate, message) in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory(
+                prefix="polaris-adapter-hardening-"
+            ) as temp:
+                source = Path(temp) / "source"
+                shutil.copytree(
+                    ROOT,
+                    source,
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+                )
+                adapter_path = source / "hosts" / "codex" / "adapter.json"
+                adapter = read_json(adapter_path)
+                mutate(adapter, source)
+                write_json_atomic(adapter_path, adapter)
+                with self.assertRaisesRegex(RuleFailure, message):
+                    load_host_adapters(source)
+
+    def test_host_adapter_sources_reject_symlinks(self) -> None:
+        """适配器 manifest、overlay、appendix 和专用源文件都不能借 symlink 逃逸。"""
+        with tempfile.TemporaryDirectory(prefix="polaris-adapter-symlink-") as temp:
+            temp_root = Path(temp)
+            source = temp_root / "source"
+            shutil.copytree(
+                ROOT,
+                source,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+            )
+            outside = temp_root / "outside.md"
+            outside.write_text("outside\n", encoding="utf-8")
+            agent = (
+                source
+                / "hosts"
+                / "claude-code"
+                / "agents"
+                / "polaris-reviewer.md"
+            )
+            agent.unlink()
+            agent.symlink_to(outside)
+
+            with self.assertRaisesRegex(RuleFailure, "symlink"):
+                load_host_adapters(source)
+
+    def test_vendor_rejects_symlinked_adapter_targets(self) -> None:
+        """vendoring 在删除或写入前拒绝穿过目标仓库中的 symlink。"""
+        with tempfile.TemporaryDirectory(prefix="polaris-target-symlink-") as temp:
+            temp_root = Path(temp)
+            target = temp_root / "target"
+            outside = temp_root / "outside"
+            target.mkdir()
+            outside.mkdir()
+            run_git(target, "init", "-q")
+            (target / ".agents").symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaisesRegex(RuleFailure, "symlink"):
+                vendor(ROOT, target, False)
+            self.assertEqual(list(outside.iterdir()), [])
 
     def test_vendor_and_validator_discover_a_third_host_without_code_changes(self) -> None:
         """新增第三宿主只需清单，vendoring、初始化和校验无需新增分支。"""
@@ -1238,12 +1340,19 @@ class PolarisCoreTests(unittest.TestCase):
             write_json_atomic(
                 synthetic_root / "adapter.json",
                 {
-                    "adapter_version": 1,
+                    "adapter_version": 2,
                     "host_id": "synthetic",
                     "display_name": "Synthetic Host",
                     "skill_target": ".synthetic/skills",
                     "invocation_prefix": "!",
                     "entry_skill": "engineering-task",
+                    "capabilities": {
+                        "structured_user_input": False,
+                        "worker_create": False,
+                        "worker_status": False,
+                        "worker_resume": False,
+                        "stable_worker_identity": False,
+                    },
                     "entry_frontmatter": [],
                     "skill_overlay_root": None,
                     "skill_appendix_root": None,

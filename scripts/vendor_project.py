@@ -13,6 +13,7 @@ from materialize_task_layout import materialize_template_tree
 from internal.host_adapters import (
     adapter_file_target,
     adapter_skill_target,
+    discover_skills,
     load_host_adapters,
     render_skill,
 )
@@ -25,18 +26,8 @@ from internal.install_manifest import (
     write_install_manifest,
 )
 from internal.polaris_core import InputFailure, ensure_gitignore_rule, run_main
+from internal.path_security import confined_target
 from internal.task_layout import RUNTIME_IGNORE_PATTERN
-
-
-SKILLS = [
-    "engineering-task",
-    "requirement-analysis",
-    "architecture-planning",
-    "implementation",
-    "adversarial-review",
-    "validation",
-    "documentation-sync",
-]
 
 
 def ignore_generated(_directory: str, names: list[str]) -> set[str]:
@@ -44,12 +35,15 @@ def ignore_generated(_directory: str, names: list[str]) -> set[str]:
 
 
 def _polaris_destinations(
-    target: Path, adapters: list[dict[str, Any]]
+    target: Path, adapters: list[dict[str, Any]], skills: tuple[str, ...]
 ) -> list[Path]:
     destinations = [target / "tools" / "polaris"]
     for adapter in adapters:
         skill_target = adapter_skill_target(target, adapter)
-        destinations.extend(skill_target / name for name in SKILLS)
+        destinations.extend(
+            confined_target(target, skill_target / name, "host Skill destination")
+            for name in skills
+        )
         destinations.extend(
             adapter_file_target(target, item)
             for item in adapter["files"]
@@ -61,14 +55,17 @@ def _polaris_destinations(
 def vendor(source: Path, target: Path, force: bool) -> dict[str, str]:
     if not (target / ".git").exists():
         raise InputFailure(f"target is not a Git repository: {target}")
+    skills = discover_skills(source)
     adapters = load_host_adapters(source)
-    tools_target = target / "tools" / "polaris"
+    tools_target = confined_target(
+        target, target / "tools" / "polaris", "vendored protocol target"
+    )
     manifest_path = target / INSTALL_MANIFEST_PATH
     previous_manifest = (
         read_install_manifest(target, source) if manifest_path.is_file() else None
     )
     if not force and any(
-        path.exists() for path in _polaris_destinations(target, adapters)
+        path.exists() for path in _polaris_destinations(target, adapters, skills)
     ):
         raise InputFailure("vendored Polaris files already exist; use --force to update")
     if force and previous_manifest is not None:
@@ -78,9 +75,11 @@ def vendor(source: Path, target: Path, force: bool) -> dict[str, str]:
     preserved_paths: list[Path] = []
     for adapter in adapters:
         skill_target = adapter_skill_target(target, adapter)
-        for name in SKILLS:
+        for name in skills:
             source_skill = source / "skills" / name
-            destination = skill_target / name
+            destination = confined_target(
+                target, skill_target / name, "host Skill destination"
+            )
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(source_skill, destination, ignore=ignore_generated)
@@ -90,7 +89,7 @@ def vendor(source: Path, target: Path, force: bool) -> dict[str, str]:
                     skill_path.read_text(encoding="utf-8"),
                     name,
                     adapter,
-                    set(SKILLS),
+                    set(skills),
                 ),
                 encoding="utf-8",
             )
@@ -118,7 +117,7 @@ def vendor(source: Path, target: Path, force: bool) -> dict[str, str]:
         shutil.rmtree(tools_target)
     tools_target.mkdir(parents=True)
     shutil.copyfile(source / "VERSION", tools_target / "VERSION")
-    for name in ("hosts", "scripts", "schemas", "templates", "workflow"):
+    for name in ("hosts", "scripts", "schemas", "skills", "templates", "workflow"):
         shutil.copytree(source / name, tools_target / name, ignore=ignore_generated)
     materialize_template_tree(tools_target)
     ensure_gitignore_rule(target, RUNTIME_IGNORE_PATTERN)

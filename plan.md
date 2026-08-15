@@ -261,9 +261,9 @@ target-repo/
 
 ### 宿主适配契约
 
-每个宿主占用独立、平级的 `hosts/<host-id>/`，并提供由 `host-adapter.schema.json` 校验的 `adapter.json`。清单版本 `adapter_version=1` 声明 Skill 目标目录、调用前缀、入口 Skill、额外 frontmatter、可选 metadata overlay、执行附录和宿主专用文件。共享 Skill 只使用 `{{skill:<name>}}` 占位符和宿主无关 worker 语义；vendoring 时再渲染调用语法并追加宿主执行机制。
+每个宿主占用独立、平级的 `hosts/<host-id>/`，并提供由 `host-adapter.schema.json` 校验的 `adapter.json`。清单版本 `adapter_version=2` 声明 Skill 目标目录、调用前缀、入口 Skill、宿主能力、额外 frontmatter、可选 metadata overlay、执行附录和宿主专用文件。能力至少包括结构化用户输入、worker 创建、状态查询、续接和稳定身份；依赖关系必须机械自洽。共享 Skill 只使用 `{{skill:<name>}}` 占位符和宿主无关 worker 语义；vendoring 时再渲染调用语法并追加宿主执行机制。
 
-`vendor_project.py`、`init_project.py` 和 `validate_project.py` 必须通过 `scripts/internal/host_adapters.py` 发现所有清单，不得按宿主 ID 编写条件分支。新增满足 v1 文件型契约的宿主只增加目录和资产；目标路径冲突、越界路径、缺失源文件和未知清单版本都必须机械拒绝。需要超出 v1 表达能力的新机制时，先升级 adapter schema/version，再保持旧版本迁移边界，不把宿主差异写回共享 Workflow 或 Authority schema。
+`vendor_project.py`、`init_project.py` 和 `validate_project.py` 必须通过 `scripts/internal/host_adapters.py` 发现 canonical Skills 与所有清单，不得按宿主 ID 编写条件分支。入口必须指向实际 Skill；overlay 只能向已知 Skill 增加 canonical 源中不存在的普通文件，不能替换 `SKILL.md` 或其他源内容；adapter 源树与全部目标路径禁止 symlink。新增满足 v2 文件型契约的宿主只增加目录和资产；目标路径冲突、越界路径、缺失源文件、能力矛盾和未知清单版本都必须机械拒绝。需要超出 v2 表达能力的新机制时，先升级 adapter schema/version，再保持旧版本迁移边界，不把宿主差异写回共享 Workflow 或 Authority schema。
 
 JSON 文件是机械门禁的权威输入。结构化 artifact 不生成同名 Markdown 副本；用户可直接查看四格缩进 JSON，主任务也可按需格式化展示。旧 revision 和旧 attempt 文件不可覆盖，`state.json` 仅保存当前有效 artifact 的指针。
 
@@ -579,6 +579,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 - [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和七个 Skill
 - [x] 建立版本化 `hosts/*/adapter.json` 契约，从宿主无关 Skills 生成 Codex/Claude Code 目录与 worker 文件，并将适配器、脚本、Schema、模板和 Workflow vendoring 到 `tools/polaris/`
+- [x] 将 Adapter 升级到 v2，校验真实入口、overlay 新增边界、symlink confinement 与宿主能力依赖
 - [x] 用安装清单登记 vendored 文件归属与 SHA-256，并在强制升级时清除旧版受管文件
 - [x] 建立显式相邻迁移注册表、可恢复迁移记录与 append-only 任务版本事件
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills

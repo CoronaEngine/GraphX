@@ -10,6 +10,7 @@ from pathlib import Path
 from internal.host_adapters import (
     adapter_file_target,
     adapter_skill_target,
+    discover_skills,
     load_host_adapters,
 )
 from internal.install_manifest import validate_install_manifest
@@ -18,17 +19,6 @@ from internal.polaris_core import RuleFailure, protocol_root, read_json, run_mai
 from internal.recovery_protocol import project_index_value
 from internal.task_layout import TASKS_ROOT
 from validate_task import validate as validate_task
-
-
-EXPECTED_SKILLS = {
-    "engineering-task",
-    "requirement-analysis",
-    "architecture-planning",
-    "implementation",
-    "adversarial-review",
-    "validation",
-    "documentation-sync",
-}
 
 
 def validate(repo: Path) -> dict[str, object]:
@@ -87,6 +77,7 @@ def validate(repo: Path) -> dict[str, object]:
     if root == repo / "tools" / "polaris":
         install_manifest = validate_install_manifest(repo, root)
         validate_completed_migrations(repo, root)
+        expected_skills = discover_skills(root)
         managed_paths = {
             item["path"] for item in install_manifest["managed_files"]
         }
@@ -95,7 +86,7 @@ def validate(repo: Path) -> dict[str, object]:
             vendored_skills = adapter_skill_target(repo, adapter)
             missing = [
                 name
-                for name in sorted(EXPECTED_SKILLS)
+                for name in expected_skills
                 if not (vendored_skills / name / "SKILL.md").is_file()
             ]
             if missing:
@@ -105,7 +96,7 @@ def validate(repo: Path) -> dict[str, object]:
                 )
             untracked_skills = [
                 (vendored_skills / name / "SKILL.md").relative_to(repo).as_posix()
-                for name in sorted(EXPECTED_SKILLS)
+                for name in expected_skills
                 if (vendored_skills / name / "SKILL.md").relative_to(repo).as_posix()
                 not in managed_paths
             ]

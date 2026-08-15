@@ -9,6 +9,7 @@
         "skill_target",
         "invocation_prefix",
         "entry_skill",
+        "capabilities",
         "entry_frontmatter",
         "skill_overlay_root",
         "skill_appendix_root",
@@ -17,7 +18,7 @@
     "additionalProperties": false,
     "properties": {
         "adapter_version": {
-            "const": 1
+            "const": 2
         },
         "host_id": {
             "type": "string",
@@ -38,6 +39,34 @@
         "entry_skill": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "capabilities": {
+            "type": "object",
+            "required": [
+                "structured_user_input",
+                "worker_create",
+                "worker_status",
+                "worker_resume",
+                "stable_worker_identity"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "structured_user_input": {
+                    "type": "boolean"
+                },
+                "worker_create": {
+                    "type": "boolean"
+                },
+                "worker_status": {
+                    "type": "boolean"
+                },
+                "worker_resume": {
+                    "type": "boolean"
+                },
+                "stable_worker_identity": {
+                    "type": "boolean"
+                }
+            }
         },
         "entry_frontmatter": {
             "type": "array",

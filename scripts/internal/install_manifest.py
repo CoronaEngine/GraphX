@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable
 
+from .path_security import confined_target
 from .polaris_core import (
     InputFailure,
     RuleFailure,
@@ -33,7 +34,11 @@ def _relative(repo: Path, path: Path) -> str:
 
 def read_install_manifest(repo: Path, protocol_root: Path) -> dict[str, Any]:
     return validate_json_file(
-        repo / INSTALL_MANIFEST_PATH,
+        confined_target(
+            repo,
+            repo / INSTALL_MANIFEST_PATH,
+            "vendored install manifest",
+        ),
         protocol_root / "schemas" / "install-manifest.schema.json",
     )
 
@@ -46,13 +51,19 @@ def build_install_manifest(
 ) -> dict[str, Any]:
     managed: dict[str, str] = {}
     for path in managed_paths:
+        path = confined_target(repo, path, "managed vendored file")
         relative = _relative(repo, path)
         if relative == INSTALL_MANIFEST_PATH.as_posix():
             continue
         if not path.is_file():
             raise InputFailure(f"managed vendored file is missing: {path}")
         managed[relative] = file_sha256(path)
-    preserved = sorted({_relative(repo, path) for path in preserved_paths})
+    preserved = sorted(
+        {
+            _relative(repo, confined_target(repo, path, "preserved vendored file"))
+            for path in preserved_paths
+        }
+    )
     overlap = set(managed) & set(preserved)
     if overlap:
         raise RuleFailure(
@@ -70,7 +81,14 @@ def build_install_manifest(
 
 
 def write_install_manifest(repo: Path, manifest: dict[str, Any]) -> None:
-    write_json_atomic(repo / INSTALL_MANIFEST_PATH, manifest)
+    write_json_atomic(
+        confined_target(
+            repo,
+            repo / INSTALL_MANIFEST_PATH,
+            "vendored install manifest",
+        ),
+        manifest,
+    )
 
 
 def validate_install_manifest(repo: Path, protocol_root: Path) -> dict[str, Any]:
@@ -85,13 +103,21 @@ def validate_install_manifest(repo: Path, protocol_root: Path) -> dict[str, Any]
     if set(managed_paths) & set(preserved_paths):
         raise RuleFailure("install manifest path is both managed and preserved")
     for item in manifest["managed_files"]:
-        path = repo / _safe_relative_path(item["path"])
+        path = confined_target(
+            repo,
+            repo / _safe_relative_path(item["path"]),
+            "managed vendored file",
+        )
         if not path.is_file():
             raise RuleFailure(f"managed vendored file is missing: {item['path']}")
         if file_sha256(path) != item["sha256"]:
             raise RuleFailure(f"managed vendored file hash mismatch: {item['path']}")
     for value in preserved_paths:
-        path = repo / _safe_relative_path(value)
+        path = confined_target(
+            repo,
+            repo / _safe_relative_path(value),
+            "preserved vendored file",
+        )
         if not path.is_file():
             raise RuleFailure(f"preserved vendored file is missing: {value}")
     return manifest
@@ -105,7 +131,9 @@ def remove_managed_files(repo: Path, manifest: dict[str, Any]) -> None:
         reverse=True,
     ):
         relative = _safe_relative_path(item["path"])
-        path = repo / relative
+        path = confined_target(
+            repo, repo / relative, "previously managed vendored file"
+        )
         if path.is_symlink() or path.is_file():
             path.unlink()
         parent = path.parent

@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.10。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.11。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -154,12 +154,13 @@ Claude Code 应加载 `.claude/skills/engineering-task/SKILL.md`。R1/R2 Impleme
 
 ### 3.6 添加新的宿主适配器（维护者）
 
-1. 新建 `hosts/<host-id>/adapter.json`，使用 `adapter_version: 1`，并按 `schemas/host-adapter.schema.json` 声明 Skill 目标、调用前缀、入口 frontmatter、overlay、appendix 与专用文件。
-2. 只把宿主能力差异放入该目录：metadata 放在 overlay，worker 创建/身份/等待/续接规则放在 `skill-appendices/engineering-task.md`，原生 agent 或仓库规则放在 `files` 清单中。
-3. 不要在共享 `skills/`、Workflow、Authority schema 或三个生命周期脚本中新增宿主名分支。共享 Skill 引用另一 Skill 时使用 `{{skill:<name>}}`。
-4. 运行完整测试，并在真实宿主中 smoke test 入口发现、显式触发边界、隔离 worker、handoff 拒绝和同一 Implementer 续接 Documentation Sync。
+1. 新建 `hosts/<host-id>/adapter.json`，使用 `adapter_version: 2`，并按 `schemas/host-adapter.schema.json` 声明 Skill 目标、调用前缀、真实入口、能力、入口 frontmatter、overlay、appendix 与专用文件。
+2. `capabilities` 必须显式声明 `structured_user_input / worker_create / worker_status / worker_resume / stable_worker_identity`。`worker_status` 和稳定身份依赖 worker 创建；续接同时依赖创建与稳定身份。声明可创建 worker 的宿主必须提供入口 Skill appendix，写清创建、身份、查询和续接机制。
+3. 只把宿主能力差异放入该目录：metadata 放在 overlay，worker 创建/身份/等待/续接规则放在 `skill-appendices/engineering-task.md`，原生 agent 或仓库规则放在 `files` 清单中。
+4. 不要在共享 `skills/`、Workflow、Authority schema 或三个生命周期脚本中新增宿主名分支。共享 Skill 引用另一 Skill 时使用 `{{skill:<name>}}`。
+5. 运行完整测试，并在真实宿主中 smoke test 入口发现、显式触发边界、隔离 worker、handoff 拒绝和同一 Implementer 续接 Documentation Sync。
 
-适配器路径必须是仓库内相对路径；不同宿主不能声明重叠的 Skill 或文件目标。vendoring 前会机械校验清单版本、路径、源文件和 Skill 引用，项目校验还会确认每个适配器声明的输出都存在。若新宿主无法用 v1 的“文件复制 + Skill 渲染 + 执行附录”表达，应先升级适配器契约，而不是在核心脚本里写例外。
+`entry_skill` 必须对应 canonical `skills/<name>/SKILL.md`。Overlay 只能在已知 Skill 下增加 canonical 源中不存在的普通文件，不能提供 `SKILL.md`、覆盖任何同路径内容或包含未知 Skill；appendix 也只能使用 `<installed-skill>.md`。适配器源树、manifest、overlay、appendix、专用源文件和目标写入路径都禁止 symlink，所有目标必须留在仓库内。不同宿主不能声明重叠目标。若新宿主无法用 v2 的“文件复制 + Skill 渲染 + 能力声明 + 执行附录”表达，应先升级适配器契约，而不是在核心脚本里写例外。
 
 ## 4. Polaris 仓库自举
 
@@ -546,7 +547,7 @@ git diff -- .agents/skills .claude/skills .claude/agents tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议。Workflow 版本仍为 v0.1.2。
+确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议；v0.1.11 加固 Adapter v2。Workflow 版本仍为 v0.1.2。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 
