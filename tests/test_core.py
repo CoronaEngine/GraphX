@@ -2764,15 +2764,7 @@ class PolarisCoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="polaris-clone-") as clone_temp:
             clone = Path(clone_temp) / "repo"
             cloned = subprocess.run(
-                [
-                    "git",
-                    "-c",
-                    "core.autocrlf=true",
-                    "clone",
-                    "-q",
-                    str(self.repo),
-                    str(clone),
-                ],
+                ["git", "clone", "-q", str(self.repo), str(clone)],
                 text=True,
                 encoding="utf-8",
                 capture_output=True,
@@ -2782,6 +2774,19 @@ class PolarisCoreTests(unittest.TestCase):
                 0,
                 f"git clone failed\nstdout:\n{cloned.stdout}\nstderr:\n{cloned.stderr}",
             )
+            manifest = read_json(
+                clone / "tools" / "polaris" / "install-manifest.json"
+            )
+            for item in manifest["managed_files"]:
+                if item["hash_mode"] != TEXT_HASH_MODE:
+                    continue
+                managed_path = clone / item["path"]
+                lf_content = (
+                    managed_path.read_bytes()
+                    .replace(b"\r\n", b"\n")
+                    .replace(b"\r", b"\n")
+                )
+                managed_path.write_bytes(lf_content.replace(b"\n", b"\r\n"))
             completed = subprocess.run(
                 [
                     sys.executable,
