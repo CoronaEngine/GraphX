@@ -2,13 +2,13 @@
 
 完整的首次接入、日常提需求、独立 Implementation、进度查询、Review、恢复与升级流程见 [Polaris 使用说明书](docs/USAGE.md)。
 
-Polaris 是一套运行在 Codex 之上的、以仓库为权威状态的软件工程工作流系统。
+Polaris 是一套运行在受支持 Coding Agent 宿主之上的、以仓库为权威状态的软件工程工作流系统。当前内置 Codex 与 Claude Code 适配器。
 
 它将模糊需求转换为冻结的 Work Item，通过声明式 Workflow、独立实现、可查询进度、独立对抗审查、可复现验证和文档同步，约束 AI 按可审计、可恢复的工程流程工作。
 
-Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须在请求中主动调用 `$engineering-task`。其他阶段 Skills 同样禁止隐式调用，只能由已启动的工作流在合法节点分派。
+Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须按当前宿主适配器的语法主动调用 `engineering-task`（Codex 为 `$engineering-task`，Claude Code 为 `/engineering-task`）。其他阶段 Skills 只能由已启动的工作流在合法节点分派。
 
-> 当前版本：`0.1.6`（开发中）
+> 当前版本：`0.1.7`（开发中）
 
 ## 核心目标
 
@@ -41,10 +41,10 @@ Polaris 希望让 AI 从“生成代码”转向“可靠参与软件工程”�
 v0.1 是 Repo-native Skill System，由以下部分组成：
 
 ```text
-Codex Skills
+Host-native Skills
 + Repository Authority State
 + Deterministic Python Scripts
-+ Codex Agent Runtime
++ Supported Agent Host Runtime
 ```
 
 v0.1 明确不实现：
@@ -64,7 +64,7 @@ v0.1 明确不实现：
 - v0.1 JSON Authority 模型、Schema 和四空格格式化规范
 - 前进、返工、阻塞、取消和新 Revision 的 Workflow Graph
 - `R0 / R1 / R2` 渐进式严谨度和高风险双 Reviewer 规则
-- 七个 Codex Workflow Skills
+- 七个宿主无关的同源 Workflow Skills，以及声明式、多宿主渲染与 vendoring
 - Skills 和协议实现的目标仓库 vendoring
 - 项目、任务和 Work Item Revision 初始化
 - 状态转换、项目/任务校验、事件账本和状态重建
@@ -76,17 +76,17 @@ v0.1 明确不实现：
 - 不可变 Reviewer handoff、独立会话声明和三轮 Review 上限
 - 不可变 Implementation handoff、独立 Implementer 任务和 handoff/result 机械绑定
 - `.polaris/tasks/<TASK>/runtime/` 下事件驱动的实时进度 JSON
-- Codex 宿主支持时自动创建可见独立 Review 任务，并在其他宿主回退手动交接
-- Codex 宿主支持时自动创建或复用独立 Implementer 任务，并在其他宿主回退同会话执行
+- Codex 使用可见独立任务派发 Implementer/Reviewer
+- Claude Code 使用非 fork、共享 checkout、可按 agent ID 续接的独立 subagent
 - Review Response 与跨 Attempt 的稳定 Finding 生命周期
 - Fresh-session Recovery、项目索引和可刷新 Working Set
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 45 个带场景日志的自动化测试
+- 55 个带场景日志的自动化测试
 
 仍在建设：
 
-- Codex 宿主对 vendored Skills 的实际发现验证
+- Codex 对 vendored Skills 的实际发现验证（Claude Code 2.1.220 的 Skill 与 Reviewer subagent smoke test 已通过）
 - Horizon 和 Vision 真实项目试点
 - Adversarial Review Yield 评估
 
@@ -96,7 +96,10 @@ v0.1 明确不实现：
 
 ```text
 Polaris/
-├── skills/                 # 七个 Workflow Skills 的源文件
+├── skills/                 # 七个宿主无关的 Workflow Skills 源文件
+├── hosts/                  # 平级宿主适配器、元数据、执行附录与专用文件
+│   ├── codex/
+│   └── claude-code/
 ├── scripts/                # 可执行辅助脚本；internal/ 保存不可独立运行的内部实现
 ├── schemas/                # 权威 JSON 数据结构
 ├── templates/              # task-sources 是正文源；task 是脚本生成的目录投影
@@ -107,11 +110,15 @@ Polaris/
 └── plan.md                 # v0.1 产品与实施权威文档
 ```
 
+每个 `hosts/<host-id>/adapter.json` 都由 `schemas/host-adapter.schema.json` 校验，并声明 Skill 目标目录、调用前缀、入口 frontmatter、可选 Skill overlay/appendix 和宿主专用文件。`vendor_project.py`、`init_project.py` 与 `validate_project.py` 只遍历这些清单，不包含 Codex/Claude Code 分支。新增同类文件型宿主时，增加一个适配器目录即可，不需要修改这三个核心流程。
+
 接入目标仓库后：
 
 ```text
 target-repo/
 ├── .agents/skills/         # vendored Codex Skills
+├── .claude/skills/         # vendored Claude Code Skills
+├── .claude/agents/         # Polaris Implementer/Reviewer subagents
 ├── tools/polaris/          # vendored、版本锁定的协议实现
 └── .polaris/               # 项目和任务 Authority State
     └── tasks/TASK-NNNN/
@@ -122,7 +129,7 @@ target-repo/
 
 - Git
 - Python 3.10 或更高版本
-- 支持仓库级 Skills 的 Codex 宿主环境
+- 一个已有 Polaris 适配器的 Coding Agent 宿主；当前为 Codex 或 Claude Code
 
 Polaris v0.1 的 Python 代码只使用标准库，不需要安装第三方依赖。
 
@@ -179,10 +186,7 @@ python -m compileall -q scripts tests
 python scripts/vendor_project.py C:\path\to\target-repo
 ```
 
-该操作复制：
-
-- `skills/` → `.agents/skills/`
-- `scripts/`、`schemas/`、`templates/`、`workflow/` 和 `VERSION` → `tools/polaris/`
+该操作读取所有 `hosts/*/adapter.json`，把 `skills/` 按各宿主的调用语法、frontmatter、overlay 和 appendix 渲染到清单声明的目标目录，同时复制宿主专用文件。`hosts/`、`scripts/`、`schemas/`、`templates/`、`workflow/` 和 `VERSION` 会一起进入 `tools/polaris/`，使目标仓库能够独立初始化、升级和校验适配器。
 
 目标仓库已经存在 vendored 文件时，显式使用 `--force` 才会更新：
 
@@ -190,7 +194,7 @@ python scripts/vendor_project.py C:\path\to\target-repo
 python scripts/vendor_project.py C:\path\to\target-repo --force
 ```
 
-`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤，并把终态步骤结果冻结进 Implementation artifact；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将所有任务路径集中到 `task_layout.py` 单一真源，并由统一物化脚本生成 `templates/task/` 与真实任务目录。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
+`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code 的 Skills、仓库指令和 worker 适配。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
 
 ### 2. 初始化项目状态
 
@@ -200,7 +204,7 @@ python scripts/vendor_project.py C:\path\to\target-repo --force
 python tools/polaris/scripts/init_project.py my-project --repo .
 ```
 
-这会创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 时还会创建最小仓库规则，并在 `.gitignore` 中加入 `.polaris/tasks/*/runtime/`。
+这会创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 或 `CLAUDE.md` 时还会创建对应的最小仓库规则，并在 `.gitignore` 中加入 `.polaris/tasks/*/runtime/`。
 
 ### 3. 初始化任务
 
@@ -267,9 +271,9 @@ python tools/polaris/scripts/build_review_handoff.py TASK-0001 --repo . --implem
 python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . --artifact review_handoff=reviews/r001/handoff-001.json
 ```
 
-R1/R2 到这里必须停止实现与审查工作，但主任务会继续承担宿主编排：Work Item 中的 `review_dispatch.authorized=true` 记录用户的“确认并执行”授权；据此优先在同一本地项目中自动创建可见的独立 Codex Review 任务，只传递 task ID、Reviewer slot 和已注册 handoff 路径，再等待其写回 Review JSON。主任务不会被 fork，Reviewer 不继承 Implementer 聊天；也不默认创建独立 worktree。宿主没有创建或等待任务的能力时，Polaris 回退为完整的手动新任务提示，状态保持 `REVIEWING`。
+R1/R2 到这里必须停止实现与审查工作，但主任务会继续承担宿主编排：Work Item 中的 `review_dispatch.authorized=true` 记录用户的“确认并执行”授权。Codex 创建同一 checkout 中的独立可见 Review 任务；Claude Code 创建非 fork `polaris-reviewer` subagent，并用返回的 agent ID 作为 Reviewer session ID。两者都只传递 task ID、Reviewer slot 和已注册 handoff，不继承 Implementer 聊天，也不默认创建独立 worktree。宿主没有创建或等待 worker 的能力时，Polaris 回退为完整的手动新会话提示，状态保持 `REVIEWING`。
 
-自动 Review 任务使用确定性标题 `Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>`。恢复或重试时先复用已有有效 Review artifact，再复用唯一的同名任务，避免重复创建。高风险 R2 按顺序启动两个独立 Reviewer；任一 Reviewer 拒绝即停止本轮，全部接受后由主任务注册 Review artifacts 并推进状态。
+Review worker 使用确定性标题 `Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>`。恢复或重试时先复用已有有效 Review artifact；Codex 再复用唯一同名任务，Claude Code 在当前主会话中复用已知 agent ID，避免重复创建。高风险 R2 按顺序启动两个独立 Reviewer；任一 Reviewer 拒绝即停止本轮，全部接受后由主任务注册 Review artifacts 并推进状态。
 
 Review 被拒绝后，实现者必须使用 `templates/task/reviews/r001/response-002.json` 所示结构逐项回复所有 open Finding，并在下一次 `FINISH_IMPLEMENTATION` 同时注册该响应。后续 Reviewer 必须保留 Finding ID、复查完整新 Patch 并填写 Reviewer resolution。第三次 Review 仍为 `REJECT` 时，任务自动进入 Human-owned `BLOCKED`。
 

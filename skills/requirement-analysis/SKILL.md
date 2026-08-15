@@ -1,6 +1,6 @@
 ---
 name: requirement-analysis
-description: Internal Polaris stage for an explicitly started `$engineering-task` workflow. Invoke only to convert its request into a frozen Work Item; do not activate from ordinary user requirements.
+description: Internal Polaris stage for an explicitly started `{{skill:engineering-task}}` workflow. Invoke only to convert its request into a frozen Work Item; do not activate from ordinary user requirements.
 ---
 
 # Requirement Analysis
@@ -9,7 +9,7 @@ Inspect the repository before asking questions. Ask only about unknowns that can
 
 ## Stable qualification interaction
 
-If material unknowns remain, keep the task in `DRAFT` and emit `REQUIREMENTS_NEEDED` using the `$engineering-task` status fields. Prepare one to three focused questions per round. Every question must include two or three concrete, mutually exclusive answer options. Put the recommended option first, suffix its label with `(Recommended)`, and explain each option's consequence in one sentence.
+If material unknowns remain, keep the task in `DRAFT` and emit `REQUIREMENTS_NEEDED` using the `{{skill:engineering-task}}` status fields. Prepare one to three focused questions per round. Every question must include two or three concrete, mutually exclusive answer options. Put the recommended option first, suffix its label with `(Recommended)`, and explain each option's consequence in one sentence.
 
 When `request_user_input` or an equivalent structured choice tool is callable, use it to display the questions as a UI panel and wait for the response. Keep each header short, keep option labels concise, and do not add an `Other` option when the host supplies a free-form choice automatically. When no such tool is callable, render the identical questions and options in text, followed by an invitation to provide a precise free-form answer. Do not change host mode solely to obtain the panel. Record UI and text answers through the same Work Item fields, keep every unanswered item in `known_unknowns`, and do not modify production code or run `QUALIFY` while any remain.
 

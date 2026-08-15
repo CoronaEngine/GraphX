@@ -1,6 +1,6 @@
 ---
 name: documentation-sync
-description: Internal Polaris worker stage for an explicitly started `$engineering-task` workflow. Invoke only by continuing the same dedicated Implementer task in IMPLEMENTED to reconcile documentation; do not activate from ordinary documentation requests.
+description: Internal Polaris worker stage for an explicitly started `{{skill:engineering-task}}` workflow. Invoke only by continuing the same dedicated Implementer task in IMPLEMENTED to reconcile documentation; do not activate from ordinary documentation requests.
 ---
 
 # Documentation Sync
@@ -15,6 +15,6 @@ description: Internal Polaris worker stage for an explicitly started `$engineeri
 8. Refresh the Working Set if a promoted exploration or documentation change alters the next stage's justified inputs.
 9. Run `check_docs.py` with the final subject base/head, append its result with `ADD_CHECK`, then use `SET_PHASE` to enter `COMPLETED` with no blocker. Return the Knowledge Delta path, final subject base/head, diff hash, changed documentation, promoted explorations, and check result.
 
-Do not run `SYNC_DOCS` or emit a Polaris checkpoint marker. The main `$engineering-task` validates and registers the artifact, advances the graph, reloads state, and emits `[POLARIS:DOCS_SYNCED]`.
+Do not run `SYNC_DOCS` or emit a Polaris checkpoint marker. The main `{{skill:engineering-task}}` validates and registers the artifact, advances the graph, reloads state, and emits `[POLARIS:DOCS_SYNCED]`.
 
 Do not edit Review, Validation, Result, event, or state artifacts directly.

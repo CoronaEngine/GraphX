@@ -187,7 +187,7 @@ def build(
         "artifact_attempt": attempt,
         "required_isolation": isolation_mode,
         "next_action": (
-            "open a new Codex session or isolated reviewer agent, then load only this handoff"
+            "open a new host session or isolated reviewer worker, then load only this handoff"
         ),
     }
 

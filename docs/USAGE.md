@@ -1,25 +1,25 @@
 # Polaris 使用说明书
 
-本文面向希望在 Codex 中使用 Polaris 管理软件工程任务的项目成员。它从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
+本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.6。Polaris v0.1 是仓库原生的 Skills 与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.7。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
 Polaris 把项目仓库作为权威事实来源：
 
-- `.agents/skills/` 保存 Codex 可发现的 Polaris 工作流 Skills。
+- 宿主适配器声明的目录保存渲染后的 Polaris Skills 和可选 worker 定义；当前 Codex 使用 `.agents/skills/`，Claude Code 使用 `.claude/skills/` 与 `.claude/agents/`。
 - `tools/polaris/` 保存当前项目锁定版本的协议、Schema、模板和 Python 脚本。
 - `.polaris/` 保存项目配置、冻结工作流、任务状态、Work Item、计划、Review、Validation 和事件账本。
 - 普通 Git 提交保存实际代码、测试和文档。
 
-这三个目录的耐久内容都应提交 Git。不要把 `.polaris/` 整体当作缓存，也不要只提交代码而漏掉任务记录。唯一例外是每个任务下的 `.polaris/tasks/<TASK>/runtime/`：它保存当前电脑上的实时 Implementation 进度，默认忽略，不参与阶段门禁。
+这些目录的耐久内容都应提交 Git。不要把 `.polaris/` 整体当作缓存，也不要只提交代码而漏掉任务记录。唯一例外是每个任务下的 `.polaris/tasks/<TASK>/runtime/`：它保存当前电脑上的实时 Implementation 进度，默认忽略，不参与阶段门禁。
 
 Polaris 不保存以下瞬时状态：
 
 - 未提交、未推送的文件修改；
 - 编辑器窗口、断点和本地终端历史；
-- Codex 完整聊天记录；
+- Codex 或 Claude Code 完整聊天记录；
 - 未写入任务产物的口头约定。
 - `.polaris/tasks/<TASK>/runtime/` 中最后一次本机进度快照在其他电脑上的延续。
 
@@ -29,9 +29,9 @@ Polaris 不保存以下瞬时状态：
 
 - Git；
 - Python 3.10 或更高版本；
-- 支持仓库级 Skills 的 Codex 宿主；
+- Codex 或 Claude Code，并支持仓库级 Skills；
 - 一个已经初始化 Git 的目标仓库；
-- 能够从目标仓库根目录打开 Codex。
+- 能够从目标仓库根目录打开所选宿主。
 
 Polaris v0.1 的运行时代码只使用 Python 标准库，不需要额外安装 Python 包。
 
@@ -45,13 +45,17 @@ Polaris v0.1 的运行时代码只使用 Python 标准库，不需要额外安�
 python scripts/vendor_project.py C:\path\to\target-repo
 ```
 
-它会生成：
+它会读取 `hosts/*/adapter.json` 并生成：
 
 ```text
 target-repo/
 ├── .agents/skills/        # Polaris Skills
+├── .claude/skills/        # Claude Code 语法的 Polaris Skills
+├── .claude/agents/        # Claude Code Implementer/Reviewer
 └── tools/polaris/         # 锁定版本的协议实现
 ```
+
+`skills/` 是宿主无关的单一来源。每个版本化适配器声明 Skill 目录、调用前缀、入口 frontmatter、可选 metadata/执行附录和宿主专用文件；vendoring、初始化与校验脚本遍历清单，不按 Codex 或 Claude Code 写分支。因而以后增加同类文件型宿主时，只需增加 `hosts/<host-id>/`，无需修改这三个核心流程。
 
 如果目标仓库已经存在 vendored 文件，普通运行会拒绝覆盖。确认要升级后显式使用：
 
@@ -69,7 +73,7 @@ python scripts/vendor_project.py C:\path\to\target-repo --force
 python tools/polaris/scripts/init_project.py my-project --repo .
 ```
 
-该命令创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json` 和结构化 `.polaris/project-index.json`；如果仓库没有 `AGENTS.md`，还会创建最小仓库规则，并确保 `.gitignore` 包含 `.polaris/tasks/*/runtime/`。
+该命令创建 `.polaris/project.json`、冻结的 `.polaris/workflow.json` 和结构化 `.polaris/project-index.json`；如果仓库没有 `AGENTS.md` 或 `CLAUDE.md`，还会创建对应的最小仓库规则。生成的 `CLAUDE.md` 通过 `@AGENTS.md` 导入共享规则，再补充 Claude Code 专用的 Skill 与非 fork worker 约束。初始化同时确保 `.gitignore` 包含 `.polaris/tasks/*/runtime/`。
 
 校验初始化结果：
 
@@ -93,16 +97,16 @@ git status --short
 
 通常应提交：
 
-- `.agents/skills/`；
+- 当前适配器生成的 `.agents/` 与 `.claude/` 内容；
 - `tools/polaris/`；
 - `.polaris/`；
-- 初始化生成或更新的 `AGENTS.md`；
+- 初始化生成的 `AGENTS.md`、`CLAUDE.md`；
 - 为 Polaris 补充的 `.gitignore` 规则。
 
 示例：
 
 ```powershell
-git add .agents tools/polaris .polaris AGENTS.md .gitignore
+git add .agents .claude tools/polaris .polaris AGENTS.md CLAUDE.md .gitignore
 git commit -m "Bootstrap Polaris workflow"
 git push
 ```
@@ -134,14 +138,35 @@ vendoring 和首次提交完成后，从目标仓库根目录新开一个 Codex 
 
 如果 Codex 能读取 `.agents/skills/engineering-task/SKILL.md` 并按 Polaris 状态恢复或说明当前没有任务，说明发现链路正常。
 
+### 3.5 让 Claude Code 发现 Skills
+
+从目标仓库根目录启动 Claude Code。项目 Skill 位于 `.claude/skills/<name>/SKILL.md`，通过 `/name` 调用；如果 vendoring 时 `.claude/skills/` 尚不存在，建议重启当前 Claude Code 会话以确保目录被监听。
+
+可用同样的低风险请求验证：
+
+```text
+/engineering-task 检查这个仓库是否已经正确接入 Polaris；只检查，不修改代码。
+```
+
+Claude Code 应加载 `.claude/skills/engineering-task/SKILL.md`。R1/R2 Implementation 与 Review 分别使用 `.claude/agents/polaris-implementer.md` 和 `polaris-reviewer.md`；它们是非 fork subagent，共享当前 checkout，但不继承主聊天或实现聊天。
+
+### 3.6 添加新的宿主适配器（维护者）
+
+1. 新建 `hosts/<host-id>/adapter.json`，使用 `adapter_version: 1`，并按 `schemas/host-adapter.schema.json` 声明 Skill 目标、调用前缀、入口 frontmatter、overlay、appendix 与专用文件。
+2. 只把宿主能力差异放入该目录：metadata 放在 overlay，worker 创建/身份/等待/续接规则放在 `skill-appendices/engineering-task.md`，原生 agent 或仓库规则放在 `files` 清单中。
+3. 不要在共享 `skills/`、Workflow、Authority schema 或三个生命周期脚本中新增宿主名分支。共享 Skill 引用另一 Skill 时使用 `{{skill:<name>}}`。
+4. 运行完整测试，并在真实宿主中 smoke test 入口发现、显式触发边界、隔离 worker、handoff 拒绝和同一 Implementer 续接 Documentation Sync。
+
+适配器路径必须是仓库内相对路径；不同宿主不能声明重叠的 Skill 或文件目标。vendoring 前会机械校验清单版本、路径、源文件和 Skill 引用，项目校验还会确认每个适配器声明的输出都存在。若新宿主无法用 v1 的“文件复制 + Skill 渲染 + 执行附录”表达，应先升级适配器契约，而不是在核心脚本里写例外。
+
 ## 4. Polaris 仓库自举
 
-Polaris 源仓库也可以选择用 Polaris 管理，但自举不是默认状态。只有仓库中存在 `.agents/skills/`、`tools/polaris/` 和 `.polaris/` 时，才表示当前源仓库已经完成自举。
+Polaris 源仓库也可以选择用 Polaris 管理，但自举不是默认状态。只有仓库中存在宿主 Skills、`tools/polaris/` 和 `.polaris/` 时，才表示当前源仓库已经完成自举。
 
 自举与普通目标项目的差别只有来源位置：
 
-- 开发 vendoring 工具本身时，源文件位于 `skills/`、`scripts/`、`schemas/`、`templates/` 和 `workflow/`；`scripts/internal/task_layout.py` 是任务相对路径的唯一权威，平铺的 `templates/task-sources/` 只保存模板正文，`templates/task/` 是 `scripts/materialize_task_layout.py` 生成的样例投影，禁止手改；
-- 执行本仓库任务时，使用已锁定的 `.agents/skills/` 与 `tools/polaris/`；
+- 开发 vendoring 工具本身时，共享源文件位于 `skills/`、`scripts/`、`schemas/`、`templates/` 和 `workflow/`，宿主差异位于 `hosts/<host-id>/`；`scripts/internal/task_layout.py` 是任务相对路径的唯一权威，平铺的 `templates/task-sources/` 只保存模板正文，`templates/task/` 是 `scripts/materialize_task_layout.py` 生成的样例投影，禁止手改；
+- 执行本仓库任务时，使用所选宿主已锁定的 Skills 与 `tools/polaris/`；
 - 修改源实现后，需要按版本升级流程重新 vendoring，确认两份内容一致。
 
 目录结构变更只修改 `scripts/internal/task_layout.py`，模板正文只修改平铺的
@@ -152,7 +177,7 @@ Polaris 源仓库也可以选择用 Polaris 管理，但自举不是默认状态
 
 ## 5. 每次提出需求之前
 
-用户不需要手工创建任务 JSON。先把仓库准备到可判断状态，再在需求中显式调用 `$engineering-task`。普通自然语言工程请求不会自动进入 Polaris。
+用户不需要手工创建任务 JSON。先把仓库准备到可判断状态，再显式调用 `$engineering-task`（Codex）或 `/engineering-task`（Claude Code）。普通自然语言工程请求不会自动进入 Polaris。
 
 ### 5.1 同步仓库
 
@@ -163,7 +188,7 @@ git status --short
 
 目标不是强求工作区绝对干净，而是确保每一项已有修改都能说明来源：
 
-- 如果是你希望保留的工作，先提交或明确告诉 Codex 这些文件不可覆盖；
+- 如果是你希望保留的工作，先提交或明确告诉当前 Agent 这些文件不可覆盖；
 - 如果是另一个任务的工作，不要与新需求混在同一工作区；
 - 如果看到不认识的修改，先停下来确认，不要直接 reset 或删除；
 - 确保当前分支和远端符合你的预期。
@@ -182,12 +207,12 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 
 恢复结果会给出当前 Revision、状态、blocker、最近事件、下一动作和来自 `working-set.json` 的最小 Working Set。先续办已有任务还是创建新任务，应根据恢复结果决定。
 
-### 5.3 从正确位置打开 Codex
+### 5.3 从正确位置打开 Agent 宿主
 
 - 工作目录应是目标仓库根目录；
-- 最好在 vendoring 后新开的 Codex 任务中工作；
-- 确认 Codex 能发现 `engineering-task` 等仓库 Skills；
-- 准备使用 Polaris 时，在请求中明确写出 `$engineering-task`；
+- 最好在 vendoring 后新开的 Codex 任务或 Claude Code 会话中工作；
+- 确认宿主能发现 `engineering-task` 等仓库 Skills；
+- 准备使用 Polaris 时，在 Codex 请求中明确写出 `$engineering-task`，或在 Claude Code 中调用 `/engineering-task`；
 - 如果是 R1/R2 Review，不要复用 Implementer 会话，具体见第 10 节。
 
 ### 5.4 准备需求信息
@@ -201,7 +226,7 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 - 是否允许改公共接口、数据格式、依赖、部署或架构；
 - 哪些产品取舍、风险接受或破坏性操作必须由人决定。
 
-信息不完整也可以提出需求。Polaris 的 `requirement-analysis` 会把未知项显式化；但涉及产品取舍、不可逆迁移、权限扩大、风险接受等 Human-owned 决策时，Codex 不应替用户猜测。
+信息不完整也可以提出需求。Polaris 的 `requirement-analysis` 会把未知项显式化；但涉及产品取舍、不可逆迁移、权限扩大、风险接受等 Human-owned 决策时，Agent 不应替用户猜测。
 
 ## 6. 如何提出一个好需求
 
@@ -220,6 +245,8 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 需要我决定的事项：
 ```
 
+Claude Code 使用相同正文，但首行改为 `/engineering-task 完成以下工程任务。`。
+
 示例：
 
 ```text
@@ -235,9 +262,9 @@ python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 需要我决定的事项：如果兼容性与性能目标冲突，先让我选择。
 ```
 
-不必在需求中手写任务状态、Revision、Review JSON 或 transition 命令。显式调用后，让 `$engineering-task` 负责选择相应 Skills 和合法状态转换。
+不必在需求中手写任务状态、Revision、Review JSON 或 transition 命令。显式调用后，让宿主的 `engineering-task` Skill 负责选择相应阶段和合法状态转换。
 
-如果用户只说“给订单接口增加分页”，Codex 会按普通工程请求处理，不会进入 Polaris。只有请求中明确调用 `$engineering-task`，才表示用户选择启用 Polaris 工作流。其余阶段 Skills 也禁止隐式调用，由已启动的 `$engineering-task` 按状态节点分派；不要把阶段 Skill 当成另一个入口。
+如果用户只说“给订单接口增加分页”，宿主会按普通工程请求处理，不会进入 Polaris。只有显式调用 `$engineering-task`（Codex）或 `/engineering-task`（Claude Code），才表示用户选择启用 Polaris 工作流。其余阶段 Skills 由已启动的入口 Skill 按状态节点分派；不要把阶段 Skill 当成另一个入口。
 
 ## 7. 提出需求后会发生什么
 
@@ -384,13 +411,14 @@ Implementer 只接收 task ID 和已注册 handoff，不继承主任务聊天。
 
 - 在主任务询问“展示 TASK-0001 当前进度并继续”，主任务会验证 `progress.json` 后输出 `IMPLEMENTATION_PROGRESS`，不会取消或重复派发 Worker；
 - 在支持任务列表的 Codex 宿主中，点击确定性标题的 Implementer 任务查看它的实时输出；
+- 在 Claude Code 中通过 subagent/task 面板查看 `polaris-implementer`，主任务以返回的 agent ID 续接同一 worker；
 - 新主任务恢复时，`recover_task.py` 会在存在有效快照时返回 `live_implementation_progress`。
 
 宿主无法创建、查找、等待或续接任务时，Polaris 使用同一个 handoff 在主任务中执行，`Dispatch mode` 显示 `same_session_fallback`。流程仍可完成并继续写进度，但主任务正在执行长操作时，状态回答可能延迟。
 
 如果 Implementer 遇到权限、凭据、外部依赖或必须由 Human 决定的问题，进度会进入 `BLOCKED` 并同时填写 `blocker` 与 `user_action`；主任务据此告诉用户需要处理什么。
 
-## 10. 独立 Review：自动新任务与手动回退
+## 10. 独立 Review：自动 worker 与手动回退
 
 实现和 Documentation Sync 完成后，由主任务根据 Implementer 的最终产物生成冻结 handoff：
 
@@ -403,7 +431,7 @@ python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . 
 
 - `R0`：允许同一会话执行明确隔离的审查 pass，handoff 使用 `r0_isolated_same_session`；
 - `R1/R2`：Implementer 到这里停止工作；主任务只负责派发、等待、重读仓库 Authority 和执行机械转换；
-- 宿主可以管理 Codex 任务时，在同一本地项目中自动创建可见的新 Review 任务，不 fork 主任务或 Implementer 对话，也不默认使用独立 worktree；
+- Codex 在同一本地项目中自动创建可见的新 Review 任务；Claude Code 创建非 fork `polaris-reviewer` subagent 并记录其 agent ID；两者都不继承 Implementer 对话，也不默认使用独立 worktree；
 - 新 Reviewer 只接收已注册 handoff 路径，使用 `adversarial-review`，先查规格符合性，再查工程质量；
 - Reviewer session ID 必须与实现者不同，并如实记录隔离方式和聊天继承声明。
 
@@ -413,11 +441,11 @@ python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . 
 Polaris Review · TASK-0001 · r001 · attempt 1 · reviewer 1
 ```
 
-创建前会先查找该 slot 已存在的有效 Review artifact，再查找唯一同名任务；因此恢复或等待中断不会正常地产生重复 Review 任务。任务启动后主对话显示 `REVIEW_SESSION_STARTED`，其中包括 Review task、Reviewer slot、handoff、dispatch mode，并在 Reviewer 执行期间显示 `User action: None`。
+创建前会先查找该 slot 已存在的有效 Review artifact；Codex 再查找唯一同名任务，Claude Code 在当前主会话中复用已知 agent ID，因此恢复或等待中断不会正常地产生重复 Review worker。启动后主对话显示 `REVIEW_SESSION_STARTED`，其中包括 Review task/agent ID、Reviewer slot、handoff、dispatch mode，并在 Reviewer 执行期间显示 `User action: None`。
 
 高风险 R2 的两个 Reviewer 按顺序启动，且 session ID 必须不同。任一 Reviewer `REJECT` 后不再启动本轮剩余 Reviewer；全部 `ACCEPT` 后，原 `engineering-task` 会话注册 `review`/`review_2` 并执行 `ACCEPT_REVIEW`。Reviewer 只写不可变 Review JSON，不修改实现，也不直接推进状态机。
 
-如果宿主没有创建、列出或等待 Codex 任务的能力，或者自动派发失败，Polaris 不会因此把业务任务写成 `BLOCKED`，而是保持 `REVIEWING`、显示 `REVIEW_HANDOFF_READY`，并给出下面的手动提示。完成手动 Review 后，回到原任务请求 `$engineering-task` 从仓库恢复并继续。
+如果宿主没有创建、列出或等待 worker 的能力，或者自动派发失败，Polaris 不会因此把业务任务写成 `BLOCKED`，而是保持 `REVIEWING`、显示 `REVIEW_HANDOFF_READY`，并给出手动新会话提示。完成手动 Review 后，回到原任务并用宿主入口从仓库恢复继续。
 
 给新 Review 任务的请求可以是：
 
@@ -426,6 +454,8 @@ Polaris Review · TASK-0001 · r001 · attempt 1 · reviewer 1
 只依据 .polaris/tasks/TASK-0001/reviews/r001/handoff-001.json，不继承或假设主任务、Implementer 会话中的结论。
 写入不可变 Review JSON 后返回 verdict 和路径，不要修改实现或执行状态转换。
 ```
+
+在 Claude Code 手动新会话中，将 `$adversarial-review` 改为 `/adversarial-review`。
 
 Session ID 是审计声明，不是身份认证。如果宿主没有提供 ID，每个会话开始时应生成一个不复用的稳定标识。
 
@@ -441,7 +471,7 @@ Session ID 是审计声明，不是身份认证。如果宿主没有提供 ID，
 
 ## 11. 恢复工作
 
-### 11.1 同一电脑的新 Codex 任务
+### 11.1 同一电脑的新宿主会话
 
 在仓库根目录运行：
 
@@ -450,13 +480,13 @@ python tools/polaris/scripts/validate_project.py --repo .
 python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 ```
 
-然后告诉 Codex：
+然后告诉 Codex，或在 Claude Code 使用对应的 slash 语法：
 
 ```text
 请使用 $engineering-task 从 .polaris 恢复并继续 TASK-0001。
 ```
 
-Codex 应根据当前状态加载对应 Skill，而不是从聊天记忆猜测下一步。
+宿主应根据当前状态加载对应 Skill，而不是从聊天记忆猜测下一步。
 
 ### 11.2 换一台电脑
 
@@ -478,7 +508,7 @@ python tools/polaris/scripts/validate_project.py --repo .
 python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
 ```
 
-再从仓库根目录新开 Codex 任务并请求恢复。只要 `.agents/skills/`、`tools/polaris/`、`.polaris/` 的耐久产物和 subject commits 都已提交并推送，就能恢复权威工作状态；ignored 的任务内 `runtime/` 会在继续实现时重新生成。
+再从仓库根目录新开 Codex 任务或 Claude Code 会话并请求恢复。只要宿主 Skills/agents、`tools/polaris/`、`.polaris/` 的耐久产物和 subject commits 都已提交并推送，就能恢复权威工作状态；ignored 的任务内 `runtime/` 会在继续实现时重新生成。
 
 无法通过 Git 恢复的内容包括：旧电脑上未提交/未推送的文件、编辑器状态和完整聊天记录。重要决定应写入 Work Item、Plan、Review Response、Knowledge Delta 或 Result，而不是只留在对话里。
 
@@ -494,11 +524,11 @@ python scripts/vendor_project.py C:\path\to\target-repo --force
 
 ```powershell
 git status --short
-git diff -- .agents/skills tools/polaris
+git diff -- .agents/skills .claude/skills .claude/agents tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后提交 `.agents/skills/` 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION` 和新的 handoff 绑定；v0.1.3 使用 `project-index.json` 与 `working-set.json` 代替旧 Markdown 文件；v0.1.4 使用线性 `implementation_steps` 并要求 Implementation 冻结匹配的 `step_results`；v0.1.5 让任务模板目录镜像实际生成目录；v0.1.6 将任务路径集中到 `task_layout.py` 单一真源，并由同一物化脚本生成模板树与真实任务目录，但 Workflow 版本仍为 v0.1.2。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
+确认差异后提交宿主 Skills/agents 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code 的 Skills、`CLAUDE.md` 和 worker 适配，但 Workflow 版本仍为 v0.1.2。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 
@@ -527,6 +557,14 @@ python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote 
 3. 确认这些文件已在当前分支中，而不是只存在于另一台电脑；
 4. vendoring 后新开一个 Codex 任务；
 5. 检查仓库规则是否禁止加载或覆盖 Skills。
+
+### Claude Code 没有发现 Polaris Skills
+
+1. 确认从仓库根目录启动；
+2. 确认 `.claude/skills/engineering-task/SKILL.md` 存在；
+3. 运行 `/skills` 检查项目 Skill；
+4. 如果 vendoring 前 `.claude/skills/` 不存在，重启 Claude Code；
+5. 使用 `/engineering-task`，而不是 Codex 的 `$engineering-task`。
 
 ### `init_project.py` 报项目已存在
 
@@ -560,9 +598,9 @@ python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote 
 [ ] 已同步正确分支
 [ ] git status 中每项修改都可解释
 [ ] validate_project PASS
-[ ] 已从仓库根目录打开新的或合适的 Codex 任务
-[ ] Codex 能发现 engineering-task
-[ ] 请求中已显式调用 $engineering-task
+[ ] 已从仓库根目录打开新的或合适的 Codex 任务 / Claude Code 会话
+[ ] 宿主能发现 engineering-task
+[ ] 已显式调用 $engineering-task（Codex）或 /engineering-task（Claude Code）
 [ ] 已说明目标、范围、约束、验收和 Human-owned 决策
 ```
 

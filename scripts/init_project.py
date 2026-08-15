@@ -8,6 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from internal.host_adapters import adapter_file_target, load_host_adapters
 from internal.polaris_core import (
     InputFailure,
     ensure_gitignore_rule,
@@ -37,6 +38,14 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
     agents_path = repo / "AGENTS.md"
     if not agents_path.exists():
         shutil.copyfile(root / "templates" / "AGENTS.md", agents_path)
+    for adapter in load_host_adapters(root):
+        for item in adapter["files"]:
+            if item["overwrite"]:
+                continue
+            destination = adapter_file_target(repo, item)
+            if not destination.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(adapter["adapter_root"] / item["source"], destination)
     ensure_gitignore_rule(repo, RUNTIME_IGNORE_PATTERN)
     return {"message": f"initialized Polaris project {project_id}"}
 

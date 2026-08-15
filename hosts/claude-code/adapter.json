@@ -1,0 +1,30 @@
+{
+    "adapter_version": 1,
+    "host_id": "claude-code",
+    "display_name": "Claude Code",
+    "skill_target": ".claude/skills",
+    "invocation_prefix": "/",
+    "entry_skill": "engineering-task",
+    "entry_frontmatter": [
+        "disable-model-invocation: true"
+    ],
+    "skill_overlay_root": null,
+    "skill_appendix_root": "skill-appendices",
+    "files": [
+        {
+            "source": "agents/polaris-implementer.md",
+            "target": ".claude/agents/polaris-implementer.md",
+            "overwrite": true
+        },
+        {
+            "source": "agents/polaris-reviewer.md",
+            "target": ".claude/agents/polaris-reviewer.md",
+            "overwrite": true
+        },
+        {
+            "source": "CLAUDE.md",
+            "target": "CLAUDE.md",
+            "overwrite": false
+        }
+    ]
+}

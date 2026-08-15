@@ -1,6 +1,6 @@
 ---
 name: architecture-planning
-description: Internal Polaris stage for an explicitly started `$engineering-task` workflow. Invoke only for a frozen task at QUALIFIED or returned PLANNED; do not activate from ordinary planning requests.
+description: Internal Polaris stage for an explicitly started `{{skill:engineering-task}}` workflow. Invoke only for a frozen task at QUALIFIED or returned PLANNED; do not activate from ordinary planning requests.
 ---
 
 # Architecture Planning
@@ -14,6 +14,6 @@ description: Internal Polaris stage for an explicitly started `$engineering-task
 7. Include task-local explorations and only project explorations matching an affected module or hypothesis.
 8. Run task validation and transition with `PLAN` only when the plan and working set are complete.
 
-After the transition succeeds, reload state and emit `[POLARIS:PLAN_READY]` with the nine fixed `$engineering-task` status fields. Put the Plan, Working Set, acceptance-to-validation mapping, and unresolved decisions in the checkpoint details.
+After the transition succeeds, reload state and emit `[POLARIS:PLAN_READY]` with the nine fixed `{{skill:engineering-task}}` status fields. Put the Plan, Working Set, acceptance-to-validation mapping, and unresolved decisions in the checkpoint details.
 
 Do not modify the frozen Work Item or start implementation from this stage.

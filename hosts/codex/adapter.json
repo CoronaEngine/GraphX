@@ -1,0 +1,12 @@
+{
+    "adapter_version": 1,
+    "host_id": "codex",
+    "display_name": "Codex",
+    "skill_target": ".agents/skills",
+    "invocation_prefix": "$",
+    "entry_skill": "engineering-task",
+    "entry_frontmatter": [],
+    "skill_overlay_root": "skill-overlays",
+    "skill_appendix_root": "skill-appendices",
+    "files": []
+}

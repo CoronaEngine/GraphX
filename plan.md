@@ -3,19 +3,19 @@
 > 状态：Implementation underway
 > 目标版本：v0.1
 > 产品形态：Repo-native Skill System
-> 宿主 Runtime：Codex
+> 宿主 Runtime：声明式可扩展；v0.1 内置 Codex、Claude Code
 >
-> **已确认的 MVP 决策：v0.1 不实现 CLI，也不提供 shell wrapper。Polaris Skills、辅助脚本、Schema、模板和默认 Workflow 全部 vendoring 到目标仓库；所有入口由仓库内 Codex Skills 和 Python 脚本提供。**
+> **已确认的 MVP 决策：v0.1 不实现 CLI，也不提供 shell wrapper。Polaris Skills、版本化声明式宿主适配器、辅助脚本、Schema、模板和默认 Workflow 全部 vendoring 到目标仓库；所有入口由仓库内 Skills 和 Python 脚本提供。所有宿主共享同一套仓库 Authority 和机械协议。**
 
 ## 1. 目标与定位
 
-Polaris v0.1 是一套运行在 Codex 之上的、可持久化的软件工程协议：
+Polaris v0.1 是一套运行在受支持 Coding Agent 宿主之上的、可持久化的软件工程协议：
 
 ```text
 Workflow Skills
 + Repository State
 + Deterministic Validators / Helpers
-+ Codex Agent Runtime
++ Supported Agent Host Runtime
 ```
 
 它把模糊需求转化为冻结的 Work Item，按声明式工作流推进实现、独立审查、机械验证和文档同步，并允许新会话仅从仓库恢复工作。
@@ -47,9 +47,9 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - `.polaris/` 仓库状态协议、模板与默认工作流图。
 - Work Item 修订、任务状态、事件账本、工作集、Review、Validation、Result。
 - 项目初始化、任务初始化、状态转换、结构校验、文档影响检查、工作集生成脚本。
-- 独立 Codex Implementer 任务、不可变 Implementation handoff 与事件驱动实时进度快照。
+- 独立 Implementer worker、不可变 Implementation handoff 与事件驱动实时进度快照。
 - 验收标准绑定的线性 `implementation_steps`；步骤只能依次推进或在末尾追加，最终结果冻结进 Implementation artifact。
-- 独立 Codex 会话的对抗审查协议。
+- 独立 worker context 的对抗审查协议。
 - Fresh-session / fresh-clone 的渐进恢复协议。
 - `R0 / R1 / R2` 三档渐进式严谨度。
 - Horizon 首个试点；通过后在 Vision 做第二个试点。
@@ -72,11 +72,11 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 Human
   │  owns intent, hard constraints, approvals
   ▼
-Main Codex task + Polaris Workflow Skills
+Main host task + Polaris Workflow Skills
   │  owns orchestration, status, gates and transitions
   ├───────────── host dispatch ─────────────┐
   ▼                                         ▼
-Fresh Implementer task                 Fresh Reviewer task(s)
+Fresh Implementer worker               Fresh Reviewer worker(s)
   │  code / tests / docs / progress         │  immutable verdict
   └────────── same local checkout ──────────┘
                       │
@@ -113,7 +113,17 @@ polaris/
 ├── README.md
 ├── AGENTS.md
 ├── VERSION
-├── skills/
+├── hosts/
+│   ├── codex/
+│   │   ├── adapter.json               # Skill 目标、调用语法与资产清单
+│   │   ├── skill-overlays/            # Codex 专用 Skill metadata overlay
+│   │   └── skill-appendices/          # Codex worker 执行语义
+│   └── claude-code/
+│       ├── adapter.json
+│       ├── CLAUDE.md
+│       ├── agents/                    # Claude Code 非 fork worker 定义
+│       └── skill-appendices/
+├── skills/                            # 宿主无关、单一来源
 │   ├── engineering-task/SKILL.md
 │   ├── requirement-analysis/SKILL.md
 │   ├── architecture-planning/SKILL.md
@@ -122,6 +132,7 @@ polaris/
 │   ├── validation/SKILL.md
 │   └── documentation-sync/SKILL.md
 ├── templates/
+│   ├── AGENTS.md                  # 共享规则
 │   ├── project-index.json
 │   ├── task-sources/              # 模板正文唯一来源；不表达目录结构
 │   │   ├── state.json
@@ -148,6 +159,7 @@ polaris/
 ├── workflow/default-workflow.json
 ├── schemas/
 │   ├── project.schema.json
+│   ├── host-adapter.schema.json
 │   ├── task-state.schema.json
 │   ├── workflow.schema.json
 │   ├── work-item.schema.json
@@ -168,6 +180,7 @@ polaris/
 │   ├── check_docs.py
 │   └── internal/                  # 不可独立运行的协议实现
 │       ├── task_layout.py
+│       ├── host_adapters.py
 │       ├── polaris_core.py
 │       ├── transition_gates.py
 │       └── transition_effects.py
@@ -181,6 +194,7 @@ polaris/
 ```text
 target-repo/
 ├── AGENTS.md
+├── CLAUDE.md                          # Claude Code 入口与共享规则桥接
 ├── .agents/
 │   └── skills/                    # vendored Codex Skills
 │       ├── engineering-task/SKILL.md
@@ -190,9 +204,17 @@ target-repo/
 │       ├── adversarial-review/SKILL.md
 │       ├── validation/SKILL.md
 │       └── documentation-sync/SKILL.md
+├── .claude/
+│   ├── skills/                    # 同源渲染的 Claude Code Skills
+│   │   ├── engineering-task/SKILL.md
+│   │   └── ...
+│   └── agents/
+│       ├── polaris-implementer.md
+│       └── polaris-reviewer.md
 ├── tools/
 │   └── polaris/                   # vendored、项目锁定的协议实现
 │       ├── VERSION
+│       ├── hosts/
 │       ├── scripts/
 │       ├── schemas/
 │       ├── templates/
@@ -233,7 +255,13 @@ target-repo/
     │       └── explorations/EXP-*.json
 ```
 
-`.agents/skills/`、`tools/polaris/` 和 `.polaris/` 的耐久状态均纳入 Git；唯一例外是各任务目录下的 `.polaris/tasks/<TASK>/runtime/`，它保存当前电脑上的实时进度并默认忽略，不参与阶段门禁或 Fresh Clone 恢复。前两者是 vendored 协议包，`.polaris/` 其余内容是项目运行状态。`project.json` 必须记录 `polaris_version` 和 `workflow_version`。v0.1 开工前使用最小 fixture 验证宿主能够发现仓库内 `.agents/skills/`；如果宿主发现规则不同，只调整 vendoring 路径，不改变 Skills 随目标仓库版本化的决定。
+宿主渲染目录、`tools/polaris/` 和 `.polaris/` 的耐久状态均纳入 Git；唯一例外是各任务目录下的 `.polaris/tasks/<TASK>/runtime/`，它保存当前电脑上的实时进度并默认忽略，不参与阶段门禁或 Fresh Clone 恢复。宿主目录与 `tools/polaris/` 是 vendored 协议包，`.polaris/` 其余内容是项目运行状态。`project.json` 必须记录 `polaris_version` 和 `workflow_version`。Codex 从 `.agents/skills/` 发现 `$skill-name`，Claude Code 从 `.claude/skills/` 发现 `/skill-name`；两份 Skill 由宿主无关的 `skills/` 单一来源生成。
+
+### 宿主适配契约
+
+每个宿主占用独立、平级的 `hosts/<host-id>/`，并提供由 `host-adapter.schema.json` 校验的 `adapter.json`。清单版本 `adapter_version=1` 声明 Skill 目标目录、调用前缀、入口 Skill、额外 frontmatter、可选 metadata overlay、执行附录和宿主专用文件。共享 Skill 只使用 `{{skill:<name>}}` 占位符和宿主无关 worker 语义；vendoring 时再渲染调用语法并追加宿主执行机制。
+
+`vendor_project.py`、`init_project.py` 和 `validate_project.py` 必须通过 `scripts/internal/host_adapters.py` 发现所有清单，不得按宿主 ID 编写条件分支。新增满足 v1 文件型契约的宿主只增加目录和资产；目标路径冲突、越界路径、缺失源文件和未知清单版本都必须机械拒绝。需要超出 v1 表达能力的新机制时，先升级 adapter schema/version，再保持旧版本迁移边界，不把宿主差异写回共享 Workflow 或 Authority schema。
 
 JSON 文件是机械门禁的权威输入。结构化 artifact 不生成同名 Markdown 副本；用户可直接查看四格缩进 JSON，主任务也可按需格式化展示。旧 revision 和旧 attempt 文件不可覆盖，`state.json` 仅保存当前有效 artifact 的指针。
 
@@ -249,7 +277,7 @@ JSON 文件是机械门禁的权威输入。结构化 artifact 不生成同名 M
 | `validation` | 把 acceptance criterion 映射到可复现证据；运行规定验证；产出 verdict 输入 | 不弱化验收条件，不用主观总结代替命令结果 |
 | `documentation-sync` | 在同一 Implementer 任务中继续分析知识 delta、更新文档并写 Knowledge Delta | 不执行状态转换，不自动把未确认推断升级为权威知识 |
 
-Skill 描述应按触发边界编写，而不是做技术能力菜单。七个 Polaris Skills 都必须设置 `policy.allow_implicit_invocation: false`：用户仅通过显式调用 `$engineering-task` 进入 Polaris，阶段 Skills 只由已启动的工作流在合法节点显式分派，R1/R2 Reviewer 只从已注册 handoff 显式调用。普通工程请求不进入 Polaris。Skill 本身使用 fixture 做回归测试。
+Skill 描述应按触发边界编写，而不是做技术能力菜单。用户仅通过适配器渲染后的 `engineering-task` 入口进入 Polaris（当前 Codex 为 `$engineering-task`，Claude Code 为 `/engineering-task`），阶段 Skills 只由已启动的工作流在合法节点分派，R1/R2 Reviewer 只从已注册 handoff 调用。宿主专用 metadata/frontmatter 固化显式触发边界；普通工程请求不进入 Polaris。共享 Skill 与每个适配器的渲染结果都使用 fixture 做回归测试。
 
 ### 稳定对话协议
 
@@ -257,7 +285,7 @@ Skill 描述应按触发边界编写，而不是做技术能力菜单。七个 P
 
 需求分析每轮最多询问三个会实质影响方案或验收的问题。每个问题必须给出两到三个互斥选项，推荐项排在第一位并逐项说明影响，同时允许用户提供选项之外的精确答案。宿主提供 `request_user_input` 或等效结构化交互工具时优先弹出选择面板；不可调用时必须显示内容相同的文本选项，不得为获得 UI 自行切换宿主模式或阻塞流程。两种回答写入相同 Authority；未回答项进入 `known_unknowns`，任务保持 `DRAFT`。信息完整后必须先展示 `WORK_ITEM_PREVIEW`，完整列出目标、范围、硬约束、rigor、风险、Human-owned 决策和每个 AC 的 statement/evidence，并以相同的 UI-first/text-fallback 规则等待用户明确确认。推荐确认项为“确认并执行”，其说明必须明确：确认会冻结 Work Item，并授权 Polaris 在同一本地项目中自动创建当前 revision 所需的全部独立 Implementer / Review 任务以及图允许范围内的后续 attempts。确认分别写入 `implementation_dispatch=mode:auto_new_task / fallback:same_session / same_local_project:true / authorized:true` 与 `review_dispatch=mode:auto_new_task / fallback:manual_handoff / same_local_project:true / authorized:true`；新 revision 将两者的 `authorized` 重置为 `false`。确认后才能执行 `QUALIFY` 或 `NEW_REVISION` 并输出 `WORK_ITEM_QUALIFIED`。已冻结后发生实质需求变化必须创建新 revision，不允许静默覆盖。
 
-v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Worker 任务创建完全复用宿主工具。Implementer 派发不可用时回退主任务同会话执行并声明响应可能延迟；Reviewer 派发不可用时回退手动新任务。稳定性由 Skill 指令、仓库 Authority、转换后重读和 fixture 测试共同保证。`transition_task.py` 必须机械拒绝 statement 或 evidence 为空白/`TODO` 的验收项。
+v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Worker 创建完全复用宿主工具。具体创建、身份、查找、等待和续接语义由渲染后的宿主执行附录定义：Codex 使用同一 checkout 中的独立可见任务；Claude Code 使用非 fork 的 `polaris-implementer` / `polaris-reviewer` subagent。Implementer 派发不可用时回退主任务同会话执行并声明响应可能延迟；Reviewer 派发不可用时回退手动新会话。稳定性由共享 Skill、宿主适配器、仓库 Authority、转换后重读和 fixture 测试共同保证。`transition_task.py` 必须机械拒绝 statement 或 evidence 为空白/`TODO` 的验收项。
 
 ## 6. Work Item 与任务模型
 
@@ -456,20 +484,20 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 
 1. 主任务是唯一用户入口和状态机所有者；自动路径中不修改 subject，只负责生成/注册 handoff、派发或续接 Worker、等待、读取进度、校验产物和执行转换。
 2. `START_IMPLEMENTATION` 后生成 `implementations/rNNN/handoff-NNN.json`，再通过 `DISPATCH_IMPLEMENTATION` 自转换注册。handoff 冻结 Work Item、Plan、Working Set、项目规则、subject base、prior Review（返工时）、确定性输出路径和实时进度路径。
-3. Work Item 的 `implementation_dispatch.authorized=true` 是“确认并执行”对当前 revision 全部 Implementer attempts 的显式授权。宿主支持任务管理时，在同一本地项目和同一 checkout 创建可见的新任务；不 fork 主对话，也不默认使用 worktree。
-4. Implementer 标题固定为 `Polaris Implement · <TASK> · <REVISION> · attempt <N>`。创建前先复用与 handoff 绑定的有效 Implementation artifact，其次复用唯一同名任务；多条同名记录时不得猜测，回退同会话执行。
+3. Work Item 的 `implementation_dispatch.authorized=true` 是“确认并执行”对当前 revision 全部 Implementer attempts 的显式授权。宿主按自身执行附录在同一本地项目和 checkout 创建隔离 worker；worker 不继承主聊天，也不默认使用 worktree。Codex 的 worker 是可见新任务，Claude Code 的 worker 是保留 agent ID 的非 fork `polaris-implementer` subagent。
+4. Implementer 标题固定为 `Polaris Implement · <TASK> · <REVISION> · attempt <N>`。创建前先复用与 handoff 绑定的有效 Implementation artifact，其次只按适配器声明的稳定身份复用唯一 worker。多条或不明确记录时不得猜测，回退同会话执行。
 5. Implementer 只接收 task ID 与已注册 handoff，不接收主聊天、实现建议或预期结果。它拥有本轮代码、测试、构建文件和项目文档的单写者权限，但不执行 Graph 转换、Review、Validation 或关闭。
 6. 主任务先用 `INITIALIZE` 创建空的 `QUEUED` 快照；Implementer 在改代码前用 `DEFINE_STEPS` 建立有序、非空且绑定 Work Item 验收 ID 的 `implementation_steps`。每步使用稳定 `STEP-NNN`，只能通过 `START_STEP / COMPLETE_STEP / BLOCK_STEP / RESUME_STEP / SKIP_STEP` 线性推进；新发现工作只能用 `APPEND_STEP` 加到末尾，不能重排、删除、改名或回退。测试证据用 `ADD_CHECK` 追加，阶段用 `SET_PHASE` 更新。
 7. `.polaris/tasks/<TASK>/runtime/progress.json` 只保留一份有序步骤权威；current、completed 和 remaining 均由步骤状态推导。所有步骤终态后才能进入 `CHECKPOINTING`，Implementation artifact 必须复制完全一致的 `step_results`。主任务按需格式化展示，不生成 Markdown 副本、Task DAG 或主观百分比。
 8. 每个任务的 `runtime/` 子目录默认 Git ignored，不影响工作树 checkpoint，也不承诺跨电脑恢复。正式 Implementation、Knowledge Delta、commit/diff 和 event 继续写入耐久 Authority。主任务可随时读取进度；若整个宿主停止运行，快照只代表最后一次成功更新。
-9. Implementation artifact 必须绑定 handoff path/hash、Implementer session 和终态 `step_results`。主任务验证后执行 `FINISH_IMPLEMENTATION`，再续接同一个 Implementer 任务执行 `$documentation-sync`；Worker 写回 Knowledge Delta 和最终 subject checkpoint，主任务执行 `SYNC_DOCS`。
+9. Implementation artifact 必须绑定 handoff path/hash、Implementer session 和终态 `step_results`。主任务验证后执行 `FINISH_IMPLEMENTATION`，再按适配器声明的稳定身份续接同一个 Implementer worker 执行渲染后的 `documentation-sync` Skill；Worker 写回 Knowledge Delta 和最终 subject checkpoint，主任务执行 `SYNC_DOCS`。
 10. Review 或 Validation 返工生成新 attempt、新 handoff 和新的 Implementer 任务；prior Review 通过 handoff 传递，Implementer 写 Review Response。不同 attempt 不复用 Implementer session。
 11. 宿主缺少创建、查找、等待或续接能力时，主任务使用同一 handoff 执行 `same_session` fallback，仍更新进度文件并明确提示即时状态响应可能延迟；不得仅因宿主能力不足把业务任务置为 `BLOCKED`。
 
 ### Independent Review
 
 1. Implementer 完成 Implementation checkpoint 和 Documentation Sync 后停止实现与审查，不得自审后直接进入 Validation；主任务只保留宿主调度、等待、Authority 重读和机械转换职责。
-2. R1/R2 优先由宿主在同一本地项目中自动创建新的可见 Codex Review 任务；Reviewer 不继承主任务或 Implementer 的聊天历史，只接收 task ID、Reviewer slot 和已注册 handoff 路径。不得使用继承历史的 fork，也不默认使用独立 worktree。R0 允许主任务同会话，但必须重新加载冻结合同和最终 Patch，执行隔离式 adversarial pass。
+2. R1/R2 优先由宿主按执行附录在同一本地 checkout 创建新的 Reviewer worker；当前 Codex 使用可见新任务，Claude Code 使用非 fork `polaris-reviewer` subagent。Reviewer 不继承主任务或 Implementer 的聊天历史，只接收 task ID、Reviewer slot 和已注册 handoff 路径。不得使用继承历史的 fork，也不默认使用独立 worktree。R0 允许主任务同会话，但必须重新加载冻结合同和最终 Patch，执行隔离式 adversarial pass。
 3. Work Item 的 `review_dispatch.authorized=true` 是“确认并执行”对本 revision 自动创建全部必需 Review 任务的权威记录。宿主缺少创建、查找或等待能力，或者派发失败时，状态保持 `REVIEWING`，显示 `REVIEW_HANDOFF_READY` 和完整手动提示；不得仅因宿主不支持自动派发而进入 `BLOCKED`。
 4. Review 任务标题固定为 `Polaris Review · <TASK> · <REVISION> · attempt <N> · reviewer <SLOT>`。创建前先复用已有有效 Review artifact，其次复用唯一的同名任务；同一 key 不得重复创建，发现多个同名任务时回退人工处理。
 5. Reviewer 只接收：冻结 Work Item、Plan、Working Set、`subject_base_commit`、最终 `subject_head_commit`、`subject_diff_hash`、项目规则、相关模块文档、实现记录、Knowledge Delta 和可复现证据。
@@ -546,13 +574,14 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 ### M1 — Repo skeleton 与 Skills（第 3–5 天）
 
 - [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和七个 Skill
-- [x] 将 Skills vendoring 到 `.agents/skills/`，将版本锁定的脚本/Schema/模板/Workflow vendoring 到 `tools/polaris/`
+- [x] 建立版本化 `hosts/*/adapter.json` 契约，从宿主无关 Skills 生成 Codex/Claude Code 目录与 worker 文件，并将适配器、脚本、Schema、模板和 Workflow vendoring 到 `tools/polaris/`
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills
+- [x] 用 Claude Code 2.1.220 实际验证 `/engineering-task` 项目 Skill 与 `polaris-reviewer` 非 fork subagent 的发现和拒绝无 handoff 调用
 - [x] `engineering-task` 实现仅显式触发、恢复、分派、门禁停止规则
 - [x] 阶段 Skill 明确输入、输出、owner 和禁止事项
 - [x] 固定对话检查点、Work Item 预览确认和阶段结果标记
 
-完成标准：用户显式调用 `$engineering-task` 提交一个模糊 R1 任务时，Codex 先建立 Work Item，不直接改代码；未显式调用时不进入 Polaris。
+完成标准：用户显式调用宿主对应的 `engineering-task` 入口提交一个模糊 R1 任务时，宿主先建立 Work Item，不直接改代码；未显式调用时不进入 Polaris。
 
 ### M2 — Mechanical core（第 6–9 天）
 
@@ -573,7 +602,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [x] 实现 failed exploration 的任务内记录与项目级提升
 - [x] 实现宿主支持时自动创建可见独立 Review 任务，并在不支持时回退手动交接
 
-完成标准：全新 Codex 会话不读取旧聊天即可指出当前状态、blocker、next action，并开始正确节点。
+完成标准：全新受支持宿主会话不读取旧聊天即可指出当前状态、blocker、next action，并开始正确节点。
 
 ### M4 — Horizon 试点（第 13–17 天）
 
@@ -595,7 +624,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 ## 14. v0.1 总体验收标准
 
-- [ ] 目标仓库无需安装 Polaris 程序即可使用；vendored `.agents/skills/`、`tools/polaris/`、`.polaris/` 和 Python 足以运行。
+- [ ] 目标仓库无需安装 Polaris 程序即可使用；适配器声明的宿主文件、`tools/polaris/`、`.polaris/` 和 Python 足以运行。
 - [ ] 非平凡任务不会在 Work Item 冻结前进入 Implementation。
 - [ ] 每个暂停点和阶段结果都按固定字段展示，Work Item 未经用户确认不进入 `QUALIFIED`。
 - [ ] 自动路径中主任务保持为可查询控制入口；Implementer 只从冻结 handoff 工作并持续写入最近有效进度。
@@ -640,13 +669,13 @@ Polaris Thin App / Control Plane
               ▼
          Agent Runtime
               │
-      Codex / Claude / Others
+      Codex / Claude Code / Others
 ```
 
 长期能力可以包括多任务依赖管理、跨项目状态、可视化界面、多模型适配和 Reviewer arbitration，但必须建立在 v0.1 的真实试点证据之上。v0.1 不为这些能力预先建设 CLI、daemon、scheduler、数据库或自定义 Agent Runtime。
 
-v0.1 的核心边界是：Polaris 定义不同 Agent 应读取什么、承担什么职责、产出什么证据，以及满足哪些门禁后任务才能继续；Codex 负责 Session、Agent Loop、工具调用、执行环境和上下文运行时。
+v0.1 的核心边界是：Polaris 定义不同 Agent 应读取什么、承担什么职责、产出什么证据，以及满足哪些门禁后任务才能继续；Codex 或 Claude Code 负责 Session、Agent Loop、工具调用、执行环境和上下文运行时。
 
 ## 一句话定义
 
-> **Polaris v0.1 是由 Codex 执行、由仓库状态承载、由声明式 Graph 与确定性校验约束的软件工程工作协议。**
+> **Polaris v0.1 是由受支持 Coding Agent 宿主执行、由仓库状态承载、由声明式 Graph 与确定性校验约束的软件工程工作协议。**

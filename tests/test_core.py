@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPTS))
 from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
 from internal.artifact_protocol import normalized_reference  # noqa: E402
+from internal.host_adapters import load_host_adapters, render_skill  # noqa: E402
 from build_working_set import build as build_working_set  # noqa: E402
 from build_implementation_handoff import build as build_implementation_handoff  # noqa: E402
 from build_review_handoff import build as build_review_handoff  # noqa: E402
@@ -64,6 +65,14 @@ def run_git(repo: Path, *args: str) -> str:
         ["git", *args], cwd=repo, check=True, text=True, capture_output=True
     )
     return completed.stdout.strip()
+
+
+def host_adapter(host_id: str) -> dict[str, object]:
+    return next(
+        adapter
+        for adapter in load_host_adapters(ROOT)
+        if adapter["host_id"] == host_id
+    )
 
 
 class PolarisCoreTests(unittest.TestCase):
@@ -797,41 +806,263 @@ class PolarisCoreTests(unittest.TestCase):
             validate(self.repo, "TASK-0001")
 
     def test_vendored_target_is_self_contained(self) -> None:
-        """目标仓库 vendoring 后仅凭 Skills、工具、状态和 Python 即可校验。"""
+        """目标仓库 vendoring 后同时包含 Codex、Claude Code 与机械协议。"""
         vendor(ROOT, self.repo, False)
-        self.assertTrue(
-            (self.repo / ".agents" / "skills" / "engineering-task" / "SKILL.md").is_file()
-        )
+        for adapter in load_host_adapters(ROOT):
+            skill_root = self.repo / str(adapter["skill_target"])
+            self.assertTrue((skill_root / "engineering-task" / "SKILL.md").is_file())
+            for item in adapter["files"]:
+                self.assertTrue((self.repo / item["target"]).is_file())
         self.assertTrue((self.repo / "tools" / "polaris" / "VERSION").is_file())
+        self.assertTrue(
+            (self.repo / "tools" / "polaris" / "hosts" / "codex" / "adapter.json").is_file()
+        )
         result = validate_project(self.repo)
         self.assertEqual(result["active_tasks"], 1)
+
+    def test_init_project_adds_claude_bridge_without_overwriting_it(self) -> None:
+        """初始化创建 Claude 规则桥接，已有 CLAUDE.md 仍归用户所有。"""
+        self.assertIn(
+            "/engineering-task",
+            (self.repo / "CLAUDE.md").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "@AGENTS.md",
+            (self.repo / "CLAUDE.md").read_text(encoding="utf-8"),
+        )
+        with tempfile.TemporaryDirectory(prefix="polaris-claude-rules-") as temp:
+            repo = Path(temp)
+            run_git(repo, "init", "-q")
+            (repo / "CLAUDE.md").write_text("# Existing rules\n", encoding="utf-8")
+            init_project(repo, "existing-claude-rules")
+            self.assertEqual(
+                (repo / "CLAUDE.md").read_text(encoding="utf-8"),
+                "# Existing rules\n",
+            )
 
     def test_engineering_task_requires_explicit_invocation(self) -> None:
         """所有 Polaris Skills 禁止隐式调用，用户只能从 engineering-task 显式进入。"""
         source_skill = ROOT / "skills" / "engineering-task"
         source_instructions = (source_skill / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("only when the user explicitly invokes `$engineering-task`", source_instructions)
         self.assertIn(
-            "only when the user explicitly invokes `$engineering-task`",
+            "only when the user explicitly invokes `{{skill:engineering-task}}`",
+            source_instructions,
+        )
+        self.assertIn(
+            "explicitly invokes its rendered entry Skill",
             (self.repo / "AGENTS.md").read_text(encoding="utf-8"),
         )
 
         vendor(ROOT, self.repo, False)
+        codex = host_adapter("codex")
+        claude = host_adapter("claude-code")
         for skill_name in SKILLS:
             source = ROOT / "skills" / skill_name
             vendored = self.repo / ".agents" / "skills" / skill_name
-            source_metadata = (source / "agents" / "openai.yaml").read_text(
-                encoding="utf-8"
-            )
+            source_metadata = (
+                ROOT
+                / "hosts"
+                / "codex"
+                / "skill-overlays"
+                / skill_name
+                / "agents"
+                / "openai.yaml"
+            ).read_text(encoding="utf-8")
             self.assertIn("allow_implicit_invocation: false", source_metadata)
             self.assertEqual(
                 (vendored / "SKILL.md").read_text(encoding="utf-8"),
-                (source / "SKILL.md").read_text(encoding="utf-8"),
+                render_skill(
+                    (source / "SKILL.md").read_text(encoding="utf-8"),
+                    skill_name,
+                    codex,
+                ),
             )
             self.assertEqual(
                 (vendored / "agents" / "openai.yaml").read_text(encoding="utf-8"),
                 source_metadata,
             )
+            claude_skill = self.repo / ".claude" / "skills" / skill_name
+            self.assertEqual(
+                (claude_skill / "SKILL.md").read_text(encoding="utf-8"),
+                render_skill(
+                    (source / "SKILL.md").read_text(encoding="utf-8"),
+                    skill_name,
+                    claude,
+                ),
+            )
+            self.assertFalse((claude_skill / "agents" / "openai.yaml").exists())
+        claude_entry = (
+            self.repo / ".claude" / "skills" / "engineering-task" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("disable-model-invocation: true", claude_entry)
+        self.assertIn("explicitly invokes `/engineering-task`", claude_entry)
+        self.assertNotIn("$engineering-task", claude_entry)
+
+    def test_host_adapters_render_from_one_host_neutral_skill_source(self) -> None:
+        """宿主语法和执行附录来自清单，核心 Skill 不内置宿主分支。"""
+        source = (ROOT / "skills" / "engineering-task" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("{{skill:engineering-task}}", source)
+        self.assertNotIn("$engineering-task", source)
+        self.assertNotIn("/engineering-task", source)
+
+        adapters = {item["host_id"]: item for item in load_host_adapters(ROOT)}
+        self.assertEqual(set(adapters), {"codex", "claude-code"})
+        self.assertFalse((ROOT / "hosts" / "codex" / "skills").exists())
+        codex = render_skill(source, "engineering-task", adapters["codex"])
+        claude = render_skill(source, "engineering-task", adapters["claude-code"])
+        self.assertIn("$engineering-task", codex)
+        self.assertIn("fresh visible Codex tasks", codex)
+        self.assertIn("/engineering-task", claude)
+        self.assertIn("non-fork `polaris-implementer`", claude)
+        self.assertIn("disable-model-invocation: true", claude)
+
+        synthetic = dict(adapters["codex"])
+        synthetic.update(
+            {
+                "host_id": "synthetic",
+                "invocation_prefix": "!",
+                "entry_frontmatter": [],
+                "skill_appendix_root": None,
+            }
+        )
+        rendered = render_skill(source, "engineering-task", synthetic)
+        self.assertIn("!engineering-task", rendered)
+        self.assertNotIn("Codex host execution", rendered)
+        with self.assertRaises(InputFailure):
+            render_skill(
+                source + "\n{{skill:not-installed}}\n",
+                "engineering-task",
+                synthetic,
+                set(SKILLS),
+            )
+
+    def test_host_adapter_contract_rejects_invalid_or_conflicting_manifests(self) -> None:
+        """适配器拒绝未知版本、空调用语法、越界路径和重叠目标。"""
+
+        def adapter(host_id: str) -> dict[str, object]:
+            return {
+                "adapter_version": 1,
+                "host_id": host_id,
+                "display_name": host_id,
+                "skill_target": f".{host_id}/skills",
+                "invocation_prefix": "!",
+                "entry_skill": "engineering-task",
+                "entry_frontmatter": [],
+                "skill_overlay_root": None,
+                "skill_appendix_root": None,
+                "files": [
+                    {
+                        "source": "bridge.md",
+                        "target": f".{host_id}/bridge.md",
+                        "overwrite": True,
+                    }
+                ],
+            }
+
+        cases = {
+            "unknown version": lambda first, _second: first.update(
+                {"adapter_version": 2}
+            ),
+            "blank prefix": lambda first, _second: first.update(
+                {"invocation_prefix": ""}
+            ),
+            "unsafe path": lambda first, _second: first.update(
+                {"skill_target": "../escape"}
+            ),
+            "overlapping target": lambda first, second: second["files"][0].update(
+                {"target": first["skill_target"]}
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory(
+                prefix="polaris-host-contract-"
+            ) as temp:
+                root = Path(temp)
+                (root / "schemas").mkdir()
+                shutil.copyfile(
+                    ROOT / "schemas" / "host-adapter.schema.json",
+                    root / "schemas" / "host-adapter.schema.json",
+                )
+                first = adapter("host-a")
+                second = adapter("host-b")
+                mutate(first, second)
+                for value in (first, second):
+                    host_root = root / "hosts" / str(value["host_id"])
+                    host_root.mkdir(parents=True)
+                    (host_root / "bridge.md").write_text(
+                        "bridge\n", encoding="utf-8"
+                    )
+                    write_json_atomic(host_root / "adapter.json", value)
+                with self.assertRaises(RuleFailure):
+                    load_host_adapters(root)
+
+    def test_vendor_and_validator_discover_a_third_host_without_code_changes(self) -> None:
+        """新增第三宿主只需清单，vendoring、初始化和校验无需新增分支。"""
+        with tempfile.TemporaryDirectory(prefix="polaris-third-host-") as temp:
+            temp_root = Path(temp)
+            source = temp_root / "source"
+            target = temp_root / "target"
+            shutil.copytree(
+                ROOT,
+                source,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+            )
+            synthetic_root = source / "hosts" / "synthetic"
+            synthetic_root.mkdir()
+            write_json_atomic(
+                synthetic_root / "adapter.json",
+                {
+                    "adapter_version": 1,
+                    "host_id": "synthetic",
+                    "display_name": "Synthetic Host",
+                    "skill_target": ".synthetic/skills",
+                    "invocation_prefix": "!",
+                    "entry_skill": "engineering-task",
+                    "entry_frontmatter": [],
+                    "skill_overlay_root": None,
+                    "skill_appendix_root": None,
+                    "files": [],
+                },
+            )
+            target.mkdir()
+            run_git(target, "init", "-q")
+            vendor(source, target, False)
+            init_project(target, "third-host-project")
+            entry = (
+                target / ".synthetic" / "skills" / "engineering-task" / "SKILL.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("!engineering-task", entry)
+            self.assertNotIn("{{skill:", entry)
+            self.assertEqual(validate_project(target)["active_tasks"], 0)
+
+    def test_force_vendor_preserves_unrelated_claude_configuration(self) -> None:
+        """升级只替换 Polaris 的 Claude 文件，不删除项目已有配置。"""
+        unrelated_skill = self.repo / ".claude" / "skills" / "project-specific"
+        unrelated_agent = self.repo / ".claude" / "agents" / "project-agent.md"
+        unrelated_skill.mkdir(parents=True)
+        unrelated_agent.parent.mkdir(parents=True, exist_ok=True)
+        (unrelated_skill / "SKILL.md").write_text("# Keep me\n", encoding="utf-8")
+        unrelated_agent.write_text("# Keep me\n", encoding="utf-8")
+        (self.repo / "CLAUDE.md").write_text("# Project-owned Claude rules\n", encoding="utf-8")
+        vendor(ROOT, self.repo, False)
+        vendor(ROOT, self.repo, True)
+        self.assertEqual(
+            (unrelated_skill / "SKILL.md").read_text(encoding="utf-8"), "# Keep me\n"
+        )
+        self.assertEqual(unrelated_agent.read_text(encoding="utf-8"), "# Keep me\n")
+        self.assertEqual(
+            (self.repo / "CLAUDE.md").read_text(encoding="utf-8"),
+            "# Project-owned Claude rules\n",
+        )
+
+    def test_validate_project_requires_complete_claude_adapter(self) -> None:
+        """vendored 项目缺少 Claude Skill 或 worker 定义时机械拒绝。"""
+        vendor(ROOT, self.repo, False)
+        (self.repo / ".claude" / "agents" / "polaris-reviewer.md").unlink()
+        with self.assertRaises(RuleFailure):
+            validate_project(self.repo)
 
     def test_skills_define_stable_conversation_checkpoints(self) -> None:
         """入口与每个阶段 Skill 都定义固定对话检查点，vendoring 后保持一致。"""
@@ -896,13 +1127,23 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn("Treat UI and text answers identically", entry_text)
 
         vendor(ROOT, self.repo, False)
+        codex = host_adapter("codex")
+        claude = host_adapter("claude-code")
         for skill_name, markers in expected_markers.items():
             source_path = ROOT / "skills" / skill_name / "SKILL.md"
             vendored_path = (
                 self.repo / ".agents" / "skills" / skill_name / "SKILL.md"
             )
             source_text = source_path.read_text(encoding="utf-8")
-            self.assertEqual(vendored_path.read_text(encoding="utf-8"), source_text)
+            self.assertEqual(
+                vendored_path.read_text(encoding="utf-8"),
+                render_skill(source_text, skill_name, codex),
+            )
+            claude_path = self.repo / ".claude" / "skills" / skill_name / "SKILL.md"
+            self.assertEqual(
+                claude_path.read_text(encoding="utf-8"),
+                render_skill(source_text, skill_name, claude),
+            )
             for marker in markers:
                 with self.subTest(skill=skill_name, marker=marker):
                     self.assertIn(marker, source_text)
@@ -1004,15 +1245,16 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_implementation_dispatch_is_fresh_visible_and_idempotent(self) -> None:
         """Implementation 使用同项目可见新任务、确定性标题，并在恢复时避免重复派发。"""
-        entry_text = (
-            ROOT / "skills" / "engineering-task" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        source = (ROOT / "skills" / "engineering-task" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        entry_text = render_skill(source, "engineering-task", host_adapter("codex"))
         self.assertIn(
             "Polaris Implement · <TASK> · <REVISION> · attempt <N>", entry_text
         )
-        self.assertIn("dispatch a fresh task in that same local checkout", entry_text)
+        self.assertIn("fresh visible Codex tasks in the same local checkout", entry_text)
         self.assertIn("Never fork the main conversation", entry_text)
-        self.assertIn("do not use a separate worktree by default", entry_text)
+        self.assertIn("use a separate worktree by default", entry_text)
         self.assertIn("first reuse a valid Implementation artifact", entry_text)
         self.assertIn("Never create a duplicate", entry_text)
         fixture = read_json(
@@ -1039,7 +1281,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn("Load only <HANDOFF> and its package", entry_text)
         self.assertIn("Do not read the main conversation", implementation_text)
         self.assertIn("Do not run `FINISH_IMPLEMENTATION`", implementation_text)
-        self.assertIn("Continue the same Implementer task", entry_text)
+        self.assertIn("Continue the exact same Implementer worker", entry_text)
         self.assertIn("Do not run `SYNC_DOCS`", docs_text)
 
     def test_implementation_handoff_and_result_are_mechanically_bound(self) -> None:
@@ -1352,13 +1594,38 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn("immediate status responses may be delayed", entry_text)
 
     def test_r1_dispatches_one_visible_fresh_local_task(self) -> None:
-        """R1 在同一本地项目中创建可见新任务，禁止 fork 和默认 worktree。"""
-        entry_text = (
-            ROOT / "skills" / "engineering-task" / "SKILL.md"
+        """R1 按宿主创建隔离 worker，禁止 fork 和默认 worktree。"""
+        source = (ROOT / "skills" / "engineering-task" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        codex = render_skill(source, "engineering-task", host_adapter("codex"))
+        claude = render_skill(source, "engineering-task", host_adapter("claude-code"))
+        self.assertIn("fresh visible Codex tasks in the same local checkout", codex)
+        self.assertIn("fresh non-fork `polaris-implementer`", claude)
+        self.assertIn("Resume the same Implementer agent ID", claude)
+        self.assertIn("Never fork the implementation conversation", source)
+        self.assertIn("use a separate worktree by default", codex)
+
+    def test_claude_workers_are_isolated_and_resume_implementer(self) -> None:
+        """Claude Code 使用非 fork Reviewer，并只续接原 Implementer 做文档同步。"""
+        implementer = (
+            ROOT / "hosts" / "claude-code" / "agents" / "polaris-implementer.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("dispatch a fresh task in that same local checkout", entry_text)
-        self.assertIn("Never fork the implementation conversation", entry_text)
-        self.assertIn("do not use a separate worktree by default", entry_text)
+        reviewer = (
+            ROOT / "hosts" / "claude-code" / "agents" / "polaris-reviewer.md"
+        ).read_text(encoding="utf-8")
+        source = (ROOT / "skills" / "engineering-task" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        entry_text = render_skill(
+            source, "engineering-task", host_adapter("claude-code")
+        )
+        self.assertIn("skills:\n  - implementation\n  - documentation-sync", implementer)
+        self.assertIn("resumes this same agent", implementer)
+        self.assertIn("skills:\n  - adversarial-review", reviewer)
+        self.assertIn("do not read or inherit implementation chat", reviewer)
+        self.assertIn("non-fork `polaris-implementer` or `polaris-reviewer`", entry_text)
+        self.assertIn("returned agent ID", entry_text)
 
     def test_reviewer_prompt_is_handoff_only_without_implementation_history(self) -> None:
         """Reviewer 启动提示只含身份与 handoff，不泄漏实现总结或预期 verdict。"""
@@ -1370,7 +1637,7 @@ class PolarisCoreTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("only the task ID, Reviewer slot, registered handoff path", entry_text)
         self.assertIn(
-            "Use $adversarial-review for <TASK>, Reviewer slot <SLOT>",
+            "Use {{skill:adversarial-review}} for <TASK>, Reviewer slot <SLOT>",
             entry_text,
         )
         self.assertIn("Do not include implementation explanations", entry_text)
@@ -1395,7 +1662,7 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertIn("first accept a valid deterministic Review artifact", entry_text)
         self.assertIn("Never create a duplicate", entry_text)
-        self.assertIn("multiple exact matches", entry_text)
+        self.assertIn("ambiguous identity uses manual fallback", entry_text)
 
     def test_review_rejection_returns_to_rework_and_redispatches(self) -> None:
         """Reviewer 拒绝后由主流程合法返工，并为下一 attempt 创建新任务。"""
@@ -1425,7 +1692,7 @@ class PolarisCoreTests(unittest.TestCase):
             ROOT / "skills" / "engineering-task" / "SKILL.md"
         ).read_text(encoding="utf-8")
         self.assertIn("keep state `REVIEWING`", entry_text)
-        self.assertIn("provide the exact manual new-task prompt", entry_text)
+        self.assertIn("provide the exact manual new-session prompt", entry_text)
         self.assertIn(
             "do not enter `BLOCKED` solely because host automation is unavailable",
             entry_text,
@@ -1451,7 +1718,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.assertIn(field, entry_text)
         for detail in ("`Review task`", "`Reviewer slot`", "`Handoff`", "`Dispatch mode`"):
             self.assertIn(detail, entry_text)
-        self.assertIn("set `User action` to `None` while the task is running", entry_text)
+        self.assertIn("set `User action` to `None` while the worker is running", entry_text)
 
     def test_fresh_clone_recovers_the_committed_task_boundary(self) -> None:
         """Fresh Clone 仅凭已提交的 vendored 协议和仓库状态恢复最近阶段边界。"""

@@ -1,0 +1,86 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris host adapter",
+    "type": "object",
+    "required": [
+        "adapter_version",
+        "host_id",
+        "display_name",
+        "skill_target",
+        "invocation_prefix",
+        "entry_skill",
+        "entry_frontmatter",
+        "skill_overlay_root",
+        "skill_appendix_root",
+        "files"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "adapter_version": {
+            "const": 1
+        },
+        "host_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "display_name": {
+            "type": "string",
+            "minLength": 1
+        },
+        "skill_target": {
+            "type": "string",
+            "minLength": 1
+        },
+        "invocation_prefix": {
+            "type": "string",
+            "minLength": 1
+        },
+        "entry_skill": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "entry_frontmatter": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "skill_overlay_root": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "skill_appendix_root": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "files": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "source",
+                    "target",
+                    "overwrite"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "target": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "overwrite": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        }
+    }
+}

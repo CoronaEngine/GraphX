@@ -7,6 +7,11 @@ import argparse
 import sys
 from pathlib import Path
 
+from internal.host_adapters import (
+    adapter_file_target,
+    adapter_skill_target,
+    load_host_adapters,
+)
 from internal.polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
 from internal.recovery_protocol import project_index_value
 from internal.task_layout import TASKS_ROOT
@@ -77,13 +82,29 @@ def validate(repo: Path) -> dict[str, object]:
                 f"workflow transition has invalid max_attempts: {transition['event']}"
             )
 
-    vendored_skills = repo / ".agents" / "skills"
     if root == repo / "tools" / "polaris":
-        missing = [
-            name for name in sorted(EXPECTED_SKILLS) if not (vendored_skills / name / "SKILL.md").is_file()
-        ]
-        if missing:
-            raise RuleFailure(f"missing vendored Skills: {', '.join(missing)}")
+        for adapter in load_host_adapters(root):
+            vendored_skills = adapter_skill_target(repo, adapter)
+            missing = [
+                name
+                for name in sorted(EXPECTED_SKILLS)
+                if not (vendored_skills / name / "SKILL.md").is_file()
+            ]
+            if missing:
+                raise RuleFailure(
+                    f"missing {adapter['display_name']} vendored Skills: "
+                    f"{', '.join(missing)}"
+                )
+            missing_files = [
+                item["target"]
+                for item in adapter["files"]
+                if not adapter_file_target(repo, item).is_file()
+            ]
+            if missing_files:
+                raise RuleFailure(
+                    f"missing {adapter['display_name']} adapter files: "
+                    f"{', '.join(missing_files)}"
+                )
 
     task_root = repo / TASKS_ROOT
     listed = set(project["active_tasks"])

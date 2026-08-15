@@ -1,6 +1,6 @@
 ---
 name: implementation
-description: Internal Polaris worker stage for an explicitly started `$engineering-task` workflow. Invoke only in the dedicated Implementer task, or the declared same-session fallback, with a registered Implementation handoff while state is IMPLEMENTING; do not activate from ordinary implementation or fix requests.
+description: Internal Polaris worker stage for an explicitly started `{{skill:engineering-task}}` workflow. Invoke only in the dedicated Implementer task, or the declared same-session fallback, with a registered Implementation handoff while state is IMPLEMENTING; do not activate from ordinary implementation or fix requests.
 ---
 
 # Implementation
@@ -17,4 +17,4 @@ description: Internal Polaris worker stage for an explicitly started `$engineeri
 10. Write the immutable Implementation JSON at the handoff's `output_path`. Bind the handoff, subject, session, deviations, and checks, and copy the exact terminal `id`, `status`, and `result` projection into `step_results`.
 11. Use `SET_PHASE` to enter `CHECKPOINTING` only after every step is `COMPLETED` or `SKIPPED`, then return the artifact path, session ID, subject base/head, diff hash, step results, checks, deviations, Review Response path when present, and remaining Documentation Sync work.
 
-Do not run `FINISH_IMPLEMENTATION`, Documentation Sync, Review, Validation, or any completion transition. Do not emit a Polaris checkpoint marker; the main `$engineering-task` validates the artifact, advances the graph, and continues this task for `$documentation-sync`.
+Do not run `FINISH_IMPLEMENTATION`, Documentation Sync, Review, Validation, or any completion transition. Do not emit a Polaris checkpoint marker; the main `{{skill:engineering-task}}` validates the artifact, advances the graph, and continues this task for `{{skill:documentation-sync}}`.
