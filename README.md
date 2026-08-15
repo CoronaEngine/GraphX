@@ -8,7 +8,7 @@ Polaris 是一套运行在受支持 Coding Agent 宿主之上的、以仓库为�
 
 Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须按当前宿主适配器的语法主动调用 `engineering-task`（Codex 为 `$engineering-task`，Claude Code 为 `/engineering-task`）。其他阶段 Skills 只能由已启动的工作流在合法节点分派。
 
-> 当前版本：`0.1.8`（开发中）
+> 当前版本：`0.1.9`（开发中）
 
 ## 核心目标
 
@@ -119,7 +119,7 @@ target-repo/
 ├── .agents/skills/         # vendored Codex Skills
 ├── .claude/skills/         # vendored Claude Code Skills
 ├── .claude/agents/         # Polaris Implementer/Reviewer subagents
-├── tools/polaris/          # vendored、版本锁定的协议实现
+├── tools/polaris/          # vendored、版本锁定的协议实现与安装清单
 └── .polaris/               # 项目和任务 Authority State
     └── tasks/TASK-NNNN/
         └── runtime/        # 本任务的本机实时进度；默认忽略，不进入 Git
@@ -186,7 +186,7 @@ python -m compileall -q scripts tests
 python scripts/vendor_project.py C:\path\to\target-repo
 ```
 
-该操作读取所有 `hosts/*/adapter.json`，把 `skills/` 按各宿主的调用语法、frontmatter、overlay 和 appendix 渲染到清单声明的目标目录，同时复制宿主专用文件。`hosts/`、`scripts/`、`schemas/`、`templates/`、`workflow/` 和 `VERSION` 会一起进入 `tools/polaris/`，使目标仓库能够独立初始化、升级和校验适配器。
+该操作读取所有 `hosts/*/adapter.json`，把 `skills/` 按各宿主的调用语法、frontmatter、overlay 和 appendix 渲染到清单声明的目标目录，同时复制宿主专用文件。`hosts/`、`scripts/`、`schemas/`、`templates/`、`workflow/` 和 `VERSION` 会一起进入 `tools/polaris/`，使目标仓库能够独立初始化、升级和校验适配器。生成的 `tools/polaris/install-manifest.json` 记录所有 Polaris 受管文件的 SHA-256，以及 `CLAUDE.md`、`.gitignore` 这类仅保证存在、内容归项目所有的保留文件。
 
 目标仓库已经存在 vendored 文件时，显式使用 `--force` 才会更新：
 
@@ -194,7 +194,9 @@ python scripts/vendor_project.py C:\path\to\target-repo
 python scripts/vendor_project.py C:\path\to\target-repo --force
 ```
 
-`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code；`0.1.8` 补齐有限 Schema 子集的长度、数量、唯一性和 JSON 实例相等规则。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
+`--force` 会先读取旧安装清单，只删除旧版声明拥有的文件，再写入新版；已从新版移除的受管文件不会残留，项目自有文件与未被清单声明的其他宿主配置不会被删除。项目校验会拒绝受管文件缺失、哈希漂移或归属声明缺失。
+
+`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code；`0.1.8` 补齐有限 Schema 子集的长度、数量、唯一性和 JSON 实例相等规则；`0.1.9` 引入带 SHA-256 的 vendored 安装清单与旧受管文件清理。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
 
 ### 2. 初始化项目状态
 

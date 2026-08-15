@@ -1,0 +1,51 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris vendored install manifest",
+    "type": "object",
+    "required": [
+        "manifest_version",
+        "polaris_version",
+        "managed_files",
+        "preserved_files"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "manifest_version": {
+            "const": 1
+        },
+        "polaris_version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "managed_files": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": [
+                    "path",
+                    "sha256"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                    }
+                }
+            }
+        },
+        "preserved_files": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+                "type": "string",
+                "minLength": 1
+            }
+        }
+    }
+}

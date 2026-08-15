@@ -16,6 +16,14 @@ from internal.host_adapters import (
     load_host_adapters,
     render_skill,
 )
+from internal.install_manifest import (
+    INSTALL_MANIFEST_PATH,
+    build_install_manifest,
+    read_install_manifest,
+    remove_managed_files,
+    validate_install_manifest,
+    write_install_manifest,
+)
 from internal.polaris_core import InputFailure, ensure_gitignore_rule, run_main
 from internal.task_layout import RUNTIME_IGNORE_PATTERN
 
@@ -55,11 +63,19 @@ def vendor(source: Path, target: Path, force: bool) -> dict[str, str]:
         raise InputFailure(f"target is not a Git repository: {target}")
     adapters = load_host_adapters(source)
     tools_target = target / "tools" / "polaris"
+    manifest_path = target / INSTALL_MANIFEST_PATH
+    previous_manifest = (
+        read_install_manifest(target, source) if manifest_path.is_file() else None
+    )
     if not force and any(
         path.exists() for path in _polaris_destinations(target, adapters)
     ):
         raise InputFailure("vendored Polaris files already exist; use --force to update")
+    if force and previous_manifest is not None:
+        remove_managed_files(target, previous_manifest)
 
+    managed_paths: list[Path] = []
+    preserved_paths: list[Path] = []
     for adapter in adapters:
         skill_target = adapter_skill_target(target, adapter)
         for name in SKILLS:
@@ -83,14 +99,20 @@ def vendor(source: Path, target: Path, force: bool) -> dict[str, str]:
                 overlay = adapter["adapter_root"] / overlay_root / name
                 if overlay.is_dir():
                     shutil.copytree(overlay, destination, dirs_exist_ok=True)
+            managed_paths.extend(path for path in destination.rglob("*") if path.is_file())
         for item in adapter["files"]:
             destination = adapter_file_target(target, item)
             if destination.exists() and not item["overwrite"]:
+                preserved_paths.append(destination)
                 continue
             if destination.exists():
                 destination.unlink()
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(adapter["adapter_root"] / item["source"], destination)
+            if item["overwrite"]:
+                managed_paths.append(destination)
+            else:
+                preserved_paths.append(destination)
 
     if tools_target.exists():
         shutil.rmtree(tools_target)
@@ -100,6 +122,18 @@ def vendor(source: Path, target: Path, force: bool) -> dict[str, str]:
         shutil.copytree(source / name, tools_target / name, ignore=ignore_generated)
     materialize_template_tree(tools_target)
     ensure_gitignore_rule(target, RUNTIME_IGNORE_PATTERN)
+    preserved_paths.append(target / ".gitignore")
+    managed_paths.extend(
+        path
+        for path in tools_target.rglob("*")
+        if path.is_file() and path != manifest_path
+    )
+    version = (tools_target / "VERSION").read_text(encoding="utf-8").strip()
+    manifest = build_install_manifest(
+        target, version, managed_paths, preserved_paths
+    )
+    write_install_manifest(target, manifest)
+    validate_install_manifest(target, tools_target)
     return {"message": f"vendored Polaris into {target}", "target": str(target)}
 
 

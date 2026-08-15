@@ -12,6 +12,7 @@ from internal.host_adapters import (
     adapter_skill_target,
     load_host_adapters,
 )
+from internal.install_manifest import validate_install_manifest
 from internal.polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
 from internal.recovery_protocol import project_index_value
 from internal.task_layout import TASKS_ROOT
@@ -83,6 +84,11 @@ def validate(repo: Path) -> dict[str, object]:
             )
 
     if root == repo / "tools" / "polaris":
+        install_manifest = validate_install_manifest(repo, root)
+        managed_paths = {
+            item["path"] for item in install_manifest["managed_files"]
+        }
+        preserved_paths = set(install_manifest["preserved_files"])
         for adapter in load_host_adapters(root):
             vendored_skills = adapter_skill_target(repo, adapter)
             missing = [
@@ -95,6 +101,17 @@ def validate(repo: Path) -> dict[str, object]:
                     f"missing {adapter['display_name']} vendored Skills: "
                     f"{', '.join(missing)}"
                 )
+            untracked_skills = [
+                (vendored_skills / name / "SKILL.md").relative_to(repo).as_posix()
+                for name in sorted(EXPECTED_SKILLS)
+                if (vendored_skills / name / "SKILL.md").relative_to(repo).as_posix()
+                not in managed_paths
+            ]
+            if untracked_skills:
+                raise RuleFailure(
+                    f"unmanaged {adapter['display_name']} vendored Skills: "
+                    f"{', '.join(untracked_skills)}"
+                )
             missing_files = [
                 item["target"]
                 for item in adapter["files"]
@@ -105,6 +122,15 @@ def validate(repo: Path) -> dict[str, object]:
                     f"missing {adapter['display_name']} adapter files: "
                     f"{', '.join(missing_files)}"
                 )
+            for item in adapter["files"]:
+                relative = adapter_file_target(repo, item).relative_to(repo).as_posix()
+                expected_paths = managed_paths if item["overwrite"] else preserved_paths
+                if relative not in expected_paths:
+                    ownership = "managed" if item["overwrite"] else "preserved"
+                    raise RuleFailure(
+                        f"{adapter['display_name']} adapter file is not {ownership}: "
+                        f"{relative}"
+                    )
 
     task_root = repo / TASKS_ROOT
     listed = set(project["active_tasks"])

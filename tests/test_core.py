@@ -833,7 +833,7 @@ class PolarisCoreTests(unittest.TestCase):
         """项目与 vendored Polaris 版本不一致时拒绝执行，不进行隐式迁移。"""
         project_path = self.repo / ".polaris" / "project.json"
         project = read_json(project_path)
-        project["polaris_version"] = "0.1.9"
+        project["polaris_version"] = "9.9.9"
         write_json_atomic(project_path, project)
         with self.assertRaises(RuleFailure):
             validate_project(self.repo)
@@ -861,6 +861,67 @@ class PolarisCoreTests(unittest.TestCase):
         )
         result = validate_project(self.repo)
         self.assertEqual(result["active_tasks"], 1)
+
+    def test_install_manifest_detects_drift_and_preserves_project_owned_files(self) -> None:
+        """清单哈希拒绝受管文件漂移，但不把项目自有文件冻结为模板内容。"""
+        vendor(ROOT, self.repo, False)
+        manifest_path = self.repo / "tools" / "polaris" / "install-manifest.json"
+        manifest = read_json(manifest_path)
+        managed = {item["path"] for item in manifest["managed_files"]}
+        self.assertEqual(manifest["manifest_version"], 1)
+        self.assertEqual(
+            manifest["polaris_version"],
+            (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+        )
+        self.assertIn(
+            ".agents/skills/engineering-task/SKILL.md",
+            managed,
+        )
+        self.assertIn("tools/polaris/scripts/validate_project.py", managed)
+        self.assertIn("CLAUDE.md", manifest["preserved_files"])
+        self.assertIn(".gitignore", manifest["preserved_files"])
+
+        managed_skill = (
+            self.repo / ".agents" / "skills" / "engineering-task" / "SKILL.md"
+        )
+        managed_skill.write_text("tampered\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuleFailure, "hash mismatch"):
+            validate_project(self.repo)
+
+        project_rules = self.repo / "CLAUDE.md"
+        project_rules.write_text("# Project-owned rules\n", encoding="utf-8")
+        vendor(ROOT, self.repo, True)
+        self.assertEqual(
+            project_rules.read_text(encoding="utf-8"), "# Project-owned rules\n"
+        )
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
+    def test_force_vendor_removes_files_owned_by_previous_manifest(self) -> None:
+        """强制升级按旧清单清除已淘汰受管文件，不遗留历史产物。"""
+        vendor(ROOT, self.repo, False)
+        stale = self.repo / ".agents" / "skills" / "obsolete" / "SKILL.md"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("obsolete\n", encoding="utf-8")
+        manifest_path = self.repo / "tools" / "polaris" / "install-manifest.json"
+        manifest = read_json(manifest_path)
+        manifest["managed_files"].append(
+            {
+                "path": stale.relative_to(self.repo).as_posix(),
+                "sha256": file_sha256(stale),
+            }
+        )
+        write_json_atomic(manifest_path, manifest)
+
+        vendor(ROOT, self.repo, True)
+
+        self.assertFalse(stale.exists())
+        self.assertFalse(stale.parent.exists())
+        current = read_json(manifest_path)
+        self.assertNotIn(
+            ".agents/skills/obsolete/SKILL.md",
+            {item["path"] for item in current["managed_files"]},
+        )
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
 
     def test_init_project_adds_claude_bridge_without_overwriting_it(self) -> None:
         """初始化创建 Claude 规则桥接，已有 CLAUDE.md 仍归用户所有。"""

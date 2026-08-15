@@ -257,6 +257,8 @@ target-repo/
 
 宿主渲染目录、`tools/polaris/` 和 `.polaris/` 的耐久状态均纳入 Git；唯一例外是各任务目录下的 `.polaris/tasks/<TASK>/runtime/`，它保存当前电脑上的实时进度并默认忽略，不参与阶段门禁或 Fresh Clone 恢复。宿主目录与 `tools/polaris/` 是 vendored 协议包，`.polaris/` 其余内容是项目运行状态。`project.json` 必须记录 `polaris_version` 和 `workflow_version`。Codex 从 `.agents/skills/` 发现 `$skill-name`，Claude Code 从 `.claude/skills/` 发现 `/skill-name`；两份 Skill 由宿主无关的 `skills/` 单一来源生成。
 
+每次 vendoring 必须生成并提交 `tools/polaris/install-manifest.json`。清单把完整归 Polaris 所有的输出登记为带 SHA-256 的 `managed_files`，把内容归项目维护但安装要求存在的文件登记为 `preserved_files`。项目校验必须验证受管文件存在、哈希一致且必要适配器输出已登记；强制升级必须先按旧清单删除旧受管文件，再生成新清单，不删除保留文件或清单外文件。没有旧清单的早期安装只能走已知目录的兼容更新，不能猜测并删除未知文件。
+
 ### 宿主适配契约
 
 每个宿主占用独立、平级的 `hosts/<host-id>/`，并提供由 `host-adapter.schema.json` 校验的 `adapter.json`。清单版本 `adapter_version=1` 声明 Skill 目标目录、调用前缀、入口 Skill、额外 frontmatter、可选 metadata overlay、执行附录和宿主专用文件。共享 Skill 只使用 `{{skill:<name>}}` 占位符和宿主无关 worker 语义；vendoring 时再渲染调用语法并追加宿主执行机制。
@@ -575,6 +577,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 - [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和七个 Skill
 - [x] 建立版本化 `hosts/*/adapter.json` 契约，从宿主无关 Skills 生成 Codex/Claude Code 目录与 worker 文件，并将适配器、脚本、Schema、模板和 Workflow vendoring 到 `tools/polaris/`
+- [x] 用安装清单登记 vendored 文件归属与 SHA-256，并在强制升级时清除旧版受管文件
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills
 - [x] 用 Claude Code 2.1.220 实际验证 `/engineering-task` 项目 Skill 与 `polaris-reviewer` 非 fork subagent 的发现和拒绝无 handoff 调用
 - [x] `engineering-task` 实现仅显式触发、恢复、分派、门禁停止规则
