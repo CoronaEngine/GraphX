@@ -34,7 +34,7 @@ IMPLEMENTATION_DOWNSTREAM_ARTIFACTS = frozenset(
     }
 )
 REVIEW_PACKAGE_ARTIFACTS = frozenset({"review", "review_2", "review_handoff"})
-PLAN_REWORK_ARTIFACTS = frozenset({"plan", "working_set"})
+PLAN_REWORK_ARTIFACTS = frozenset({"plan", "plan_decisions", "working_set"})
 
 
 def parse_artifacts(values: list[str], directory: Path) -> dict[str, dict[str, str]]:

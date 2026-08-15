@@ -21,7 +21,7 @@ At every pause or completed workflow checkpoint, emit exactly one status block w
 8. `Next`: next legal graph action.
 9. `User action`: exact user decision/action required, or `None`.
 
-Use only these markers: `POLARIS_STARTED`, `REQUIREMENTS_NEEDED`, `WORK_ITEM_PREVIEW`, `WORK_ITEM_QUALIFIED`, `PLAN_READY`, `IMPLEMENTATION_HANDOFF_READY`, `IMPLEMENTATION_SESSION_STARTED`, `IMPLEMENTATION_PROGRESS`, `IMPLEMENTATION_FINISHED`, `DOCS_SYNCED`, `REVIEW_HANDOFF_READY`, `REVIEW_SESSION_STARTED`, `REVIEW_ACCEPTED`, `REVIEW_REJECTED`, `VALIDATION_PASS`, `VALIDATION_FAIL`, `TASK_BLOCKED`, `TASK_CANCELLED`, and `TASK_CLOSED`.
+Use only these markers: `POLARIS_STARTED`, `REQUIREMENTS_NEEDED`, `WORK_ITEM_PREVIEW`, `WORK_ITEM_QUALIFIED`, `PLAN_DECISIONS_NEEDED`, `PLAN_READY`, `IMPLEMENTATION_HANDOFF_READY`, `IMPLEMENTATION_SESSION_STARTED`, `IMPLEMENTATION_PROGRESS`, `IMPLEMENTATION_FINISHED`, `DOCS_SYNCED`, `REVIEW_HANDOFF_READY`, `REVIEW_SESSION_STARTED`, `REVIEW_ACCEPTED`, `REVIEW_REJECTED`, `VALIDATION_PASS`, `VALIDATION_FAIL`, `TASK_BLOCKED`, `TASK_CANCELLED`, and `TASK_CLOSED`.
 
 Never report an anticipated state. Reload authority after every transition. A stage may append details after the nine fields but may not rename, reorder, or omit them. For bounded Human decisions, prefer `request_user_input` or equivalent structured choices. If the tool is unavailable, render identical text choices. Treat UI and text answers identically. Do not change host mode to obtain UI.
 

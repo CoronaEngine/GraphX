@@ -9,6 +9,7 @@ TASK_PATH_PATTERNS = {
     "state": "state.json",
     "events": "events.jsonl",
     "plan": "PLAN.md",
+    "plan_decisions": "plan-decisions.json",
     "working_set": "working-set.json",
     "progress": "runtime/progress.json",
     "work_item": "revisions/work-item-r{revision:03d}.json",
@@ -67,6 +68,7 @@ def task_repo_relative_path(task_id: str, artifact: str, **values: int | str) ->
 TEMPLATE_SAMPLE_PATHS = {
     "state": task_relative_path("state"),
     "plan": task_relative_path("plan"),
+    "plan_decisions": task_relative_path("plan_decisions"),
     "working_set": task_relative_path("working_set"),
     "progress": task_relative_path("progress"),
     "work_item": task_relative_path("work_item"),
@@ -83,6 +85,7 @@ TEMPLATE_SAMPLE_PATHS = {
 TEMPLATE_SOURCE_PATHS = {
     "state": Path("state.json"),
     "plan": Path("PLAN.md"),
+    "plan_decisions": Path("plan-decisions.json"),
     "working_set": Path("working-set.json"),
     "progress": Path("implementation-progress.json"),
     "work_item": Path("work-item.json"),
@@ -124,6 +127,10 @@ def events_path(directory: Path) -> Path:
 
 def plan_path(directory: Path) -> Path:
     return directory / task_relative_path("plan")
+
+
+def plan_decisions_path(directory: Path) -> Path:
+    return directory / task_relative_path("plan_decisions")
 
 
 def working_set_path(directory: Path) -> Path:

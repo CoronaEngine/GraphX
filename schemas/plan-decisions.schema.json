@@ -1,0 +1,139 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris plan decision register",
+    "type": "object",
+    "required": [
+        "register_version",
+        "task_id",
+        "work_item_revision",
+        "plan",
+        "decisions"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "register_version": {
+            "type": "integer",
+            "const": 1
+        },
+        "task_id": {
+            "type": "string",
+            "pattern": "^TASK-[0-9]{4}$"
+        },
+        "work_item_revision": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "plan": {
+            "type": "object",
+            "required": [
+                "path",
+                "sha256"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                }
+            }
+        },
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "decision_id",
+                    "decision_owner",
+                    "question",
+                    "options",
+                    "recommended_option_id",
+                    "status",
+                    "resolution"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "decision_id": {
+                        "type": "string",
+                        "pattern": "^PD-[0-9]{3}$"
+                    },
+                    "decision_owner": {
+                        "type": "string",
+                        "const": "human"
+                    },
+                    "question": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "options": {
+                        "type": "array",
+                        "minItems": 2,
+                        "items": {
+                            "type": "object",
+                            "required": [
+                                "option_id",
+                                "label",
+                                "consequence"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                                "option_id": {
+                                    "type": "string",
+                                    "pattern": "^OPT-[0-9]{2}$"
+                                },
+                                "label": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "consequence": {
+                                    "type": "string",
+                                    "minLength": 1
+                                }
+                            }
+                        }
+                    },
+                    "recommended_option_id": {
+                        "type": "string",
+                        "pattern": "^OPT-[0-9]{2}$"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "PENDING",
+                            "RESOLVED"
+                        ]
+                    },
+                    "resolution": {
+                        "type": [
+                            "object",
+                            "null"
+                        ],
+                        "required": [
+                            "selected_option_id",
+                            "decision_path",
+                            "decision_sha256"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                            "selected_option_id": {
+                                "type": "string",
+                                "pattern": "^OPT-[0-9]{2}$"
+                            },
+                            "decision_path": {
+                                "type": "string",
+                                "pattern": "^\\.polaris/decisions/CD-[0-9]{4}\\.json$"
+                            },
+                            "decision_sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

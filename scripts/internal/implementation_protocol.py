@@ -117,7 +117,10 @@ def validate_handoff_value(
     if handoff["progress_json_path"] != expected_progress:
         raise RuleFailure("Implementation handoff has the wrong progress JSON path")
     roles = {entry["role"] for entry in handoff["package"]}
-    missing = REQUIRED_PACKAGE_ROLES - roles
+    required_roles = set(REQUIRED_PACKAGE_ROLES)
+    if state["artifacts"].get("plan_decisions") is not None:
+        required_roles.add("plan_decisions")
+    missing = required_roles - roles
     if missing:
         raise RuleFailure(
             "Implementation handoff package lacks roles: " + ", ".join(sorted(missing))
@@ -134,6 +137,14 @@ def validate_handoff_value(
         "working_set": directory
         / normalized_reference(directory, state["artifacts"]["working_set"])["path"],
     }
+    if state["artifacts"].get("plan_decisions") is not None:
+        expected_paths["plan_decisions"] = directory / normalized_reference(
+            directory, state["artifacts"]["plan_decisions"]
+        )["path"]
+    elif "plan_decisions" in package:
+        raise RuleFailure(
+            "Legacy Implementation handoff must not invent a Plan decision register"
+        )
     if previous_review is not None:
         expected_paths["previous_review"] = directory / previous_review["path"]
     elif "previous_review" in package:

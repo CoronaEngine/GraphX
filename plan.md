@@ -144,6 +144,7 @@ polaris/
 │       ├── state.json
 │       ├── working-set.json
 │       ├── PLAN.md
+│       ├── plan-decisions.json
 │       ├── runtime/progress.json
 │       ├── revisions/work-item-r001.json
 │       ├── implementations/r001/
@@ -239,6 +240,7 @@ target-repo/
     │       ├── revisions/
     │       │   └── work-item-r001.json  # 权威执行合同
     │       ├── PLAN.md
+    │       ├── plan-decisions.json # 绑定 PLAN.md 与 Human 选择/CD
     │       ├── working-set.json
     │       ├── implementations/r001/
     │       │   ├── handoff-001.json
@@ -381,6 +383,10 @@ v0.1 不增加自定义对话 Runtime 或自定义 UI；选择面板和 Worker �
 
 Human Decision 和 Approval 必须落入 append-only 的 `CD-*.json`，至少记录 `decision_id / approved_by / approved_at / approval_gate / work_item_revision / plan_hash / subject_diff_hash / decision`。实施前尚无 subject 时 `subject_diff_hash` 可以为 `null`，但必须绑定 `plan_hash`；最终审批必须绑定 `subject_diff_hash`。Validator 校验引用和绑定关系，但该机制属于可审计工程治理，不提供密码学身份认证。聊天中的同意只有写入 Change Decision 后才成为 Authority。
 
+Work Item 确认与 Plan 决策是两个独立 Human gate。前者冻结目标、范围、约束、AC 和 worker 授权；后者只处理合同允许范围内、规划后才暴露的 Human-owned 方案取舍。`PLAN.md` 保存推理、备选方案和影响，`plan-decisions.json` 保存结构化问题、两到三个互斥选项、推荐项、状态以及对 `PLAN.md` 的路径和 SHA-256 绑定。无待决项也必须写空登记。待决项存在时任务通过 `BLOCK` 进入 `BLOCKED`，输出 `PLAN_DECISIONS_NEEDED`；用户选择由 `record_plan_decision.py` 写入 append-only `CD-*.json`，登记保存所选 option、CD 路径和哈希。若回答改变冻结合同，必须创建新 Work Item revision，不能作为 Plan 决策消化。
+
+`PLAN` 门禁只接受所有条目均为 `RESOLVED` 的登记，并校验 task/revision、Plan 哈希、推荐项顺序、选项唯一性、CD Schema/哈希/路径、`task_id`、`plan_decision_id` 及 `approval_gate=plan_decision`。`FAIL_PLAN` 保留 Plan 决策登记；Implementation 与 Review handoff 在新协议任务中都携带它。升级前已处于 `PLANNED` 或更后状态且没有登记的旧任务保持可验证；它们下一次执行 `PLAN` 时必须采用新协议。
+
 ## 7. 声明式 Workflow Graph
 
 默认主路径：
@@ -412,7 +418,7 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 | 目标状态 | Artifact dependency（ready） | Governance gate（可转换） |
 |---|---|---|
 | `QUALIFIED` | 用户确认的冻结 Work Item revision | 必填字段通过；AC statement/evidence 非空且非 `TODO`；Human-owned 未决项为零 |
-| `PLANNED` | Plan + Working Set | 每个 AC 有验证映射；风险与受影响文档已列出 |
+| `PLANNED` | Plan + Plan Decision Register + Working Set | 每个 AC 有验证映射；风险与受影响文档已列出；Human-owned Plan 决策均绑定 CD 且无未决项 |
 | `IMPLEMENTING` | `PLANNED`；随后注册 Implementation handoff | R2 已获得实施前 Human approval；`DISPATCH_IMPLEMENTATION` 校验 handoff 与当前 revision/attempt/Plan/Working Set 绑定 |
 | `IMPLEMENTED` | 绑定 handoff 的 Implementation record + checkpoint commit | 实现者检查通过；session、handoff hash、所有偏离、subject commit 和 diff hash 已冻结；只有主任务执行转换 |
 | `DOCS_SYNCED` | Knowledge Delta + docs checkpoint commit | 无未处置 STALE；必要 Decision/Exploration 已落盘；最终 Review subject 已冻结 |

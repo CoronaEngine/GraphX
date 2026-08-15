@@ -141,6 +141,16 @@ def build(
         _artifact_entry(repo, directory, state, "knowledge_delta", "knowledge_delta"),
         _entry(repo, "evidence", evidence_dir(directory, revision)),
     ]
+    if state["artifacts"].get("plan_decisions") is not None:
+        package.append(
+            _artifact_entry(
+                repo,
+                directory,
+                state,
+                "plan_decisions",
+                "plan_decisions",
+            )
+        )
     if previous_review is not None:
         package.append(_entry(repo, "previous_review", directory / previous_review["path"]))
         if state["artifacts"].get("review_response") is not None:

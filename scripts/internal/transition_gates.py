@@ -19,6 +19,7 @@ from .polaris_core import (
     validate_json_file,
 )
 from .review_protocol import validate_handoff, validate_review, validate_review_response
+from .plan_decision_protocol import validate_plan_decisions
 from .working_set_protocol import validate_working_set
 
 
@@ -107,6 +108,8 @@ def check_gate(
         full_commit(repo, work_item["base_commit"])
     elif gate == "plan_ready":
         artifact_file(directory, state, "plan")
+        artifact_file(directory, state, "plan_decisions")
+        validate_plan_decisions(repo, root, directory, state, True)
         working_set_path = artifact_file(directory, state, "working_set")
         validate_working_set(repo, state["task_id"], working_set_path)
     elif gate == "implementation_approved":

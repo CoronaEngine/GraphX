@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.12。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.13。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -285,6 +285,7 @@ Polaris 每次暂停、等待用户决定或完成一个阶段时，都会在对
 
 - `REQUIREMENTS_NEEDED`：需求仍有会影响方案或验收的未知项；
 - `WORK_ITEM_PREVIEW`：Work Item 已整理好，等待用户确认冻结；
+- `PLAN_DECISIONS_NEEDED`：Plan 已形成，但仍有必须由用户选择的方案边界；
 - `WORK_ITEM_QUALIFIED`、`PLAN_READY`、`IMPLEMENTATION_FINISHED`、`DOCS_SYNCED`：阶段检查点；
 - `IMPLEMENTATION_HANDOFF_READY`：独立实现输入已冻结并注册；
 - `IMPLEMENTATION_SESSION_STARTED`：宿主已创建或复用独立 Implementer 任务；
@@ -298,6 +299,14 @@ Polaris 每次暂停、等待用户决定或完成一个阶段时，都会在对
 需求信息不完整时，`requirement-analysis` 每轮只问一到三个会实质影响结果的问题。每个问题会提供两到三个互斥选项，把推荐选项放在第一位，并逐项说明影响；如果选项都不合适，用户仍可直接给出精确答案。宿主提供 `request_user_input` 等结构化交互工具时，Polaris 优先在对话框中弹出选择面板；工具不可调用时，自动回退为内容相同的文本选项，不会为获得面板而自行切换模式或中断任务。
 
 无论通过面板还是文本回答，答案都会写入相同的 Work Item 字段，未回答项会写入 `known_unknowns`，任务停留在 `DRAFT`。信息完整后，无论原始需求多详细，Polaris 都会先展示 `WORK_ITEM_PREVIEW`，列出目标、范围、约束、严谨度、风险、所有验收标准及证据方式，然后等待用户明确确认。确认时同样优先显示“确认并执行（推荐）/要求修改”的选择面板；说明文字明确告知：确认会冻结 Work Item，并授权 Polaris 在同一本地项目中自动创建本 revision 所需的全部独立 Implementer / Review 任务和后续 attempts。授权分别写入 `implementation_dispatch.authorized=true` 与 `review_dispatch.authorized=true`；新 Revision 会把两者重置为 `false` 并要求重新确认。未确认时不得进入 `QUALIFIED`，也不得创建 Worker 任务。
+
+架构规划时如果出现合同未规定、但属于 Human-owned 的方案取舍，Polaris 会把问题写入 `plan-decisions.json`，将任务以 `blocker_type=plan_decision` 暂停，并输出 `PLAN_DECISIONS_NEEDED`。每项仍提供两到三个互斥选项及推荐项。用户选择后，`record_plan_decision.py` 创建 append-only 的 `.polaris/decisions/CD-*.json`，绑定 task、`PD-*`、Plan 哈希和所选 option，把路径及 SHA-256 回填到登记，再解除阻塞。`PLAN` 转换同时注册 `PLAN.md`、`plan-decisions.json` 和 `working-set.json`；任何未决项、Plan 哈希漂移、CD 内容漂移、错误 Revision 或越界路径都会被拒绝。若规划不需要用户决定，登记保留为空数组，明确表示“无 Human-owned Plan 决策”。旧任务升级后允许保留已注册的历史 Plan；再次执行 `PLAN` 时必须采用新登记协议。
+
+宿主 Skill 通常会代为执行记录脚本。需要手工恢复时，可在任务处于对应 Human block 后运行：
+
+```powershell
+python tools/polaris/scripts/record_plan_decision.py TASK-0001 PD-001 OPT-01 --approved-by repository-owner --repo .
+```
 
 询问示例：
 
@@ -549,7 +558,7 @@ git diff -- .agents/skills .claude/skills .claude/agents tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议；v0.1.11 加固 Adapter v2；v0.1.12 统一版本门禁、迁移锁恢复和事务化 vendoring。Workflow 版本仍为 v0.1.2。
+确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议；v0.1.11 加固 Adapter v2；v0.1.12 统一版本门禁、迁移锁恢复和事务化 vendoring；v0.1.13 增加 Plan Human 决策登记、CD 绑定和交接包传播。Workflow 版本仍为 v0.1.2。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 

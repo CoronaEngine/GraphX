@@ -26,6 +26,7 @@ from internal.polaris_core import (
 from internal.implementation_protocol import validate_handoff as validate_implementation_handoff
 from internal.artifact_protocol import normalized_reference
 from internal.review_protocol import validate_handoff, validate_review, validate_review_response
+from internal.plan_decision_protocol import validate_plan_decisions
 from internal.working_set_protocol import validate_working_set
 from internal.task_layout import events_path, explorations_dir
 from internal.task_layout import state_path as task_state_path
@@ -125,6 +126,9 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         require_artifact(state, directory, "plan")
         working_set_path = require_artifact(state, directory, "working_set")
         validate_working_set(repo, task_id, working_set_path)
+        if "plan_decisions" in state["artifacts"]:
+            require_artifact(state, directory, "plan_decisions")
+            validate_plan_decisions(repo, root, directory, state, True)
     if status == "IMPLEMENTING" and "implementation_handoff" in state["artifacts"]:
         validate_implementation_handoff(repo, root, directory, state)
     if at_least(status, "IMPLEMENTED"):

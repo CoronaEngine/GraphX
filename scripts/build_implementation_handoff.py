@@ -70,6 +70,17 @@ def build(repo: Path, task_id: str) -> dict[str, Any]:
         _entry(repo, "plan", directory / plan["path"]),
         _entry(repo, "working_set", directory / working_set["path"]),
     ]
+    if state["artifacts"].get("plan_decisions") is not None:
+        plan_decisions = normalized_reference(
+            directory, state["artifacts"]["plan_decisions"]
+        )
+        package.append(
+            _entry(
+                repo,
+                "plan_decisions",
+                directory / plan_decisions["path"],
+            )
+        )
     if previous_review is not None:
         package.append(
             _entry(repo, "previous_review", directory / previous_review["path"])

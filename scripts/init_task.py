@@ -21,9 +21,11 @@ from internal.polaris_core import (
     write_json_atomic,
 )
 from internal.recovery_protocol import refresh_project_index
+from internal.plan_decision_protocol import empty_plan_decisions
 from materialize_task_layout import materialize_task_directories
 from internal.task_layout import (
     events_path,
+    plan_decisions_path,
     plan_path,
     state_path,
     template_source_path,
@@ -52,6 +54,10 @@ def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
     working_set["task_id"] = task_id
     write_json_atomic(working_set_path(directory), working_set)
     shutil.copyfile(template_source_path(root, "plan"), plan_path(directory))
+    write_json_atomic(
+        plan_decisions_path(directory),
+        empty_plan_decisions(task_id, 1, plan_path(directory)),
+    )
 
     event = {
         "sequence": 0,

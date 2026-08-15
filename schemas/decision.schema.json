@@ -18,6 +18,14 @@
             "type": "string",
             "pattern": "^CD-[0-9]{4}$"
         },
+        "task_id": {
+            "type": "string",
+            "pattern": "^TASK-[0-9]{4}$"
+        },
+        "plan_decision_id": {
+            "type": "string",
+            "pattern": "^PD-[0-9]{3}$"
+        },
         "approved_by": {
             "type": "string"
         },

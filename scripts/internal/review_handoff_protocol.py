@@ -107,7 +107,10 @@ def validate_handoff(
     for item in handoff["package"]:
         items_by_role.setdefault(item["role"], []).append(item)
     roles = set(items_by_role)
-    missing_roles = REQUIRED_PACKAGE_ROLES - roles
+    required_roles = set(REQUIRED_PACKAGE_ROLES)
+    if state["artifacts"].get("plan_decisions") is not None:
+        required_roles.add("plan_decisions")
+    missing_roles = required_roles - roles
     if missing_roles:
         raise RuleFailure(f"review handoff lacks package roles: {sorted(missing_roles)}")
     duplicate_roles = {
@@ -150,6 +153,15 @@ def validate_handoff(
             directory, state["current_revision"]
         ).relative_to(repo).as_posix(),
     }
+    plan_decisions_reference = state_reference(
+        directory, state, "plan_decisions", required=False
+    )
+    if plan_decisions_reference is not None:
+        expected_paths["plan_decisions"] = (
+            directory / plan_decisions_reference["path"]
+        ).relative_to(repo).as_posix()
+    elif "plan_decisions" in items_by_role:
+        raise RuleFailure("legacy review handoff must not invent Plan decisions")
     if prior_reference is not None:
         expected_paths["previous_review"] = (
             directory / prior_reference["path"]

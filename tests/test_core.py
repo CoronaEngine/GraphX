@@ -54,6 +54,7 @@ from rebuild_state import rebuild  # noqa: E402
 from recover_task import recover  # noqa: E402
 from record_exploration import promote as promote_exploration  # noqa: E402
 from record_exploration import record as record_exploration  # noqa: E402
+from record_plan_decision import record as record_plan_decision  # noqa: E402
 from transition_task import transition  # noqa: E402
 from internal.transition_effects import apply_event_effects  # noqa: E402
 from update_implementation_progress import update as update_implementation_progress  # noqa: E402
@@ -203,7 +204,11 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             "PLAN",
-            ["plan=PLAN.md", "working_set=working-set.json"],
+            [
+                "plan=PLAN.md",
+                "plan_decisions=plan-decisions.json",
+                "working_set=working-set.json",
+            ],
             None,
             None,
             None,
@@ -705,7 +710,11 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             "PLAN",
-            ["plan=PLAN.md", "working_set=working-set.json"],
+            [
+                "plan=PLAN.md",
+                "plan_decisions=plan-decisions.json",
+                "working_set=working-set.json",
+            ],
             None,
             None,
             None,
@@ -715,6 +724,211 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(planned["to"], "PLANNED")
         self.assertEqual(validate(self.repo, "TASK-0001")["state"], "PLANNED")
+
+    def test_plan_gate_requires_a_bound_decision_register(self) -> None:
+        """PLAN 必须显式提交与当前 PLAN.md 哈希绑定的决策登记。"""
+        self.freeze_work_item()
+        transition(
+            self.repo, "TASK-0001", "QUALIFY", [], None, None, None, None, None, None
+        )
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PLAN",
+                ["plan=PLAN.md", "working_set=working-set.json"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+        plan_path = self.task / "PLAN.md"
+        plan_path.write_text("# Plan\n\nChanged after initialization.\n", encoding="utf-8")
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PLAN",
+                [
+                    "plan=PLAN.md",
+                    "plan_decisions=plan-decisions.json",
+                    "working_set=working-set.json",
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+    def test_pending_plan_decision_blocks_until_human_authority_is_bound(self) -> None:
+        """Human 选择写入 CD 后才能解除阻塞并进入 PLANNED。"""
+        self.freeze_work_item()
+        transition(
+            self.repo, "TASK-0001", "QUALIFY", [], None, None, None, None, None, None
+        )
+        plan_path = self.task / "PLAN.md"
+        register_path = self.task / "plan-decisions.json"
+        register = {
+            "register_version": 1,
+            "task_id": "TASK-0001",
+            "work_item_revision": 1,
+            "plan": {"path": "PLAN.md", "sha256": file_sha256(plan_path)},
+            "decisions": [
+                {
+                    "decision_id": "PD-001",
+                    "decision_owner": "human",
+                    "question": "Which compatibility policy should the Plan use?",
+                    "options": [
+                        {
+                            "option_id": "OPT-01",
+                            "label": "Preserve behavior (Recommended)",
+                            "consequence": "Keeps existing callers compatible.",
+                        },
+                        {
+                            "option_id": "OPT-02",
+                            "label": "Adopt strict behavior",
+                            "consequence": "Simplifies the new path but breaks callers.",
+                        },
+                    ],
+                    "recommended_option_id": "OPT-01",
+                    "status": "PENDING",
+                    "resolution": None,
+                }
+            ],
+        }
+        write_json_atomic(register_path, register)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PLAN",
+                [
+                    "plan=PLAN.md",
+                    "plan_decisions=plan-decisions.json",
+                    "working_set=working-set.json",
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+        blocked = transition(
+            self.repo,
+            "TASK-0001",
+            "BLOCK",
+            [],
+            None,
+            None,
+            None,
+            "plan_decision",
+            "PD-001 requires a Human selection",
+            "human",
+        )
+        self.assertEqual(blocked["to"], "BLOCKED")
+        decision_lock = self.task / ".transition.lock"
+        decision_lock.write_text("held", encoding="utf-8")
+        with self.assertRaises(InputFailure):
+            record_plan_decision(
+                self.repo, "TASK-0001", "PD-001", "OPT-01", "repository-owner"
+            )
+        decision_lock.unlink()
+        recorded = record_plan_decision(
+            self.repo, "TASK-0001", "PD-001", "OPT-01", "repository-owner"
+        )
+        authority_path = self.repo / recorded["decision"]
+        authority = read_json(authority_path)
+        self.assertEqual(authority["decision"], "OPT-01")
+        self.assertEqual(authority["plan_decision_id"], "PD-001")
+        resolved_register = read_json(register_path)
+        self.assertEqual(resolved_register["decisions"][0]["status"], "RESOLVED")
+
+        resolved = transition(
+            self.repo,
+            "TASK-0001",
+            "RESOLVE_BLOCK",
+            [],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(resolved["to"], "QUALIFIED")
+        wrong_context = copy.deepcopy(authority)
+        wrong_context["plan_decision_id"] = "PD-002"
+        write_json_atomic(authority_path, wrong_context)
+        resolved_register["decisions"][0]["resolution"]["decision_sha256"] = (
+            file_sha256(authority_path)
+        )
+        write_json_atomic(register_path, resolved_register)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PLAN",
+                [
+                    "plan=PLAN.md",
+                    "plan_decisions=plan-decisions.json",
+                    "working_set=working-set.json",
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        write_json_atomic(authority_path, authority)
+        resolved_register["decisions"][0]["resolution"]["decision_sha256"] = (
+            file_sha256(authority_path)
+        )
+        write_json_atomic(register_path, resolved_register)
+        planned = transition(
+            self.repo,
+            "TASK-0001",
+            "PLAN",
+            [
+                "plan=PLAN.md",
+                "plan_decisions=plan-decisions.json",
+                "working_set=working-set.json",
+            ],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(planned["to"], "PLANNED")
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "PLANNED")
+        with simulated_symlinks(authority_path):
+            with self.assertRaises(RuleFailure):
+                validate(self.repo, "TASK-0001")
+
+        transition(
+            self.repo,
+            "TASK-0001",
+            "START_IMPLEMENTATION",
+            [],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        handoff = build_implementation_handoff(self.repo, "TASK-0001")
+        package = read_json(Path(handoff["path"]))["package"]
+        self.assertIn("plan_decisions", {entry["role"] for entry in package})
 
     def test_working_set_json_rejects_wrong_revision_and_unsafe_paths(self) -> None:
         """Working Set 必须绑定当前 Revision，并拒绝逃逸仓库的结构化路径。"""
@@ -735,7 +949,11 @@ class PolarisCoreTests(unittest.TestCase):
                 self.repo,
                 "TASK-0001",
                 "PLAN",
-                ["plan=PLAN.md", "working_set=working-set.json"],
+                [
+                    "plan=PLAN.md",
+                    "plan_decisions=plan-decisions.json",
+                    "working_set=working-set.json",
+                ],
                 None,
                 None,
                 None,
@@ -759,7 +977,11 @@ class PolarisCoreTests(unittest.TestCase):
                 self.repo,
                 "TASK-0001",
                 "PLAN",
-                ["plan=PLAN.md", "working_set=working-set.json"],
+                [
+                    "plan=PLAN.md",
+                    "plan_decisions=plan-decisions.json",
+                    "working_set=working-set.json",
+                ],
                 None,
                 None,
                 None,
@@ -925,6 +1147,7 @@ class PolarisCoreTests(unittest.TestCase):
             "new_revision.py",
             "rebuild_state.py",
             "record_exploration.py",
+            "record_plan_decision.py",
             "refresh_project_index.py",
             "transition_task.py",
             "update_implementation_progress.py",
@@ -949,25 +1172,25 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.11")
+        self.set_protocol_version("0.1.12")
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.11")
-        self.assertEqual(result["to"], "0.1.12")
+        self.assertEqual(result["from"], "0.1.12")
+        self.assertEqual(result["to"], "0.1.13")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.11")
+        self.assertEqual(events[0]["polaris_version"], "0.1.12")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.12")
+        self.assertEqual(events[1]["polaris_version"], "0.1.13")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.11-to-0.1.12.json"
+            / "MIG-0.1.12-to-0.1.13.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -975,15 +1198,15 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.11")
+        self.set_protocol_version("0.1.12")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
             "record_version": 1,
-            "migration_id": "0.1.11-to-0.1.12",
-            "from_polaris_version": "0.1.11",
-            "to_polaris_version": "0.1.12",
+            "migration_id": "0.1.12-to-0.1.13",
+            "from_polaris_version": "0.1.12",
+            "to_polaris_version": "0.1.13",
             "from_workflow_version": "0.1.2",
             "to_workflow_version": "0.1.2",
             "status": "IN_PROGRESS",
@@ -1001,7 +1224,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.11-to-0.1.12.json",
+            / "MIG-0.1.12-to-0.1.13.json",
             record,
         )
         append_jsonl(
@@ -1014,7 +1237,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.12",
+                "polaris_version": "0.1.13",
                 "workflow_version": "0.1.2",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
@@ -1022,7 +1245,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.11-to-0.1.12",
+                "migration_id": "0.1.12-to-0.1.13",
             },
         )
 
@@ -1034,7 +1257,7 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
-        self.set_protocol_version("0.1.11")
+        self.set_protocol_version("0.1.12")
         vendor(ROOT, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
@@ -1042,7 +1265,7 @@ class PolarisCoreTests(unittest.TestCase):
             {
                 "lock_version": 1,
                 "kind": "polaris_migration",
-                "migration_id": "0.1.11-to-0.1.12",
+                "migration_id": "0.1.12-to-0.1.13",
                 "task_id": "TASK-0001",
                 "hostname": socket.gethostname(),
                 "pid": 2147483647,
@@ -1686,7 +1909,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "WORK_ITEM_PREVIEW",
                 "WORK_ITEM_QUALIFIED",
             ],
-            "architecture-planning": ["PLAN_READY"],
+            "architecture-planning": ["PLAN_DECISIONS_NEEDED", "PLAN_READY"],
             "implementation": [],
             "documentation-sync": [],
             "adversarial-review": [],
@@ -1712,6 +1935,9 @@ class PolarisCoreTests(unittest.TestCase):
         requirement_text = (
             ROOT / "skills" / "requirement-analysis" / "SKILL.md"
         ).read_text(encoding="utf-8")
+        architecture_text = (
+            ROOT / "skills" / "architecture-planning" / "SKILL.md"
+        ).read_text(encoding="utf-8")
         self.assertIn(
             "two or three concrete, mutually exclusive answer options",
             requirement_text,
@@ -1722,6 +1948,13 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn("render the identical questions and options in text", requirement_text)
         self.assertIn("Do not change host mode solely to obtain the panel", requirement_text)
         self.assertIn("Confirm and execute (Recommended)", requirement_text)
+        self.assertIn("plan-decisions.json", architecture_text)
+        self.assertIn("request_user_input", architecture_text)
+        self.assertIn("two or three mutually exclusive options", architecture_text)
+        self.assertIn("(Recommended)", architecture_text)
+        self.assertIn("record_plan_decision.py", architecture_text)
+        self.assertIn("precise free-form answer", architecture_text)
+        self.assertIn("PLAN_DECISIONS_NEEDED", architecture_text)
 
         self.assertIn("request_user_input", entry_text)
         self.assertIn("If the tool is unavailable", entry_text)
@@ -2398,7 +2631,11 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             "PLAN",
-            ["plan=PLAN.md", "working_set=working-set.json"],
+            [
+                "plan=PLAN.md",
+                "plan_decisions=plan-decisions.json",
+                "working_set=working-set.json",
+            ],
             None,
             None,
             None,
@@ -3049,7 +3286,11 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo,
             "TASK-0001",
             "PLAN",
-            ["plan=PLAN.md", "working_set=working-set.json"],
+            [
+                "plan=PLAN.md",
+                "plan_decisions=plan-decisions.json",
+                "working_set=working-set.json",
+            ],
             None,
             None,
             None,
