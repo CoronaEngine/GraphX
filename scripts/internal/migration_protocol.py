@@ -8,7 +8,7 @@ from typing import Any
 from .polaris_core import (
     InputFailure,
     RuleFailure,
-    acquire_lock,
+    acquire_migration_lock,
     append_jsonl,
     load_events_checked,
     read_json,
@@ -291,7 +291,14 @@ def migrate_project(repo: Path, protocol_root: Path) -> dict[str, Any]:
     try:
         for item in record["tasks"]:
             lock_path = task_dir(repo, item["task_id"]) / ".transition.lock"
-            locks.append((lock_path, acquire_lock(lock_path)))
+            locks.append(
+                (
+                    lock_path,
+                    acquire_migration_lock(
+                        lock_path, record["migration_id"], item["task_id"]
+                    ),
+                )
+            )
         record_path = migration_record_path(repo, record["migration_id"])
         if incomplete is None:
             write_json_atomic(record_path, record)

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -31,11 +33,13 @@ from internal.polaris_core import (  # noqa: E402
     InputFailure,
     RuleFailure,
     append_jsonl,
+    acquire_migration_lock,
     file_sha256,
     protocol_root,
     read_json,
     read_jsonl,
     rebuild_state_value,
+    release_lock,
     require_protocol_compatible,
     subject_diff_hash,
     validate_schema,
@@ -1008,6 +1012,47 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(len(read_jsonl(self.task / "events.jsonl")), 2)
         self.assertEqual(read_json(self.task / "state.json")["sequence"], 1)
         self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
+    def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
+        """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
+        self.set_protocol_version("0.1.10")
+        vendor(ROOT, self.repo, False)
+        lock_path = self.task / ".transition.lock"
+        write_json_atomic(
+            lock_path,
+            {
+                "lock_version": 1,
+                "kind": "polaris_migration",
+                "migration_id": "0.1.10-to-0.1.11",
+                "task_id": "TASK-0001",
+                "hostname": socket.gethostname(),
+                "pid": 2147483647,
+                "created_at": "2026-08-15T00:00:00Z",
+            },
+        )
+
+        migrate_project(self.repo)
+
+        self.assertFalse(lock_path.exists())
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
+        write_json_atomic(
+            lock_path,
+            {
+                "lock_version": 1,
+                "kind": "polaris_migration",
+                "migration_id": "active-migration",
+                "task_id": "TASK-0001",
+                "hostname": socket.gethostname(),
+                "pid": os.getpid(),
+                "created_at": "2026-08-15T00:00:00Z",
+            },
+        )
+        with self.assertRaisesRegex(InputFailure, "still running"):
+            acquire_migration_lock(
+                lock_path, "active-migration", "TASK-0001"
+            )
+        lock_path.unlink()
 
     def test_migration_rejects_an_undeclared_version_jump(self) -> None:
         """没有注册的跨版本路径机械拒绝，且不创建部分迁移记录。"""

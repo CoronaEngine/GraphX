@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -424,6 +425,100 @@ def acquire_lock(path: Path) -> int:
         return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError as exc:
         raise InputFailure(f"task is locked: {path}") from exc
+
+
+def _process_is_running(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, wintypes.LPDWORD]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(query_limited_information, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == 5
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _write_lock_owner(descriptor: int, owner: dict[str, Any]) -> None:
+    payload = (json.dumps(owner, indent=4, ensure_ascii=False) + "\n").encode("utf-8")
+    remaining = memoryview(payload)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        remaining = remaining[written:]
+    os.fsync(descriptor)
+
+
+def acquire_migration_lock(path: Path, migration_id: str, task_id: str) -> int:
+    """Acquire a task lock, reclaiming only this migration's dead local owner."""
+    owner = {
+        "lock_version": 1,
+        "kind": "polaris_migration",
+        "migration_id": migration_id,
+        "task_id": task_id,
+        "hostname": socket.gethostname(),
+        "pid": os.getpid(),
+        "created_at": utc_now(),
+    }
+    try:
+        descriptor = acquire_lock(path)
+    except InputFailure as exc:
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+            raise InputFailure(
+                f"task lock is not a recoverable migration lock: {path}"
+            ) from exc
+        if not isinstance(existing, dict):
+            raise InputFailure(
+                f"task lock is not a recoverable migration lock: {path}"
+            ) from exc
+        identity = (
+            existing.get("lock_version") == 1
+            and existing.get("kind") == "polaris_migration"
+            and existing.get("migration_id") == migration_id
+            and existing.get("task_id") == task_id
+        )
+        if not identity or existing.get("hostname") != owner["hostname"]:
+            raise InputFailure(
+                f"task lock belongs to another owner or migration: {path}"
+            ) from exc
+        pid = existing.get("pid")
+        if not isinstance(pid, int) or pid < 1:
+            raise InputFailure(f"migration lock has an invalid owner PID: {path}") from exc
+        if _process_is_running(pid):
+            raise InputFailure(f"migration lock owner is still running: {path}") from exc
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        descriptor = acquire_lock(path)
+    try:
+        _write_lock_owner(descriptor, owner)
+    except Exception:
+        release_lock(path, descriptor)
+        raise
+    return descriptor
 
 
 def release_lock(path: Path, descriptor: int) -> None:
