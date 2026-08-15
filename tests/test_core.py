@@ -592,6 +592,48 @@ class PolarisCoreTests(unittest.TestCase):
             with self.subTest(case=case["name"]):
                 self.assertTrue(validate_schema(value, schema))
 
+    def test_schema_validator_enforces_every_declared_constraint_keyword(self) -> None:
+        """轻量 Schema 校验器执行仓库实际使用的长度、数量和唯一性规则。"""
+        self.assertTrue(validate_schema("", {"type": "string", "minLength": 1}))
+        self.assertEqual(
+            validate_schema("极", {"type": "string", "minLength": 1}), []
+        )
+        self.assertTrue(validate_schema([], {"type": "array", "minItems": 1}))
+        self.assertTrue(
+            validate_schema(
+                ["AC-01", "AC-01"],
+                {"type": "array", "uniqueItems": True},
+            )
+        )
+        self.assertTrue(
+            validate_schema(
+                [{"value": [1, True]}, {"value": [1.0, True]}],
+                {"type": "array", "uniqueItems": True},
+            )
+        )
+        self.assertEqual(
+            validate_schema(
+                [True, 1], {"type": "array", "uniqueItems": True}
+            ),
+            [],
+        )
+        self.assertTrue(validate_schema(True, {"const": 1}))
+        self.assertEqual(validate_schema(1.0, {"const": 1}), [])
+        self.assertTrue(validate_schema(True, {"enum": [1, "true"]}))
+        self.assertTrue(validate_schema(0.5, {"type": "number", "minimum": 1}))
+        with self.assertRaises(InputFailure):
+            validate_schema("value", {"type": "string", "maxLength": 1})
+
+        implementation_schema = read_json(
+            ROOT / "schemas" / "implementation.schema.json"
+        )
+        implementation = read_json(template_path(ROOT, "implementation"))
+        implementation["step_results"] = []
+        self.assertTrue(validate_schema(implementation, implementation_schema))
+        implementation = read_json(template_path(ROOT, "implementation"))
+        implementation["step_results"][0]["result"] = ""
+        self.assertTrue(validate_schema(implementation, implementation_schema))
+
     def test_qualify_plan_and_reject_illegal_close(self) -> None:
         """DRAFT 可合法进入 QUALIFIED/PLANNED，但不能越过门禁直接 CLOSED。"""
         self.freeze_work_item()

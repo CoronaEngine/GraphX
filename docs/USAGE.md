@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.7。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.8。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -528,7 +528,7 @@ git diff -- .agents/skills .claude/skills .claude/agents tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后提交宿主 Skills/agents 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code 的 Skills、`CLAUDE.md` 和 worker 适配，但 Workflow 版本仍为 v0.1.2。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
+确认差异后提交宿主 Skills/agents 与 `tools/polaris/`。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。工作流迁移应作为单独、可审查的工程变更处理。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入版本化声明式宿主适配器并内置 Codex 与 Claude Code；v0.1.8 补齐有限 Schema 子集的长度、数量、唯一性和 JSON 实例相等规则。Workflow 版本仍为 v0.1.2。不能把新工具直接覆盖到仍冻结在旧协议版本的活动项目中，否则版本门禁会按设计拒绝执行；旧项目可先按原版本完成任务，或另行制定迁移。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 

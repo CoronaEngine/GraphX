@@ -8,7 +8,7 @@ Polaris 是一套运行在受支持 Coding Agent 宿主之上的、以仓库为�
 
 Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须按当前宿主适配器的语法主动调用 `engineering-task`（Codex 为 `$engineering-task`，Claude Code 为 `/engineering-task`）。其他阶段 Skills 只能由已启动的工作流在合法节点分派。
 
-> 当前版本：`0.1.7`（开发中）
+> 当前版本：`0.1.8`（开发中）
 
 ## 核心目标
 
@@ -82,7 +82,7 @@ v0.1 明确不实现：
 - Fresh-session Recovery、项目索引和可刷新 Working Set
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 55 个带场景日志的自动化测试
+- 56 个带场景日志的自动化测试
 
 仍在建设：
 
@@ -194,7 +194,7 @@ python scripts/vendor_project.py C:\path\to\target-repo
 python scripts/vendor_project.py C:\path\to\target-repo --force
 ```
 
-`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code 的 Skills、仓库指令和 worker 适配。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
+`0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code；`0.1.8` 补齐有限 Schema 子集的长度、数量、唯一性和 JSON 实例相等规则。Workflow Graph 协议仍是 `0.1.2`，因为这些变化没有增加或改变任务状态转换。不要把新工具直接覆盖到仍冻结在旧协议版本的活动项目；应先完成旧任务，或把协议与结构化文件迁移作为单独变更。
 
 ### 2. 初始化项目状态
 

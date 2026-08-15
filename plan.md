@@ -447,7 +447,7 @@ AGENTS.md
 
 ## 9. 确定性脚本
 
-全部使用 Python 标准库；无安装器、无共享服务。权威产物采用 JSON，Validator 实现 Polaris v0.1 明确定义的有限 Schema 子集，只支持 `required / type / enum / const / pattern / items / additionalProperties` 等实际使用能力，不宣称兼容完整 JSON Schema 标准，也不解析 YAML 或任意 Markdown。统一退出码：`0=PASS`、`1=规则失败`、`2=输入/系统错误`，并支持 `--json` 输出。
+全部使用 Python 标准库；无安装器、无共享服务。权威产物采用 JSON，Validator 实现 Polaris v0.1 明确定义的有限 Schema 子集，只支持 `required / type / enum / const / pattern / minimum / minLength / properties / items / minItems / uniqueItems / additionalProperties` 等实际使用能力，不宣称兼容完整 JSON Schema 标准，也不解析 YAML 或任意 Markdown。统一退出码：`0=PASS`、`1=规则失败`、`2=输入/系统错误`，并支持 `--json` 输出。
 
 | 脚本 | 最小职责 |
 |---|---|

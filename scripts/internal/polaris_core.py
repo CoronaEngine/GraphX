@@ -16,6 +16,24 @@ from .task_layout import task_root_relative_path
 from .task_layout import work_item_path as current_work_item_path
 
 
+SUPPORTED_SCHEMA_KEYWORDS = {
+    "$schema",
+    "additionalProperties",
+    "const",
+    "enum",
+    "items",
+    "minItems",
+    "minLength",
+    "minimum",
+    "pattern",
+    "properties",
+    "required",
+    "title",
+    "type",
+    "uniqueItems",
+}
+
+
 class RuleFailure(Exception):
     """The input is readable but violates a Polaris rule (exit 1)."""
 
@@ -200,8 +218,47 @@ def _matches_type(value: Any, expected: str) -> bool:
     return isinstance(value, mapping[expected])
 
 
+def _json_equal(left: Any, right: Any) -> bool:
+    """Compare values using JSON Schema instance equality, not Python coercion."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, (int, float)) or isinstance(right, (int, float)):
+        return (
+            isinstance(left, (int, float))
+            and not isinstance(left, bool)
+            and isinstance(right, (int, float))
+            and not isinstance(right, bool)
+            and left == right
+        )
+    if left is None or right is None:
+        return left is None and right is None
+    if isinstance(left, str) or isinstance(right, str):
+        return isinstance(left, str) and isinstance(right, str) and left == right
+    if isinstance(left, list) or isinstance(right, list):
+        return (
+            isinstance(left, list)
+            and isinstance(right, list)
+            and len(left) == len(right)
+            and all(_json_equal(a, b) for a, b in zip(left, right))
+        )
+    if isinstance(left, dict) or isinstance(right, dict):
+        return (
+            isinstance(left, dict)
+            and isinstance(right, dict)
+            and left.keys() == right.keys()
+            and all(_json_equal(left[key], right[key]) for key in left)
+        )
+    return False
+
+
 def validate_schema(value: Any, schema: dict[str, Any], location: str = "$") -> list[str]:
     """Validate the deliberately limited Polaris v0.1 schema subset."""
+    unsupported = set(schema) - SUPPORTED_SCHEMA_KEYWORDS
+    if unsupported:
+        raise InputFailure(
+            f"unsupported schema keyword at {location}: "
+            f"{', '.join(sorted(unsupported))}"
+        )
     errors: list[str] = []
     expected = schema.get("type")
     if expected is not None:
@@ -209,17 +266,25 @@ def validate_schema(value: Any, schema: dict[str, Any], location: str = "$") -> 
         if not any(_matches_type(value, choice) for choice in choices):
             return [f"{location}: expected type {expected}"]
 
-    if "enum" in schema and value not in schema["enum"]:
+    if "enum" in schema and not any(
+        _json_equal(value, candidate) for candidate in schema["enum"]
+    ):
         errors.append(f"{location}: value {value!r} is not in enum")
 
-    if "const" in schema and value != schema["const"]:
+    if "const" in schema and not _json_equal(value, schema["const"]):
         errors.append(f"{location}: value {value!r} does not equal const {schema['const']!r}")
+
+    if isinstance(value, str) and "minLength" in schema:
+        if len(value) < schema["minLength"]:
+            errors.append(
+                f"{location}: string length is below minLength {schema['minLength']}"
+            )
 
     if isinstance(value, str) and "pattern" in schema:
         if re.fullmatch(schema["pattern"], value) is None:
             errors.append(f"{location}: value does not match {schema['pattern']}")
 
-    if isinstance(value, int) and not isinstance(value, bool) and "minimum" in schema:
+    if _matches_type(value, "number") and "minimum" in schema:
         if value < schema["minimum"]:
             errors.append(f"{location}: value is below minimum {schema['minimum']}")
 
@@ -237,9 +302,31 @@ def validate_schema(value: Any, schema: dict[str, Any], location: str = "$") -> 
             if key in value:
                 errors.extend(validate_schema(value[key], child_schema, f"{location}.{key}"))
 
-    if isinstance(value, list) and "items" in schema:
-        for index, item in enumerate(value):
-            errors.extend(validate_schema(item, schema["items"], f"{location}[{index}]"))
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            errors.append(
+                f"{location}: item count is below minItems {schema['minItems']}"
+            )
+        if schema.get("uniqueItems") is True:
+            duplicate = next(
+                (
+                    (left, right)
+                    for right in range(1, len(value))
+                    for left in range(right)
+                    if _json_equal(value[left], value[right])
+                ),
+                None,
+            )
+            if duplicate is not None:
+                errors.append(
+                    f"{location}: items at indexes {duplicate[0]} and "
+                    f"{duplicate[1]} are not unique"
+                )
+        if "items" in schema:
+            for index, item in enumerate(value):
+                errors.extend(
+                    validate_schema(item, schema["items"], f"{location}[{index}]")
+                )
     return errors
 
 
