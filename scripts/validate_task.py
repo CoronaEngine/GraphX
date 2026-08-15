@@ -24,12 +24,8 @@ from polaris_core import (
     validate_schema,
 )
 from implementation_protocol import validate_handoff as validate_implementation_handoff
-from review_protocol import (
-    normalized_reference,
-    validate_handoff,
-    validate_review,
-    validate_review_response,
-)
+from artifact_protocol import normalized_reference
+from review_protocol import validate_handoff, validate_review, validate_review_response
 from working_set_protocol import validate_working_set
 from task_layout import events_path, explorations_dir
 from task_layout import state_path as task_state_path

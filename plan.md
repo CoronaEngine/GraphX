@@ -434,6 +434,8 @@ AGENTS.md
 | `rebuild_state.py` | 校验事件序列并从 `events.jsonl` 重建 `state.json` 投影 |
 | `check_docs.py` | 将 changed paths 与 Knowledge Delta 对照，拒绝未解释的文档影响 |
 
+`transition_task.py` 保持为唯一状态写入口，只负责编排锁、Workflow 规则、事件追加、`state.json` 原子替换和 Project Index 刷新。`transition_gates.py` 只读校验 gate，`transition_effects.py` 只计算候选状态、目标状态和事件内容，二者都不得直接写状态或事件。Review 校验按共享 artifact 引用、author response、冻结 handoff 和 finding lifecycle 分别放在 `artifact_protocol.py`、`review_response_protocol.py`、`review_handoff_protocol.py` 与 `review_protocol.py`；`review_protocol.py` 保留原有公开导入名称的兼容重导出。
+
 Implementation、Knowledge Delta、Review、Validation 和 Result 的权威 JSON 必须绑定当前适用的 `task_id / work_item_revision / artifact_attempt / subject_base_commit / subject_head_commit / subject_diff_hash`。Implementation 绑定编码 checkpoint，Knowledge Delta 与后续 Review/Validation/Result 绑定包含最终项目文档的 subject。保存这些治理 JSON 后，后续 transition event 记录其 `artifact_path / artifact_content_hash / artifact_commit`；`artifact_commit` 不写进 artifact 自身，避免产生无法满足的提交自引用。治理产物自身不会改变 subject hash，从而避免 Review 必须审查自身的循环依赖。任何 subject path 变化都会生成新的 subject commit/hash，并使旧 Review 和 Validation 失效。
 
 Subject 默认包含 Work Item scope 内的源代码、测试、构建配置和 `docs/`；排除 `.polaris/tasks/<task-id>/` 中的 Review、Validation、event、state、Result 等治理产物。Vendored Skills、`tools/polaris/` 或 `.polaris/workflow.json` 的修改属于协议升级，不得夹带在普通工程 Task 中。

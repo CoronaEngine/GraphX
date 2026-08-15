@@ -17,7 +17,7 @@ from polaris_core import (
     validate_json_file,
     validate_schema,
 )
-from review_protocol import normalized_reference
+from artifact_protocol import normalized_reference
 from task_layout import (
     implementation_relative_path,
     state_path,

@@ -137,6 +137,10 @@ python scripts/materialize_task_layout.py
 `init_task.py` 和 `new_revision.py` 使用同一个物化模块创建真实任务目录；
 `vendor_project.py` 也会在复制后重建目标仓库中的模板树。
 
+状态转换仍只通过 `scripts/transition_task.py` 写入；门禁校验和候选状态效果分别位于
+`transition_gates.py` 与 `transition_effects.py`。Review 协议按 artifact 引用、response、
+handoff 和 finding lifecycle 分层，内部模块不得绕过 `transition_task.py` 直接写入状态。
+
 ## 开发与验证
 
 运行完整测试：

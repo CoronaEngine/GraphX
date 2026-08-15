@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
+from artifact_protocol import normalized_reference  # noqa: E402
 from build_working_set import build as build_working_set  # noqa: E402
 from build_implementation_handoff import build as build_implementation_handoff  # noqa: E402
 from build_review_handoff import build as build_review_handoff  # noqa: E402
@@ -37,6 +38,7 @@ from recover_task import recover  # noqa: E402
 from record_exploration import promote as promote_exploration  # noqa: E402
 from record_exploration import record as record_exploration  # noqa: E402
 from transition_task import transition  # noqa: E402
+from transition_effects import apply_event_effects  # noqa: E402
 from update_implementation_progress import update as update_implementation_progress  # noqa: E402
 from implementation_protocol import step_results, validate_progress  # noqa: E402
 from materialize_task_layout import (  # noqa: E402
@@ -408,6 +410,64 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(result["state"], "DRAFT")
         rebuilt = rebuild_state_value(self.task / "events.jsonl")
         self.assertEqual(rebuilt, read_json(self.task / "state.json"))
+
+    def test_artifact_protocol_rejects_escape_and_registered_hash_drift(self) -> None:
+        """共享 artifact 引用层拒绝越界路径和注册后的内容漂移。"""
+        with self.assertRaises(RuleFailure):
+            normalized_reference(self.task, "../../outside.json")
+
+        plan_path = self.task / "PLAN.md"
+        reference = normalized_reference(self.task, "PLAN.md")
+        plan_path.write_text("changed after registration\n", encoding="utf-8")
+        with self.assertRaises(RuleFailure):
+            normalized_reference(self.task, reference)
+
+    def test_transition_effects_clear_only_the_expected_rework_artifacts(self) -> None:
+        """回退效果独立计算，并为 Implementation/Plan 回退保留正确 artifact。"""
+        state = {"status": "VALIDATING"}
+        artifacts = {
+            "plan": {"path": "PLAN.md", "sha256": "plan"},
+            "working_set": {"path": "working-set.json", "sha256": "working"},
+            "implementation": {"path": "implementation.json", "sha256": "impl"},
+            "knowledge_delta": {"path": "knowledge.json", "sha256": "knowledge"},
+            "validation": {"path": "validation.json", "sha256": "validation"},
+        }
+
+        implementation_rework = {
+            "artifacts": copy.deepcopy(artifacts),
+            "subject": {"diff_hash": "subject"},
+        }
+        destination = apply_event_effects(
+            ROOT,
+            self.task,
+            state,
+            implementation_rework,
+            "FAIL_IMPLEMENTATION",
+            "IMPLEMENTING",
+            {},
+        )
+        self.assertEqual(destination, "IMPLEMENTING")
+        self.assertEqual(
+            set(implementation_rework["artifacts"]), {"plan", "working_set"}
+        )
+        self.assertIsNone(implementation_rework["subject"])
+
+        plan_rework = {
+            "artifacts": copy.deepcopy(artifacts),
+            "subject": {"diff_hash": "subject"},
+        }
+        destination = apply_event_effects(
+            ROOT,
+            self.task,
+            state,
+            plan_rework,
+            "FAIL_PLAN",
+            "PLANNED",
+            {},
+        )
+        self.assertEqual(destination, "PLANNED")
+        self.assertEqual(set(plan_rework["artifacts"]), {"plan", "working_set"})
+        self.assertIsNone(plan_rework["subject"])
 
     def test_task_layout_is_single_source_and_templates_mirror_it(self) -> None:
         """模板树和真实任务树都从 task_layout 与平铺内容源机械生成。"""

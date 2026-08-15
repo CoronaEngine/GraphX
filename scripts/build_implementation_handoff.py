@@ -23,7 +23,7 @@ from polaris_core import (
     validate_json_file,
     write_json_atomic,
 )
-from review_protocol import normalized_reference
+from artifact_protocol import normalized_reference
 from task_layout import (
     implementation_handoff_path,
     implementation_relative_path,

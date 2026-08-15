@@ -22,7 +22,8 @@ from polaris_core import (
     validate_json_file,
     write_json_atomic,
 )
-from review_protocol import MAX_REVIEW_ATTEMPTS, normalized_reference
+from artifact_protocol import normalized_reference
+from review_protocol import MAX_REVIEW_ATTEMPTS
 from task_layout import evidence_dir, review_handoff_path, state_path
 from working_set_protocol import validate_working_set
 
