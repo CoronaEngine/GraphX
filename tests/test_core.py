@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -90,6 +92,21 @@ def host_adapter(host_id: str) -> dict[str, object]:
         for adapter in load_host_adapters(ROOT)
         if adapter["host_id"] == host_id
     )
+
+
+@contextmanager
+def simulated_symlinks(*paths: Path) -> Iterator[None]:
+    """Report selected paths as symlinks without requiring filesystem support."""
+    original_is_symlink = Path.is_symlink
+    selected = {path.absolute() for path in paths}
+
+    def is_symlink(path: Path) -> bool:
+        return path.absolute() in selected or original_is_symlink(path)
+
+    with mock.patch.object(
+        Path, "is_symlink", autospec=True, side_effect=is_symlink
+    ):
+        yield
 
 
 class PolarisCoreTests(unittest.TestCase):
@@ -1494,7 +1511,7 @@ class PolarisCoreTests(unittest.TestCase):
                     load_host_adapters(source)
 
     def test_host_adapter_sources_reject_symlinks(self) -> None:
-        """适配器 manifest、overlay、appendix 和专用源文件都不能借 symlink 逃逸。"""
+        """所有平台都机械验证 Adapter 源文件的 symlink 拒绝分支。"""
         with tempfile.TemporaryDirectory(prefix="polaris-adapter-symlink-") as temp:
             temp_root = Path(temp)
             source = temp_root / "source"
@@ -1512,14 +1529,14 @@ class PolarisCoreTests(unittest.TestCase):
                 / "agents"
                 / "polaris-reviewer.md"
             )
-            agent.unlink()
-            agent.symlink_to(outside)
 
-            with self.assertRaisesRegex(RuleFailure, "symlink"):
-                load_host_adapters(source)
+            with simulated_symlinks(agent):
+                with self.assertRaisesRegex(RuleFailure, "symlink"):
+                    load_host_adapters(source)
+            self.assertEqual(outside.read_text(encoding="utf-8"), "outside\n")
 
     def test_vendor_rejects_symlinked_adapter_targets(self) -> None:
-        """vendoring 在删除或写入前拒绝穿过目标仓库中的 symlink。"""
+        """所有平台都机械验证 vendoring 目标的 symlink 拒绝分支。"""
         with tempfile.TemporaryDirectory(prefix="polaris-target-symlink-") as temp:
             temp_root = Path(temp)
             target = temp_root / "target"
@@ -1527,11 +1544,53 @@ class PolarisCoreTests(unittest.TestCase):
             target.mkdir()
             outside.mkdir()
             run_git(target, "init", "-q")
-            (target / ".agents").symlink_to(outside, target_is_directory=True)
 
+            with simulated_symlinks(target / ".agents"):
+                with self.assertRaisesRegex(RuleFailure, "symlink"):
+                    vendor(ROOT, target, False)
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_real_filesystem_symlink_boundaries_when_supported(self) -> None:
+        """文件系统支持 symlink 时，真实验证 Adapter 读边界和 vendoring 写边界。"""
+        with tempfile.TemporaryDirectory(prefix="polaris-real-symlink-") as temp:
+            temp_root = Path(temp)
+            source = temp_root / "source"
+            shutil.copytree(
+                ROOT,
+                source,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+            )
+            outside_file = temp_root / "outside.md"
+            outside_file.write_text("outside\n", encoding="utf-8")
+            agent = (
+                source
+                / "hosts"
+                / "claude-code"
+                / "agents"
+                / "polaris-reviewer.md"
+            )
+            agent.unlink()
+            try:
+                agent.symlink_to(outside_file)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"filesystem symlink creation is unavailable: {exc}")
+            with self.assertRaisesRegex(RuleFailure, "symlink"):
+                load_host_adapters(source)
+
+            target = temp_root / "target"
+            outside_directory = temp_root / "outside"
+            target.mkdir()
+            outside_directory.mkdir()
+            run_git(target, "init", "-q")
+            try:
+                (target / ".agents").symlink_to(
+                    outside_directory, target_is_directory=True
+                )
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"directory symlink creation is unavailable: {exc}")
             with self.assertRaisesRegex(RuleFailure, "symlink"):
                 vendor(ROOT, target, False)
-            self.assertEqual(list(outside.iterdir()), [])
+            self.assertEqual(list(outside_directory.iterdir()), [])
 
     def test_vendor_and_validator_discover_a_third_host_without_code_changes(self) -> None:
         """新增第三宿主只需清单，vendoring、初始化和校验无需新增分支。"""

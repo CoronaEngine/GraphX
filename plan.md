@@ -37,6 +37,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 11. **Rigor is progressive.** 风险越高，所需产物、独立审查和人工门禁越严格。
 12. **Machine validation wins format decisions.** 同一内容同时需要机械校验和人类阅读时，默认只保存四格缩进 JSON，并在展示时按需格式化；只有独立自然语言内容无法用结构化字段清晰表达时才使用 Markdown。
 13. **Task layout has one source.** `scripts/internal/task_layout.py` 是任务相对路径的唯一权威；`scripts/materialize_task_layout.py` 从该定义同时生成 `templates/task/` 样例树和真实任务目录。模板正文只维护在平铺的 `templates/task-sources/`，Schema 不重复硬编码目录正则。
+14. **Cross-platform behavior is a design constraint.** 任何新增或修改的代码都必须在设计、实现和 Review 时明确考虑 Windows、macOS 与 Linux；不得依赖硬编码路径分隔符、特定 shell、仅单平台成立的文件系统或进程语义。平台能力存在差异时必须先做能力检测并提供确定性降级或明确错误；核心规则使用平台无关测试始终验证，真实 symlink 等可选文件系统集成测试仅在能力可用时运行，不支持时明确 `SKIP`，不得误报 `FAIL`。
 
 ## 2. MVP 范围
 
@@ -457,7 +458,7 @@ AGENTS.md
 
 ## 9. 确定性脚本
 
-全部使用 Python 标准库；无安装器、无共享服务。权威产物采用 JSON，Validator 实现 Polaris v0.1 明确定义的有限 Schema 子集，只支持 `required / type / enum / const / pattern / minimum / minLength / properties / items / minItems / uniqueItems / additionalProperties` 等实际使用能力，不宣称兼容完整 JSON Schema 标准，也不解析 YAML 或任意 Markdown。统一退出码：`0=PASS`、`1=规则失败`、`2=输入/系统错误`，并支持 `--json` 输出。
+全部使用 Python 标准库；无安装器、无共享服务。所有脚本必须使用跨平台的路径、编码、换行、原子写入、锁和进程能力实现，禁止把 Bash、PowerShell 或某一文件系统的行为当作共同前提；必须为平台差异增加机械测试。权威产物采用 JSON，Validator 实现 Polaris v0.1 明确定义的有限 Schema 子集，只支持 `required / type / enum / const / pattern / minimum / minLength / properties / items / minItems / uniqueItems / additionalProperties` 等实际使用能力，不宣称兼容完整 JSON Schema 标准，也不解析 YAML 或任意 Markdown。统一退出码：`0=PASS`、`1=规则失败`、`2=输入/系统错误`，并支持 `--json` 输出。
 
 | 脚本 | 最小职责 |
 |---|---|
@@ -654,6 +655,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [ ] 代码变化对项目知识的影响已更新、标记或明确判定 `NO_CHANGE`。
 - [ ] Documentation Sync 在最终独立 Review 前完成，Reviewer 审查包含代码、测试和文档的最终 Patch。
 - [ ] `events.jsonl` 可重建 `state.json`，并发写入、事件断裂和版本不匹配会被拒绝。
+- [ ] 所有代码变更均完成 Windows、macOS、Linux 兼容性审查；核心规则测试不依赖可选平台能力，真实平台能力不可用时只跳过对应集成测试。
 - [ ] Horizon 和 Vision 各完成至少一个真实闭环，并形成可比较的评估记录。
 - [ ] 两个试点均记录 `Adversarial Review Yield`，用于判断独立 Review 带来的收益是否值得其时间和 token 成本。
 - [ ] v0.1 中没有 CLI、daemon、Dashboard、scheduler、自定义 runtime 或 database。
