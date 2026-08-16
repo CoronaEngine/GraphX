@@ -48,6 +48,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - `.polaris/` 仓库状态协议、模板与默认工作流图。
 - Work Item 修订、任务状态、事件账本、工作集、Review、Validation、Result。
 - 项目初始化、任务初始化、状态转换、结构校验、文档影响检查、工作集生成脚本。
+- 只读聚合 Doctor；复用现有 Validator，一次输出环境、协议、Authority、任务与操作残留的证据和人工动作。
 - 独立 Implementer worker、不可变 Implementation handoff 与事件驱动实时进度快照。
 - 验收标准绑定的线性 `implementation_steps`；步骤只能依次推进或在末尾追加，最终结果冻结进 Implementation artifact。
 - 独立 worker context 的对抗审查协议。
@@ -167,6 +168,7 @@ polaris/
 │   ├── work-item.schema.json
 │   ├── working-set.schema.json
 │   ├── project-index.schema.json
+│   ├── doctor-report.schema.json
 │   ├── review.schema.json
 │   └── validation.schema.json
 ├── scripts/
@@ -175,6 +177,7 @@ polaris/
 │   ├── materialize_task_layout.py
 │   ├── new_revision.py
 │   ├── build_working_set.py
+│   ├── doctor_project.py
 │   ├── validate_project.py
 │   ├── validate_task.py
 │   ├── transition_task.py
@@ -183,6 +186,7 @@ polaris/
 │   └── internal/                  # 不可独立运行的协议实现
 │       ├── task_layout.py
 │       ├── host_adapters.py
+│       ├── doctor_protocol.py
 │       ├── polaris_core.py
 │       ├── transition_gates.py
 │       └── transition_effects.py
@@ -475,7 +479,7 @@ AGENTS.md
 
 ## 9. 确定性脚本
 
-全部使用 Python 标准库；无安装器、无共享服务。所有脚本必须使用跨平台的路径、编码、换行、原子写入、锁和进程能力实现，禁止把 Bash、PowerShell 或某一文件系统的行为当作共同前提；必须为平台差异增加机械测试。权威产物采用 JSON，Validator 实现 Polaris v0.1 明确定义的有限 Schema 子集，只支持 `required / type / enum / const / pattern / minimum / minLength / properties / items / minItems / uniqueItems / additionalProperties` 等实际使用能力，不宣称兼容完整 JSON Schema 标准，也不解析 YAML 或任意 Markdown。统一退出码：`0=PASS`、`1=规则失败`、`2=输入/系统错误`，并支持 `--json` 输出。
+全部使用 Python 标准库；无安装器、无共享服务。所有脚本必须使用跨平台的路径、编码、换行、原子写入、锁和进程能力实现，禁止把 Bash、PowerShell 或某一文件系统的行为当作共同前提；必须为平台差异增加机械测试。权威产物采用 JSON，Validator 实现 Polaris v0.1 明确定义的有限 Schema 子集，只支持 `required / type / enum / const / pattern / minimum / minLength / properties / items / minItems / uniqueItems / additionalProperties` 等实际使用能力，不宣称兼容完整 JSON Schema 标准，也不解析 YAML 或任意 Markdown。统一退出码：`0=PASS/非阻断 WARN`、`1=规则失败`、`2=输入/系统错误`，并支持 `--json` 输出。
 
 | 脚本 | 最小职责 |
 |---|---|
@@ -488,11 +492,14 @@ AGENTS.md
 | `internal/task_layout.py` | 集中定义所有任务相对路径、动态 revision/attempt 渲染和模板样例投影 |
 | `materialize_task_layout.py` | 从 `internal/task_layout.py` 生成模板样例树和真实任务目录，并校验生成物与平铺模板正文一致 |
 | `update_implementation_progress.py` | 通过明确事件原子更新 ignored 的线性步骤进度；拒绝 session 接管、跳步、回退、未知验收 ID 和非法 blocker |
+| `doctor_project.py` | 只读聚合环境、协议、Authority、清单、迁移、索引、任务与操作残留诊断，输出版本化报告、证据和人工动作 |
 | `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
 | `transition_task.py` | 获取任务锁，校验合法边与 gate，追加带 sequence 的事件，再原子替换 `state.json` |
 | `rebuild_state.py` | 校验事件序列并从 `events.jsonl` 重建 `state.json` 投影 |
 | `check_docs.py` | 将 changed paths 与 Knowledge Delta 对照，拒绝未解释的文档影响 |
+
+Doctor 不定义第二套合法性规则：项目和任务结论必须调用现有 Validator 与协议模块，独立检查只覆盖运行环境、调用边界和未完成操作残留。诊断必须尽量执行全部安全检查，不因首个失败停止；报告按 `schemas/doctor-report.schema.json` 为检查项使用 `PASS/WARN/FAIL`、evidence 与 actions，只有 Doctor 自身无法产出检查项时顶层状态才使用 `ERROR`。Doctor 永远不自动修复、迁移、刷新索引或删除锁/事务目录，且运行前后项目文件必须保持字节一致。
 
 `transition_task.py` 保持为唯一状态写入口，只负责编排锁、Workflow 规则、事件追加、`state.json` 原子替换和 Project Index 刷新。`internal/transition_gates.py` 只读校验 gate，`internal/transition_effects.py` 只计算候选状态、目标状态和事件内容，二者都不得直接写状态或事件。Review 校验按共享 artifact 引用、author response、冻结 handoff 和 finding lifecycle 分别放在 `internal/artifact_protocol.py`、`internal/review_response_protocol.py`、`internal/review_handoff_protocol.py` 与 `internal/review_protocol.py`；`internal/review_protocol.py` 保留原有公开导入名称的兼容重导出。
 
@@ -617,6 +624,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 ### M2 — Mechanical core（第 6–9 天）
 
 - [x] 实现 init、revision、validate、transition、state rebuild、docs check
+- [x] 实现只读聚合 Doctor、版本化诊断报告与多故障/无写入测试
 - [x] 所有工作流状态转换经 `transition_task.py`
 - [x] `QUALIFY` 机械拒绝空白或 `TODO` 的验收描述与证据
 - [x] 单元测试覆盖第 9 节失败场景

@@ -45,6 +45,15 @@
             "to_workflow_version": "0.1.2",
             "project_strategy": "replace_version",
             "task_strategy": "append_version_event"
+        },
+        {
+            "migration_id": "0.1.14-to-0.1.15",
+            "from_polaris_version": "0.1.14",
+            "to_polaris_version": "0.1.15",
+            "from_workflow_version": "0.1.2",
+            "to_workflow_version": "0.1.2",
+            "project_strategy": "replace_version",
+            "task_strategy": "append_version_event"
         }
     ]
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import os
 import shutil
@@ -10,7 +11,7 @@ import sys
 import tempfile
 import unittest
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -22,6 +23,7 @@ sys.path.insert(0, str(SCRIPTS))
 from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
 from internal.artifact_protocol import normalized_reference  # noqa: E402
+from internal.doctor_protocol import diagnose_project  # noqa: E402
 from internal.host_adapters import (  # noqa: E402
     discover_skills,
     load_host_adapters,
@@ -74,6 +76,7 @@ from materialize_task_layout import (  # noqa: E402
     validate_materialized_template_tree,
 )
 from internal.task_layout import (  # noqa: E402
+    ARCHIVED_RUNTIME_IGNORE_PATTERN,
     TEMPLATE_SAMPLE_PATHS,
     TEMPLATE_SOURCE_PATHS,
     task_repo_relative_path,
@@ -83,6 +86,7 @@ from internal.task_layout import (  # noqa: E402
 )
 from validate_task import validate  # noqa: E402
 from validate_project import validate as validate_project  # noqa: E402
+import doctor_project as doctor_module  # noqa: E402
 import vendor_project as vendor_module  # noqa: E402
 from vendor_project import vendor  # noqa: E402
 
@@ -103,6 +107,15 @@ def host_adapter(host_id: str) -> dict[str, object]:
         for adapter in load_host_adapters(ROOT)
         if adapter["host_id"] == host_id
     )
+
+
+def repository_file_snapshot(repo: Path) -> dict[str, bytes]:
+    """Capture project files while excluding Git's internal implementation state."""
+    return {
+        path.relative_to(repo).as_posix(): path.read_bytes()
+        for path in sorted(repo.rglob("*"))
+        if path.is_file() and ".git" not in path.relative_to(repo).parts
+    }
 
 
 @contextmanager
@@ -1205,26 +1218,25 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.13")
-        (self.repo / ".polaris" / "task-locations.json").unlink()
+        self.set_protocol_version("0.1.14")
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.13")
-        self.assertEqual(result["to"], "0.1.14")
+        self.assertEqual(result["from"], "0.1.14")
+        self.assertEqual(result["to"], "0.1.15")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.13")
+        self.assertEqual(events[0]["polaris_version"], "0.1.14")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.14")
+        self.assertEqual(events[1]["polaris_version"], "0.1.15")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.13-to-0.1.14.json"
+            / "MIG-0.1.14-to-0.1.15.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -1236,15 +1248,15 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.13")
+        self.set_protocol_version("0.1.14")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
             "record_version": 1,
-            "migration_id": "0.1.13-to-0.1.14",
-            "from_polaris_version": "0.1.13",
-            "to_polaris_version": "0.1.14",
+            "migration_id": "0.1.14-to-0.1.15",
+            "from_polaris_version": "0.1.14",
+            "to_polaris_version": "0.1.15",
             "from_workflow_version": "0.1.2",
             "to_workflow_version": "0.1.2",
             "status": "IN_PROGRESS",
@@ -1262,7 +1274,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.13-to-0.1.14.json",
+            / "MIG-0.1.14-to-0.1.15.json",
             record,
         )
         append_jsonl(
@@ -1275,7 +1287,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.14",
+                "polaris_version": "0.1.15",
                 "workflow_version": "0.1.2",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
@@ -1283,7 +1295,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.13-to-0.1.14",
+                "migration_id": "0.1.14-to-0.1.15",
             },
         )
 
@@ -1295,7 +1307,7 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
-        self.set_protocol_version("0.1.13")
+        self.set_protocol_version("0.1.14")
         vendor(ROOT, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
@@ -1303,7 +1315,7 @@ class PolarisCoreTests(unittest.TestCase):
             {
                 "lock_version": 1,
                 "kind": "polaris_migration",
-                "migration_id": "0.1.13-to-0.1.14",
+                "migration_id": "0.1.14-to-0.1.15",
                 "task_id": "TASK-0001",
                 "hostname": socket.gethostname(),
                 "pid": 2147483647,
@@ -1371,6 +1383,124 @@ class PolarisCoreTests(unittest.TestCase):
         )
         result = validate_project(self.repo)
         self.assertEqual(result["active_tasks"], 1)
+
+    def test_doctor_reports_a_healthy_vendored_project_without_writing(self) -> None:
+        """Doctor 聚合健康检查并通过报告 Schema，且诊断前后项目文件完全不变。"""
+        vendor(ROOT, self.repo, False)
+        before = repository_file_snapshot(self.repo)
+
+        report = diagnose_project(self.repo)
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["summary"]["failed"], 0)
+        self.assertEqual(report["summary"]["warnings"], 0)
+        self.assertEqual(report["mode"], "vendored")
+        self.assertIn(
+            "task:TASK-0001", {check["id"] for check in report["checks"]}
+        )
+        self.assertTrue(
+            all(not check["actions"] for check in report["checks"])
+        )
+        schema = read_json(ROOT / "schemas" / "doctor-report.schema.json")
+        self.assertEqual(validate_schema(report, schema), [])
+        self.assertEqual(repository_file_snapshot(self.repo), before)
+
+    def test_doctor_aggregates_independent_failures_with_actions(self) -> None:
+        """多个独立故障一次全部报告，且每个失败项都提供明确的人工动作。"""
+        vendor(ROOT, self.repo, False)
+        managed_skill = (
+            self.repo / ".agents" / "skills" / "engineering-task" / "SKILL.md"
+        )
+        managed_skill.write_text("tampered\n", encoding="utf-8")
+        state_path = self.task / "state.json"
+        state = read_json(state_path)
+        state["status"] = "CLOSED"
+        write_json_atomic(state_path, state)
+        gitignore_path = self.repo / ".gitignore"
+        gitignore = gitignore_path.read_text(encoding="utf-8")
+        gitignore_path.write_text(
+            gitignore.replace(f"{ARCHIVED_RUNTIME_IGNORE_PATTERN}\n", ""),
+            encoding="utf-8",
+        )
+
+        report = diagnose_project(self.repo)
+
+        failed = {
+            check["id"]: check
+            for check in report["checks"]
+            if check["status"] == "FAIL"
+        }
+        self.assertEqual(report["status"], "FAIL")
+        self.assertTrue(
+            {
+                "install_manifest",
+                "project_index",
+                "task:TASK-0001",
+                "project_validation",
+                "runtime_ignore",
+            }.issubset(failed)
+        )
+        self.assertTrue(
+            all(check["evidence"] and check["actions"] for check in failed.values())
+        )
+        self.assertEqual(report["summary"]["failed"], len(failed))
+
+    def test_doctor_warnings_are_non_blocking_and_cli_failures_block(self) -> None:
+        """Doctor 对 WARN、FAIL 和自身运行错误分别返回 0、1、2。"""
+        (self.task / ".transition.lock").write_text("held\n", encoding="utf-8")
+        command = [
+            sys.executable,
+            str(SCRIPTS / "doctor_project.py"),
+            "--repo",
+            str(self.repo),
+            "--json",
+        ]
+
+        warned = subprocess.run(command, text=True, capture_output=True)
+
+        self.assertEqual(warned.returncode, 0, warned.stderr)
+        warning_report = json.loads(warned.stdout)
+        self.assertEqual(warning_report["status"], "WARN")
+        warnings = [
+            check
+            for check in warning_report["checks"]
+            if check["status"] == "WARN"
+        ]
+        self.assertTrue(
+            {"protocol", "install_manifest", "operation_residue"}.issubset(
+                {check["id"] for check in warnings}
+            )
+        )
+        self.assertTrue(
+            all(check["evidence"] and check["actions"] for check in warnings)
+        )
+        (self.task / ".transition.lock").unlink()
+        (self.repo / ".gitignore").unlink()
+
+        failed = subprocess.run(command, text=True, capture_output=True)
+
+        self.assertEqual(failed.returncode, 1, failed.stderr)
+        self.assertEqual(json.loads(failed.stdout)["status"], "FAIL")
+
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                doctor_module,
+                "diagnose_project",
+                side_effect=OSError("diagnostic runtime unavailable"),
+            ),
+            mock.patch.object(
+                sys,
+                "argv",
+                ["doctor_project.py", "--repo", str(self.repo), "--json"],
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(doctor_module.main(), 2)
+        error_report = json.loads(output.getvalue())
+        self.assertEqual(error_report["status"], "ERROR")
+        schema = read_json(ROOT / "schemas" / "doctor-report.schema.json")
+        self.assertEqual(validate_schema(error_report, schema), [])
 
     def test_install_manifest_detects_drift_and_preserves_project_owned_files(self) -> None:
         """清单哈希拒绝受管文件漂移，但不把项目自有文件冻结为模板内容。"""
