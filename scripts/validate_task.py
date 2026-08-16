@@ -25,6 +25,7 @@ from internal.polaris_core import (
 )
 from internal.implementation_protocol import validate_handoff as validate_implementation_handoff
 from internal.artifact_protocol import normalized_reference
+from internal.code_intelligence_protocol import record_reference
 from internal.review_protocol import validate_handoff, validate_review, validate_review_response
 from internal.plan_decision_protocol import validate_plan_decisions
 from internal.working_set_protocol import validate_working_set
@@ -164,6 +165,21 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         )
         if identity_mismatch:
             raise RuleFailure("Implementation artifact targets the wrong revision or subject")
+        implementation_intelligence = record_reference(
+            repo, task_id, implementation.get("code_intelligence")
+        )
+        if implementation_intelligence and (
+            implementation_intelligence["stage"] != "IMPLEMENTATION"
+            or implementation_intelligence["artifact_attempt"]
+            != implementation["artifact_attempt"]
+            or implementation_intelligence["target"]["base_commit"]
+            != implementation["subject_base_commit"]
+            or implementation_intelligence["target"]["head_commit"]
+            != implementation["subject_head_commit"]
+            or implementation_intelligence["target"]["diff_hash"]
+            != implementation["subject_diff_hash"]
+        ):
+            raise RuleFailure("Implementation Code Intelligence record targets the wrong subject")
         if implementation["subject_base_commit"] != subject["base_commit"]:
             raise RuleFailure("Implementation artifact has the wrong subject base")
         if status == "IMPLEMENTED" and (
@@ -189,6 +205,21 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
             raise RuleFailure("Knowledge Delta targets the wrong final documentation subject")
         if any(entry["status"] == "STALE" for entry in knowledge["entries"]):
             raise RuleFailure("Knowledge Delta contains unresolved STALE entries")
+        knowledge_intelligence = record_reference(
+            repo, task_id, knowledge.get("code_intelligence")
+        )
+        if knowledge_intelligence and (
+            knowledge_intelligence["stage"] != "DOCUMENTATION_SYNC"
+            or knowledge_intelligence["artifact_attempt"]
+            != knowledge["artifact_attempt"]
+            or knowledge_intelligence["target"]["base_commit"]
+            != knowledge["subject_base_commit"]
+            or knowledge_intelligence["target"]["head_commit"]
+            != knowledge["subject_head_commit"]
+            or knowledge_intelligence["target"]["diff_hash"]
+            != knowledge["subject_diff_hash"]
+        ):
+            raise RuleFailure("Knowledge Delta Code Intelligence record targets the wrong subject")
     if status == "REVIEWING" or at_least(status, "REVIEWED"):
         validate_handoff(repo, root, directory, state)
     if at_least(status, "REVIEWED"):

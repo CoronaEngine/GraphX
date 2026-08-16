@@ -10,6 +10,7 @@ from .implementation_protocol import (
     validate_handoff as validate_implementation_handoff,
     validate_progress,
 )
+from .code_intelligence_protocol import record_reference
 from .polaris_core import (
     RuleFailure,
     current_work_item_path,
@@ -141,6 +142,20 @@ def check_gate(
             or implementation["subject_diff_hash"] != state["subject"]["diff_hash"]
         ):
             raise RuleFailure("Implementation targets the wrong revision or subject")
+        intelligence = record_reference(
+            repo, state["task_id"], implementation.get("code_intelligence")
+        )
+        if intelligence and (
+            intelligence["stage"] != "IMPLEMENTATION"
+            or intelligence["artifact_attempt"] != implementation["artifact_attempt"]
+            or intelligence["target"]["base_commit"]
+            != implementation["subject_base_commit"]
+            or intelligence["target"]["head_commit"]
+            != implementation["subject_head_commit"]
+            or intelligence["target"]["diff_hash"]
+            != implementation["subject_diff_hash"]
+        ):
+            raise RuleFailure("Implementation Code Intelligence record targets the wrong subject")
         progress = validate_progress(repo, state["task_id"])
         if progress["phase"] != "CHECKPOINTING":
             raise RuleFailure("FINISH_IMPLEMENTATION requires CHECKPOINTING live progress")
@@ -166,6 +181,20 @@ def check_gate(
             or knowledge["subject_diff_hash"] != state["subject"]["diff_hash"]
         ):
             raise RuleFailure("Knowledge Delta targets the wrong final documentation subject")
+        intelligence = record_reference(
+            repo, state["task_id"], knowledge.get("code_intelligence")
+        )
+        if intelligence and (
+            intelligence["stage"] != "DOCUMENTATION_SYNC"
+            or intelligence["artifact_attempt"] != knowledge["artifact_attempt"]
+            or intelligence["target"]["base_commit"]
+            != knowledge["subject_base_commit"]
+            or intelligence["target"]["head_commit"]
+            != knowledge["subject_head_commit"]
+            or intelligence["target"]["diff_hash"]
+            != knowledge["subject_diff_hash"]
+        ):
+            raise RuleFailure("Knowledge Delta Code Intelligence record targets the wrong subject")
         from check_docs import check as check_documentation
 
         check_documentation(

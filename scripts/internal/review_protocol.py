@@ -15,6 +15,7 @@ from .artifact_protocol import (
     normalized_reference,
     state_reference,
 )
+from .code_intelligence_protocol import record_reference
 from .polaris_core import RuleFailure, validate_json_file
 from .review_handoff_protocol import (
     INDEPENDENT_ISOLATION_MODES,
@@ -61,6 +62,20 @@ def validate_review(
         or review["subject_diff_hash"] != subject["diff_hash"]
     ):
         raise RuleFailure("Review targets the wrong subject")
+    review_intelligence = record_reference(
+        repo, state["task_id"], review.get("code_intelligence")
+    )
+    if review_intelligence and (
+        review_intelligence["stage"] != "REVIEW"
+        or review_intelligence["artifact_attempt"] != review["artifact_attempt"]
+        or review_intelligence["target"]["base_commit"]
+        != review["subject_base_commit"]
+        or review_intelligence["target"]["head_commit"]
+        != review["subject_head_commit"]
+        or review_intelligence["target"]["diff_hash"]
+        != review["subject_diff_hash"]
+    ):
+        raise RuleFailure("Review Code Intelligence record targets the wrong subject")
 
     attestation = review["isolation_attestation"]
     if attestation["mode"] != handoff["required_isolation"]:

@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.15。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
+> 当前版本：v0.1.16。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，不提供 `polaris` CLI、后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -13,7 +13,7 @@ Polaris 把项目仓库作为权威事实来源：
 - `.polaris/` 保存项目配置、任务位置注册表、冻结工作流、任务状态、Work Item、计划、Review、Validation 和事件账本。
 - 普通 Git 提交保存实际代码、测试和文档。
 
-这些目录的耐久内容都应提交 Git。不要把 `.polaris/` 整体当作缓存，也不要只提交代码而漏掉任务记录。唯一例外是每个任务下的 `.polaris/tasks/<TASK>/runtime/`：它保存当前电脑上的实时 Implementation 进度，默认忽略，不参与阶段门禁。
+这些目录的耐久内容都应提交 Git。不要把 `.polaris/` 整体当作缓存，也不要只提交代码而漏掉任务记录。唯一例外是每个任务下的 `.polaris/tasks/<TASK>/runtime/`：它保存当前电脑上的实时 Implementation 进度和 Code Intelligence 原始响应，默认忽略，不参与阶段门禁。
 
 Polaris 不保存以下瞬时状态：
 
@@ -34,6 +34,7 @@ Polaris 不保存以下瞬时状态：
 - 能够从目标仓库根目录打开所选宿主。
 
 Polaris v0.1 的运行时代码只使用 Python 标准库，不需要额外安装 Python 包。
+Code Intelligence 是可选能力；Polaris 不安装或运行 CodeGraph，也不要求项目配置 Provider。只有宿主当前暴露出某个 Descriptor 所需的 MCP 工具时，该 Provider 才会被自动选中。
 
 ## 3. 首次接入一个项目
 
@@ -173,13 +174,41 @@ Claude Code 应加载 `.claude/skills/engineering-task/SKILL.md`。R1/R2 Impleme
 
 `entry_skill` 必须对应 canonical `skills/<name>/SKILL.md`。Overlay 只能在已知 Skill 下增加 canonical 源中不存在的普通文件，不能提供 `SKILL.md`、覆盖任何同路径内容或包含未知 Skill；appendix 也只能使用 `<installed-skill>.md`。适配器源树、manifest、overlay、appendix、专用源文件和目标写入路径都禁止 symlink，所有目标必须留在仓库内。不同宿主不能声明重叠目标。若新宿主无法用 v2 的“文件复制 + Skill 渲染 + 能力声明 + 执行附录”表达，应先升级适配器契约，而不是在核心脚本里写例外。
 
+### 3.7 可选 Code Intelligence
+
+Polaris 默认按 `tools/polaris/providers/code-intelligence/*.json` 自动发现 Provider。首个 Descriptor 是 CodeGraph MCP Adapter；核心 artifact、Schema 和阶段 Skill 只使用 `Code Intelligence`、Provider ID 与逻辑能力名，不含 CodeGraph 专用字段。检测不到完整能力、工具缺失、查询超时、错误响应或刷新失败时，阶段立即记录 `UNAVAILABLE` 或 `FAILED`，并继续原有的源码搜索、读取、构建、测试和 Review 流程。
+
+`.polaris/code-intelligence.json` 不是启用开关；仅在需要禁用、指定 Provider 优先级或限制索引范围时创建。例如：
+
+```json
+{
+    "config_version": 1,
+    "mode": "auto_optional",
+    "provider_priority": [
+        "codegraph"
+    ],
+    "include": [
+        "src/**",
+        "tests/**"
+    ],
+    "exclude": [
+        "vendor/**",
+        "generated/**"
+    ]
+}
+```
+
+阶段策略固定如下：Planning 用依赖和影响面发现候选路径，但必须读取源码确认后才可加入 Working Set；Implementation 只在修改前有价值时查询 edit context，且仅当后续工作依赖刚改变的调用关系时中途刷新；Documentation Sync 在最终 subject checkpoint 后刷新，新增/修改文件走文件增量刷新，删除/重命名触发工作区刷新；Reviewer 独立查询，不继承 Implementer 的判断；Validation 不把代码图当作构建、测试或人工验收证据。
+
+精简记录保存在任务的 `code-intelligence/rNNN/*.json`，包含 Provider、阶段、目标 commit/diff、查询目的、符号/路径摘要、刷新文件哈希、响应哈希和结果状态。原始 MCP 响应只允许进入 ignored 的 `runtime/code-intelligence/`。刷新最多报告 `refresh_acknowledged` 或经独立抽查后的 `spot_checked`，不得声称索引与 Git commit 严格一致。
+
 ## 4. Polaris 仓库自举
 
 Polaris 源仓库也可以选择用 Polaris 管理，但自举不是默认状态。只有仓库中存在宿主 Skills、`tools/polaris/` 和 `.polaris/` 时，才表示当前源仓库已经完成自举。
 
 自举与普通目标项目的差别只有来源位置：
 
-- 开发 vendoring 工具本身时，共享源文件位于 `skills/`、`scripts/`、`schemas/`、`templates/` 和 `workflow/`，宿主差异位于 `hosts/<host-id>/`；`scripts/internal/task_layout.py` 是任务相对路径的唯一权威，平铺的 `templates/task-sources/` 只保存模板正文，`templates/task/` 是 `scripts/materialize_task_layout.py` 生成的样例投影，禁止手改；
+- 开发 vendoring 工具本身时，共享源文件位于 `skills/`、`providers/`、`scripts/`、`schemas/`、`templates/` 和 `workflow/`，宿主差异位于 `hosts/<host-id>/`；`scripts/internal/task_layout.py` 是任务相对路径的唯一权威，平铺的 `templates/task-sources/` 只保存模板正文，`templates/task/` 是 `scripts/materialize_task_layout.py` 生成的样例投影，禁止手改；
 - 执行本仓库任务时，使用所选宿主已锁定的 Skills 与 `tools/polaris/`；
 - 修改源实现后，需要按版本升级流程重新 vendoring，确认两份内容一致。
 
@@ -569,7 +598,7 @@ git diff -- .agents/skills .claude/skills .claude/agents tools/polaris
 python tools/polaris/scripts/validate_project.py --repo .
 ```
 
-确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议；v0.1.11 加固 Adapter v2；v0.1.12 统一版本门禁、迁移锁恢复和事务化 vendoring；v0.1.13 增加 Plan Human 决策登记、CD 绑定、交接包传播和可移动任务根；v0.1.14 增加跨平台文本哈希模式和旧清单换行兼容；v0.1.15 增加只读聚合 Doctor 与版本化 JSON 报告。Workflow 版本仍为 v0.1.2。
+确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议；v0.1.11 加固 Adapter v2；v0.1.12 统一版本门禁、迁移锁恢复和事务化 vendoring；v0.1.13 增加 Plan Human 决策登记、CD 绑定、交接包传播和可移动任务根；v0.1.14 增加跨平台文本哈希模式和旧清单换行兼容；v0.1.15 增加只读聚合 Doctor 与版本化 JSON 报告；v0.1.16 增加可选 Code Intelligence Provider、精简证据记录和非阻断刷新策略。Workflow 版本仍为 v0.1.2。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 

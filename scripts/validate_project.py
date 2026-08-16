@@ -14,6 +14,7 @@ from internal.host_adapters import (
     load_host_adapters,
 )
 from internal.install_manifest import validate_install_manifest
+from internal.code_intelligence_protocol import validate_static_configuration
 from internal.migration_protocol import validate_completed_migrations
 from internal.polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
 from internal.recovery_protocol import project_index_value
@@ -23,6 +24,7 @@ from validate_task import validate as validate_task
 
 def validate(repo: Path) -> dict[str, object]:
     root = protocol_root(repo)
+    validate_static_configuration(repo, root)
     polaris = repo / ".polaris"
     project = validate_json_file(
         polaris / "project.json", root / "schemas" / "project.schema.json"

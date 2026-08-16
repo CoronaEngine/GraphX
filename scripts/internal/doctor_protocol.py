@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .install_manifest import validate_install_manifest
+from .code_intelligence_protocol import validate_static_configuration
 from .migration_protocol import validate_completed_migrations
 from .polaris_core import (
     InputFailure,
@@ -190,6 +191,18 @@ def _migration_check(repo: Path, context: dict[str, Any]) -> DoctorOutcome:
     )
 
 
+def _code_intelligence_check(repo: Path, context: dict[str, Any]) -> DoctorOutcome:
+    result = validate_static_configuration(repo, context["root"])
+    return _outcome(
+        "PASS",
+        "optional Code Intelligence configuration is valid",
+        f"mode={result['mode']}",
+        f"configured={str(result['configured']).lower()}",
+        "providers=" + ",".join(result["providers"]),
+        "runtime MCP availability is checked by the Code Intelligence Skill",
+    )
+
+
 def _location_check(repo: Path, context: dict[str, Any]) -> DoctorOutcome:
     project = context["project"]
     locations = validate_task_locations(repo, project["active_tasks"])
@@ -306,6 +319,7 @@ def diagnose_project(repo: Path) -> dict[str, Any]:
             ("authority", "Project Authority"),
             ("install_manifest", "Vendored install"),
             ("migrations", "Migration records"),
+            ("code_intelligence", "Code Intelligence"),
             ("task_locations", "Task locations"),
             ("project_index", "Project recovery index"),
             ("project_validation", "Integrated project validation"),
@@ -334,6 +348,14 @@ def diagnose_project(repo: Path) -> dict[str, Any]:
                 "Migration records",
                 lambda: _migration_check(repo, context),
                 "Resume the matching migrate_project.py operation; do not edit migration events manually.",
+            )
+        )
+        checks.append(
+            _run_check(
+                "code_intelligence",
+                "Code Intelligence",
+                lambda: _code_intelligence_check(repo, context),
+                "Correct or remove .polaris/code-intelligence.json; provider installation is optional.",
             )
         )
         if "project" in context:

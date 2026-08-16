@@ -286,7 +286,7 @@ def _stage_install(
     tools_target.mkdir(parents=True)
     require_regular_file(source / "VERSION", "Polaris VERSION")
     shutil.copy2(source / "VERSION", tools_target / "VERSION")
-    for name in ("hosts", "scripts", "schemas", "skills", "templates", "workflow"):
+    for name in ("hosts", "providers", "scripts", "schemas", "skills", "templates", "workflow"):
         require_regular_tree(source / name, f"Polaris {name} source")
         shutil.copytree(source / name, tools_target / name, ignore=ignore_generated)
     materialize_template_tree(tools_target)

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Code Intelligence"
+  short_description: "Use optional indexed repository context"
+  default_prompt: "Use $code-intelligence only inside an active Polaris workflow to query or refresh an available Code Intelligence Provider without making it a gate."
+
+policy:
+  allow_implicit_invocation: false

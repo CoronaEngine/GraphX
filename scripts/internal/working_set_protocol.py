@@ -37,12 +37,18 @@ def validate_working_set_value(
     seen_paths: set[str] = set()
     for entry in value["entries"]:
         raw_path = entry["path"]
+        if not entry["reason"].strip() or not entry["discovered_from"].strip():
+            raise RuleFailure(
+                f"Working Set entry lacks a dependency reason or discovery source: {raw_path}"
+            )
         if raw_path in seen_paths:
             raise RuleFailure(f"Working Set contains duplicate path: {raw_path}")
         seen_paths.add(raw_path)
         if raw_path.startswith("<") and raw_path.endswith(">"):
             continue
-        resolve_repo_reference(repo, raw_path)
+        target = resolve_repo_reference(repo, raw_path)
+        if entry["discovered_from"].startswith("CIQ-") and not target.exists():
+            raise RuleFailure(f"Working Set path does not exist: {raw_path}")
     return value
 
 

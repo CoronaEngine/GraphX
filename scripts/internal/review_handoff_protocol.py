@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_protocol import load_registered, state_reference
+from .code_intelligence_protocol import record_reference
 from .polaris_core import (
     RuleFailure,
     current_work_item_path,
@@ -54,6 +55,13 @@ def validate_handoff(
         state,
         "implementation",
         "implementation.schema.json",
+    )
+    knowledge, _ = load_registered(
+        root,
+        directory,
+        state,
+        "knowledge_delta",
+        "knowledge-delta.schema.json",
     )
     subject = state.get("subject")
     if not isinstance(subject, dict):
@@ -154,6 +162,18 @@ def validate_handoff(
             repo, evidence_dir(directory, state["current_revision"])
         ),
     }
+    for artifact, role in (
+        (implementation, "implementation_code_intelligence"),
+        (knowledge, "documentation_code_intelligence"),
+    ):
+        reference = artifact.get("code_intelligence")
+        if reference is not None:
+            record_reference(repo, state["task_id"], reference)
+            expected_paths[role] = logical_repo_path(
+                repo, directory / reference["path"]
+            )
+        elif role in items_by_role:
+            raise RuleFailure(f"review handoff must not invent {role}")
     plan_decisions_reference = state_reference(
         directory, state, "plan_decisions", required=False
     )

@@ -24,6 +24,14 @@ from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
 from internal.artifact_protocol import normalized_reference  # noqa: E402
 from internal.doctor_protocol import diagnose_project  # noqa: E402
+from internal.code_intelligence_protocol import (  # noqa: E402
+    load_config,
+    plan_refresh,
+    record as record_code_intelligence,
+    select_provider,
+    validate_record_value,
+    validate_static_configuration,
+)
 from internal.host_adapters import (  # noqa: E402
     discover_skills,
     load_host_adapters,
@@ -977,7 +985,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn("plan_decisions", {entry["role"] for entry in package})
 
     def test_working_set_json_rejects_wrong_revision_and_unsafe_paths(self) -> None:
-        """Working Set 必须绑定当前 Revision，并拒绝逃逸仓库的结构化路径。"""
+        """Working Set 绑定 Revision，并拒绝越界、不存在或无理由的路径。"""
         self.freeze_work_item()
         transition(
             self.repo, "TASK-0001", "QUALIFY", [], None, None, None, None, None, None
@@ -1018,6 +1026,61 @@ class PolarisCoreTests(unittest.TestCase):
             }
         )
         write_json_atomic(path, unsafe)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PLAN",
+                [
+                    "plan=PLAN.md",
+                    "plan_decisions=plan-decisions.json",
+                    "working_set=working-set.json",
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        nonexistent = copy.deepcopy(valid)
+        nonexistent["entries"].append(
+            {
+                "section": "Code",
+                "path": "src/provider-guess.py",
+                "reason": "reported by Code Intelligence",
+                "discovered_from": "CIQ-001",
+            }
+        )
+        write_json_atomic(path, nonexistent)
+        with self.assertRaises(RuleFailure):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PLAN",
+                [
+                    "plan=PLAN.md",
+                    "plan_decisions=plan-decisions.json",
+                    "working_set=working-set.json",
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+        unjustified = copy.deepcopy(valid)
+        unjustified["entries"].append(
+            {
+                "section": "Code",
+                "path": "scripts",
+                "reason": "   ",
+                "discovered_from": "CIQ-001",
+            }
+        )
+        write_json_atomic(path, unjustified)
         with self.assertRaises(RuleFailure):
             transition(
                 self.repo,
@@ -1193,6 +1256,7 @@ class PolarisCoreTests(unittest.TestCase):
             "new_revision.py",
             "rebuild_state.py",
             "record_exploration.py",
+            "record_code_intelligence.py",
             "record_plan_decision.py",
             "refresh_project_index.py",
             "transition_task.py",
@@ -1218,25 +1282,25 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.14")
+        self.set_protocol_version("0.1.15")
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.14")
-        self.assertEqual(result["to"], "0.1.15")
+        self.assertEqual(result["from"], "0.1.15")
+        self.assertEqual(result["to"], "0.1.16")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.14")
+        self.assertEqual(events[0]["polaris_version"], "0.1.15")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.15")
+        self.assertEqual(events[1]["polaris_version"], "0.1.16")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.14-to-0.1.15.json"
+            / "MIG-0.1.15-to-0.1.16.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -1248,15 +1312,15 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.14")
+        self.set_protocol_version("0.1.15")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
             "record_version": 1,
-            "migration_id": "0.1.14-to-0.1.15",
-            "from_polaris_version": "0.1.14",
-            "to_polaris_version": "0.1.15",
+            "migration_id": "0.1.15-to-0.1.16",
+            "from_polaris_version": "0.1.15",
+            "to_polaris_version": "0.1.16",
             "from_workflow_version": "0.1.2",
             "to_workflow_version": "0.1.2",
             "status": "IN_PROGRESS",
@@ -1274,7 +1338,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.14-to-0.1.15.json",
+            / "MIG-0.1.15-to-0.1.16.json",
             record,
         )
         append_jsonl(
@@ -1287,7 +1351,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.15",
+                "polaris_version": "0.1.16",
                 "workflow_version": "0.1.2",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
@@ -1295,7 +1359,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.14-to-0.1.15",
+                "migration_id": "0.1.15-to-0.1.16",
             },
         )
 
@@ -1307,7 +1371,7 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
-        self.set_protocol_version("0.1.14")
+        self.set_protocol_version("0.1.15")
         vendor(ROOT, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
@@ -1315,7 +1379,7 @@ class PolarisCoreTests(unittest.TestCase):
             {
                 "lock_version": 1,
                 "kind": "polaris_migration",
-                "migration_id": "0.1.14-to-0.1.15",
+                "migration_id": "0.1.15-to-0.1.16",
                 "task_id": "TASK-0001",
                 "hostname": socket.gethostname(),
                 "pid": 2147483647,
@@ -1360,6 +1424,149 @@ class PolarisCoreTests(unittest.TestCase):
             "0.1.10",
         )
 
+    def test_code_intelligence_auto_detects_available_operations_and_can_be_disabled(self) -> None:
+        """可选代码情报按 MCP 工具能力发现；缺失或禁用时不产生硬依赖。"""
+        selected = select_provider(
+            self.repo,
+            ["codegraph_symbol_search", "codegraph_analyze_impact"],
+            ROOT,
+        )
+        self.assertEqual(selected["provider_id"], "codegraph")
+        self.assertEqual(
+            selected["operations"],
+            {
+                "symbol_search": "codegraph_symbol_search",
+                "impact": "codegraph_analyze_impact",
+            },
+        )
+        self.assertIsNone(select_provider(self.repo, [], ROOT))
+
+        config = load_config(self.repo, ROOT)
+        config["mode"] = "disabled"
+        write_json_atomic(self.repo / ".polaris" / "code-intelligence.json", config)
+        self.assertIsNone(
+            select_provider(self.repo, ["codegraph_symbol_search"], ROOT)
+        )
+        self.assertEqual(
+            validate_static_configuration(self.repo, ROOT)["mode"], "disabled"
+        )
+
+    def test_code_intelligence_record_is_compact_safe_and_immutable(self) -> None:
+        """精简记录绑定任务与提交，拒绝越界符号路径并且写入后不可覆盖。"""
+        base = run_git(self.repo, "rev-parse", "HEAD")
+        value = read_json(
+            ROOT / "templates" / "task-sources" / "code-intelligence-record.json"
+        )
+        value["target"]["base_commit"] = base
+        result = record_code_intelligence(
+            self.repo, "TASK-0001", value, ROOT
+        )
+        self.assertEqual(result["status"], "UNAVAILABLE")
+        self.assertTrue(Path(result["path"]).is_file())
+        with self.assertRaises(InputFailure):
+            record_code_intelligence(self.repo, "TASK-0001", value, ROOT)
+
+        invalid = copy.deepcopy(value)
+        invalid["status"] = "USED"
+        invalid["provider"] = {
+            "id": "codegraph",
+            "descriptor_version": 1,
+            "transport": "mcp",
+            "available_operations": ["symbol_search"],
+        }
+        invalid["queries"] = [
+            {
+                "id": "CIQ-001",
+                "operation": "symbol_search",
+                "purpose": "find an affected symbol",
+                "status": "SUCCESS",
+                "summary": "one external result",
+                "symbols": [
+                    {"path": "../outside.cpp", "line": 1, "name": "outside"}
+                ],
+                "response_sha256": "0" * 64,
+                "error": None,
+            }
+        ]
+        with self.assertRaises(RuleFailure):
+            validate_record_value(self.repo, "TASK-0001", invalid, ROOT)
+
+        failed = copy.deepcopy(invalid)
+        failed["provider"]["available_operations"] = [
+            "symbol_search",
+            "refresh_files",
+        ]
+        failed.update(
+            {
+                "stage": "IMPLEMENTATION",
+                "artifact_attempt": 1,
+                "status": "FAILED",
+                "queries": [
+                    {
+                        "id": "CIQ-001",
+                        "operation": "symbol_search",
+                        "purpose": "find an affected symbol",
+                        "status": "FAILED",
+                        "summary": "",
+                        "symbols": [],
+                        "response_sha256": None,
+                        "error": "provider timeout",
+                    }
+                ],
+                "refresh": {
+                    "operation": "refresh_files",
+                    "paths": [],
+                    "status": "FAILED",
+                    "freshness": "not_verified",
+                    "response_sha256": None,
+                    "error": "refresh timeout",
+                },
+            }
+        )
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", failed, ROOT)["status"],
+            "FAILED",
+        )
+
+        raw = self.task / "runtime" / "code-intelligence" / "response.json"
+        raw.parent.mkdir(parents=True)
+        raw.write_text("{}\n", encoding="utf-8")
+        ignored = run_git(self.repo, "check-ignore", raw.relative_to(self.repo).as_posix())
+        self.assertEqual(ignored, raw.relative_to(self.repo).as_posix())
+
+    def test_code_intelligence_refresh_uses_file_or_workspace_operations(self) -> None:
+        """新增修改走文件刷新，删除重命名走工作区刷新，无代码变化则跳过。"""
+        base = run_git(self.repo, "rev-parse", "HEAD")
+        source = self.repo / "src" / "sample.cpp"
+        source.parent.mkdir()
+        source.write_text("int sample() { return 1; }\n", encoding="utf-8")
+        run_git(self.repo, "add", "src/sample.cpp")
+        run_git(self.repo, "commit", "-q", "-m", "add source")
+        added = run_git(self.repo, "rev-parse", "HEAD")
+
+        incremental = plan_refresh(self.repo, base, added, "codegraph", ROOT)
+        self.assertEqual(incremental["operation"], "refresh_files")
+        self.assertEqual(incremental["status"], "PENDING")
+        self.assertEqual(incremental["paths"][0]["change"], "ADDED")
+        self.assertEqual(
+            incremental["paths"][0]["sha256"], file_sha256(source)
+        )
+
+        run_git(self.repo, "mv", "src/sample.cpp", "src/renamed.cpp")
+        run_git(self.repo, "commit", "-q", "-m", "rename source")
+        renamed = run_git(self.repo, "rev-parse", "HEAD")
+        workspace = plan_refresh(self.repo, added, renamed, "codegraph", ROOT)
+        self.assertEqual(workspace["operation"], "refresh_workspace")
+        self.assertEqual(workspace["paths"][0]["change"], "RENAMED")
+
+        (self.repo / "NOTES.md").write_text("notes\n", encoding="utf-8")
+        run_git(self.repo, "add", "NOTES.md")
+        run_git(self.repo, "commit", "-q", "-m", "add notes")
+        docs = run_git(self.repo, "rev-parse", "HEAD")
+        skipped = plan_refresh(self.repo, renamed, docs, "codegraph", ROOT)
+        self.assertEqual(skipped["status"], "SKIPPED")
+        self.assertEqual(skipped["paths"], [])
+
     def test_risk_flag_requires_r2(self) -> None:
         """任一高风险标记为 true 时，非 R2 Work Item 会被机械拒绝。"""
         path = self.task / "revisions" / "work-item-r001.json"
@@ -1380,6 +1587,16 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertTrue((self.repo / "tools" / "polaris" / "VERSION").is_file())
         self.assertTrue(
             (self.repo / "tools" / "polaris" / "hosts" / "codex" / "adapter.json").is_file()
+        )
+        self.assertTrue(
+            (
+                self.repo
+                / "tools"
+                / "polaris"
+                / "providers"
+                / "code-intelligence"
+                / "codegraph.json"
+            ).is_file()
         )
         result = validate_project(self.repo)
         self.assertEqual(result["active_tasks"], 1)
@@ -2166,6 +2383,7 @@ class PolarisCoreTests(unittest.TestCase):
             "documentation-sync": [],
             "adversarial-review": [],
             "validation": ["VALIDATION_PASS", "VALIDATION_FAIL"],
+            "code-intelligence": [],
         }
         contract_fields = [
             "`Task`",
@@ -3018,8 +3236,32 @@ class PolarisCoreTests(unittest.TestCase):
         head = run_git(self.repo, "rev-parse", "HEAD")
         diff_hash = subject_diff_hash(self.repo, base, head)
 
+        implementation_intelligence = read_json(
+            ROOT / "templates" / "task-sources" / "code-intelligence-record.json"
+        )
+        implementation_intelligence.update(
+            {
+                "stage": "IMPLEMENTATION",
+                "artifact_attempt": 1,
+                "target": {
+                    "base_commit": base,
+                    "head_commit": head,
+                    "diff_hash": diff_hash,
+                },
+            }
+        )
+        implementation_intelligence_result = record_code_intelligence(
+            self.repo, "TASK-0001", implementation_intelligence, ROOT
+        )
+        implementation_intelligence_path = Path(
+            implementation_intelligence_result["path"]
+        )
         implementation_path = self.task / "implementations" / "r001" / "attempt-001.json"
         implementation = self.implementation_value(base, head, "impl-session")
+        implementation["code_intelligence"] = {
+            "path": implementation_intelligence_path.relative_to(self.task).as_posix(),
+            "sha256": file_sha256(implementation_intelligence_path),
+        }
         write_json_atomic(implementation_path, implementation)
         transition(
             self.repo,
@@ -3040,8 +3282,33 @@ class PolarisCoreTests(unittest.TestCase):
         run_git(self.repo, "add", "docs/subject.md")
         run_git(self.repo, "commit", "-q", "-m", "sync subject documentation")
         final_head = run_git(self.repo, "rev-parse", "HEAD")
+        final_diff_hash = subject_diff_hash(self.repo, base, final_head)
+        documentation_intelligence = read_json(
+            ROOT / "templates" / "task-sources" / "code-intelligence-record.json"
+        )
+        documentation_intelligence.update(
+            {
+                "stage": "DOCUMENTATION_SYNC",
+                "artifact_attempt": 1,
+                "target": {
+                    "base_commit": base,
+                    "head_commit": final_head,
+                    "diff_hash": final_diff_hash,
+                },
+            }
+        )
+        documentation_intelligence_result = record_code_intelligence(
+            self.repo, "TASK-0001", documentation_intelligence, ROOT
+        )
+        documentation_intelligence_path = Path(
+            documentation_intelligence_result["path"]
+        )
         knowledge_path = self.task / "knowledge" / "r001" / "knowledge-delta-001.json"
         knowledge = self.knowledge_value(1, base, final_head)
+        knowledge["code_intelligence"] = {
+            "path": documentation_intelligence_path.relative_to(self.task).as_posix(),
+            "sha256": file_sha256(documentation_intelligence_path),
+        }
         knowledge["entries"][0].update(
             {
                 "status": "UPDATE",
@@ -3104,17 +3371,23 @@ class PolarisCoreTests(unittest.TestCase):
             transition(
                 self.repo, "TASK-0001", "CLOSE", [], None, None, None, None, None, None
             )
+        review_handoff_result = build_review_handoff(
+            self.repo, "TASK-0001", "impl-session", "fresh_session"
+        )
+        review_handoff = read_json(Path(review_handoff_result["path"]))
+        self.assertTrue(
+            {
+                "implementation_code_intelligence",
+                "documentation_code_intelligence",
+            }.issubset({item["role"] for item in review_handoff["package"]})
+        )
         transition(
             self.repo,
             "TASK-0001",
             "START_REVIEW",
             [
                 "review_handoff="
-                + Path(
-                    build_review_handoff(
-                        self.repo, "TASK-0001", "impl-session", "fresh_session"
-                    )["path"]
-                ).relative_to(self.task).as_posix()
+                + Path(review_handoff_result["path"]).relative_to(self.task).as_posix()
             ],
             None,
             None,

@@ -6,7 +6,7 @@ description: Internal Polaris stage for an explicitly started `{{skill:engineeri
 # Validation
 
 1. Confirm the accepted Review matches the current Work Item revision, subject commits, and subject diff hash.
-2. Execute the evidence method for every acceptance criterion without weakening it.
+2. Execute the evidence method for every acceptance criterion without weakening it. Do not invoke Code Intelligence during Validation or use provider observations as acceptance evidence; rely on source, Git, builds, tests, static checks, and Human Checks.
 3. Record command/check, working directory, environment summary, start time, exit code, result, and output path or hash.
 4. Mark the overall verdict PASS only when every acceptance criterion passes.
 5. Write a new immutable Validation JSON attempt. Do not create a duplicate Markdown artifact.

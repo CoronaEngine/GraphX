@@ -94,6 +94,15 @@
             "items": {
                 "type": "object"
             }
+        },
+        "code_intelligence": {
+            "type": ["object", "null"],
+            "required": ["path", "sha256"],
+            "additionalProperties": false,
+            "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
         }
     }
 }

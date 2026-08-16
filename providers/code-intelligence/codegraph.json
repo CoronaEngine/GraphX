@@ -1,0 +1,42 @@
+{
+    "provider_version": 1,
+    "provider_id": "codegraph",
+    "display_name": "CodeGraph",
+    "transport": "mcp",
+    "file_extensions": [
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cxx",
+        ".h",
+        ".hh",
+        ".hpp",
+        ".hxx",
+        ".m",
+        ".mm",
+        ".py",
+        ".rs",
+        ".go",
+        ".java",
+        ".kt",
+        ".kts",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".cs",
+        ".swift",
+        ".rb",
+        ".php"
+    ],
+    "operations": {
+        "symbol_search": "codegraph_symbol_search",
+        "context": "codegraph_get_ai_context",
+        "dependencies": "codegraph_get_dependency_graph",
+        "call_graph": "codegraph_get_call_graph",
+        "impact": "codegraph_analyze_impact",
+        "review_context": "codegraph_pr_context",
+        "refresh_files": "codegraph_index_files",
+        "refresh_workspace": "codegraph_reindex_workspace"
+    }
+}

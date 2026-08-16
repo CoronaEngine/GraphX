@@ -24,6 +24,7 @@ from internal.polaris_core import (
     write_json_atomic,
 )
 from internal.artifact_protocol import normalized_reference
+from internal.code_intelligence_protocol import record_reference
 from internal.task_location_protocol import logical_repo_path, resolve_repo_reference
 from internal.review_protocol import MAX_REVIEW_ATTEMPTS
 from internal.task_layout import evidence_dir, review_handoff_path, state_path
@@ -64,6 +65,20 @@ def _artifact_entry(
         raise RuleFailure(f"review handoff requires artifact: {name}")
     normalized = normalized_reference(directory, reference)
     return _entry(repo, role, directory / normalized["path"])
+
+
+def _code_intelligence_entry(
+    repo: Path,
+    directory: Path,
+    task_id: str,
+    artifact: dict[str, Any],
+    role: str,
+) -> dict[str, Any] | None:
+    reference = artifact.get("code_intelligence")
+    if reference is None:
+        return None
+    record_reference(repo, task_id, reference)
+    return _entry(repo, role, directory / reference["path"])
 
 
 def build(
@@ -138,6 +153,23 @@ def build(
         _artifact_entry(repo, directory, state, "knowledge_delta", "knowledge_delta"),
         _entry(repo, "evidence", evidence_dir(directory, revision)),
     ]
+    implementation_intelligence = _code_intelligence_entry(
+        repo, directory, task_id, implementation, "implementation_code_intelligence"
+    )
+    knowledge = validate_json_file(
+        directory / normalized_reference(
+            directory, state["artifacts"]["knowledge_delta"]
+        )["path"],
+        root / "schemas" / "knowledge-delta.schema.json",
+    )
+    documentation_intelligence = _code_intelligence_entry(
+        repo, directory, task_id, knowledge, "documentation_code_intelligence"
+    )
+    package.extend(
+        item
+        for item in (implementation_intelligence, documentation_intelligence)
+        if item is not None
+    )
     if state["artifacts"].get("plan_decisions") is not None:
         package.append(
             _artifact_entry(

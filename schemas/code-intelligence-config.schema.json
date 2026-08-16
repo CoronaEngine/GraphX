@@ -1,0 +1,49 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris Code Intelligence project configuration",
+    "type": "object",
+    "required": [
+        "config_version",
+        "mode",
+        "provider_priority",
+        "include",
+        "exclude"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "config_version": {
+            "const": 1
+        },
+        "mode": {
+            "type": "string",
+            "enum": [
+                "auto_optional",
+                "disabled"
+            ]
+        },
+        "provider_priority": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+            }
+        },
+        "include": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+                "type": "string",
+                "minLength": 1
+            }
+        },
+        "exclude": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+                "type": "string",
+                "minLength": 1
+            }
+        }
+    }
+}

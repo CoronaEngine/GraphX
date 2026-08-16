@@ -5,7 +5,7 @@
 > 产品形态：Repo-native Skill System
 > 宿主 Runtime：声明式可扩展；v0.1 内置 Codex、Claude Code
 >
-> **已确认的 MVP 决策：v0.1 不实现 CLI，也不提供 shell wrapper。Polaris Skills、版本化声明式宿主适配器、辅助脚本、Schema、模板和默认 Workflow 全部 vendoring 到目标仓库；所有入口由仓库内 Skills 和 Python 脚本提供。所有宿主共享同一套仓库 Authority 和机械协议。**
+> **已确认的 MVP 决策：v0.1 不实现 CLI，也不提供 shell wrapper。Polaris Skills、版本化声明式宿主适配器、可选 Provider Descriptor、辅助脚本、Schema、模板和默认 Workflow 全部 vendoring 到目标仓库；所有入口由仓库内 Skills 和 Python 脚本提供。所有宿主共享同一套仓库 Authority 和机械协议。**
 
 ## 1. 目标与定位
 
@@ -49,6 +49,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - Work Item 修订、任务状态、事件账本、工作集、Review、Validation、Result。
 - 项目初始化、任务初始化、状态转换、结构校验、文档影响检查、工作集生成脚本。
 - 只读聚合 Doctor；复用现有 Validator，一次输出环境、协议、Authority、任务与操作残留的证据和人工动作。
+- 可选 Code Intelligence Provider 协议；自动发现、按阶段查询/刷新、保存精简证据，并在任何不可用或失败时非阻断降级。
 - 独立 Implementer worker、不可变 Implementation handoff 与事件驱动实时进度快照。
 - 验收标准绑定的线性 `implementation_steps`；步骤只能依次推进或在末尾追加，最终结果冻结进 Implementation artifact。
 - 独立 worker context 的对抗审查协议。
@@ -62,7 +63,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - daemon、watchdog、scheduler、队列或后台服务
 - Dashboard、TUI、IDE 或独立 App
 - 自定义 Agent Runtime、模型适配层或进程生命周期管理
-- 数据库、向量库、知识图谱服务或事件服务
+- 数据库、向量库、由 Polaris 运行的知识图谱服务或事件服务；外部 MCP Code Intelligence Provider 仅作为可选线索源
 - 通用自动多任务调度、跨项目管理、实时进度百分比；当前 TASK 内由宿主创建必要的独立 Implementer / Review 任务不属于通用调度
 - Task DAG、任务归档和跨任务依赖调度
 - 通用领域 Skill 市场
@@ -132,7 +133,10 @@ polaris/
 │   ├── implementation/SKILL.md
 │   ├── adversarial-review/SKILL.md
 │   ├── validation/SKILL.md
-│   └── documentation-sync/SKILL.md
+│   ├── documentation-sync/SKILL.md
+│   └── code-intelligence/SKILL.md      # 仅由阶段 Skill 内部调用
+├── providers/
+│   └── code-intelligence/codegraph.json
 ├── templates/
 │   ├── AGENTS.md                  # 共享规则
 │   ├── project-index.json
@@ -296,6 +300,7 @@ JSON 文件是机械门禁的权威输入。结构化 artifact 不生成同名 M
 | `adversarial-review` | 在独立会话审查 spec compliance 与 engineering quality；管理 finding 生命周期 | 不接受作者自证；不依赖原实现会话的隐式上下文 |
 | `validation` | 把 acceptance criterion 映射到可复现证据；运行规定验证；产出 verdict 输入 | 不弱化验收条件，不用主观总结代替命令结果 |
 | `documentation-sync` | 在同一 Implementer 任务中继续分析知识 delta、更新文档并写 Knowledge Delta | 不执行状态转换，不自动把未确认推断升级为权威知识 |
+| `code-intelligence` | 内部可选能力；发现 Provider，执行符号/依赖/影响查询，记录精简结果并按规则刷新 | 不作为用户入口，不扩展 scope，不替代源码、构建、测试、Review 或门禁 |
 
 Skill 描述应按触发边界编写，而不是做技术能力菜单。用户仅通过适配器渲染后的 `engineering-task` 入口进入 Polaris（当前 Codex 为 `$engineering-task`，Claude Code 为 `/engineering-task`），阶段 Skills 只由已启动的工作流在合法节点分派，R1/R2 Reviewer 只从已注册 handoff 调用。宿主专用 metadata/frontmatter 固化显式触发边界；普通工程请求不进入 Polaris。共享 Skill 与每个适配器的渲染结果都使用 fixture 做回归测试。
 
@@ -477,6 +482,17 @@ AGENTS.md
 - 文档负责导航、约束和原因；代码、测试、构建结果负责当前事实。冲突时登记 `documentation_stale`，不得静默选边。
 - 工作集是可替换缓存，不是长期知识库；可在任务推进中增删，所有持久结论回写项目文档、Decision 或 Exploration。
 
+### 可选 Code Intelligence 协议
+
+- Provider 由 `providers/code-intelligence/*.json` 声明 MCP Transport、文件扩展名和逻辑操作到工具名的映射；CodeGraph 是首个 Adapter，但核心 Schema、Artifact 和 Skill 不使用 CodeGraph 专用字段。
+- 默认无需配置即可按当前宿主实际暴露的 MCP 工具自动发现 Provider；`.polaris/code-intelligence.json` 只覆盖模式、优先级、include 和 exclude。
+- Planning 的查询结果必须经源码确认才可进入 Working Set；不存在、越界或没有依赖理由的路径一律拒绝。
+- Implementation 仅在查询能改变编辑决策时使用；中途刷新只发生在后续工作依赖刚修改的调用关系时。
+- Documentation Sync 在最终 subject checkpoint 后规划刷新：新增/修改文件使用增量刷新，删除/重命名使用工作区刷新，无相关代码变化则跳过。
+- Reviewer 必须独立查询影响面和 Review context；Validation 不调用代码图替代构建、测试或 Human Check。
+- 不可用、能力缺失、超时、错误响应与刷新失败都写为降级状态，并立即继续既有流程，永远不构成 Workflow blocker。
+- Git 中只保存绑定 Provider、阶段、subject、目的、符号/路径摘要、文件哈希与响应哈希的精简 Record；原始响应只进入 ignored runtime。索引新鲜度只能记为 `refresh_acknowledged`、`spot_checked` 或 `not_verified`，不能宣称与 Git commit 严格一致。
+
 ## 9. 确定性脚本
 
 全部使用 Python 标准库；无安装器、无共享服务。所有脚本必须使用跨平台的路径、编码、换行、原子写入、锁和进程能力实现，禁止把 Bash、PowerShell 或某一文件系统的行为当作共同前提；必须为平台差异增加机械测试。权威产物采用 JSON，Validator 实现 Polaris v0.1 明确定义的有限 Schema 子集，只支持 `required / type / enum / const / pattern / minimum / minLength / properties / items / minItems / uniqueItems / additionalProperties` 等实际使用能力，不宣称兼容完整 JSON Schema 标准，也不解析 YAML 或任意 Markdown。统一退出码：`0=PASS/非阻断 WARN`、`1=规则失败`、`2=输入/系统错误`，并支持 `--json` 输出。
@@ -493,6 +509,7 @@ AGENTS.md
 | `materialize_task_layout.py` | 从 `internal/task_layout.py` 生成模板样例树和真实任务目录，并校验生成物与平铺模板正文一致 |
 | `update_implementation_progress.py` | 通过明确事件原子更新 ignored 的线性步骤进度；拒绝 session 接管、跳步、回退、未知验收 ID 和非法 blocker |
 | `doctor_project.py` | 只读聚合环境、协议、Authority、清单、迁移、索引、任务与操作残留诊断，输出版本化报告、证据和人工动作 |
+| `record_code_intelligence.py` | 发现可用 Provider、规划增量/工作区刷新并写入不可变的精简 Code Intelligence Record |
 | `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
 | `transition_task.py` | 获取任务锁，校验合法边与 gate，追加带 sequence 的事件，再原子替换 `state.json` |
@@ -608,7 +625,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 ### M1 — Repo skeleton 与 Skills（第 3–5 天）
 
-- [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和七个 Skill
+- [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和八个 Skill
 - [x] 建立版本化 `hosts/*/adapter.json` 契约，从宿主无关 Skills 生成 Codex/Claude Code 目录与 worker 文件，并将适配器、脚本、Schema、模板和 Workflow vendoring 到 `tools/polaris/`
 - [x] 将 Adapter 升级到 v2，校验真实入口、overlay 新增边界、symlink confinement 与宿主能力依赖
 - [x] 用安装清单登记 vendored 文件归属、跨平台文本哈希/严格字节哈希，并以预生成、备份、回滚和崩溃恢复事务执行强制升级
@@ -625,6 +642,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 - [x] 实现 init、revision、validate、transition、state rebuild、docs check
 - [x] 实现只读聚合 Doctor、版本化诊断报告与多故障/无写入测试
+- [x] 实现可选 Code Intelligence Provider、CodeGraph MCP Adapter、阶段降级/刷新策略、精简记录与测试
 - [x] 所有工作流状态转换经 `transition_task.py`
 - [x] `QUALIFY` 机械拒绝空白或 `TODO` 的验收描述与证据
 - [x] 单元测试覆盖第 9 节失败场景

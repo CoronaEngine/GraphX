@@ -98,6 +98,14 @@ def build(
     )
 
     _add(entries, "Documents", "AGENTS.md", "project rules", "recovery bootstrap")
+    if (repo / ".polaris" / "code-intelligence.json").is_file():
+        _add(
+            entries,
+            "Documents",
+            ".polaris/code-intelligence.json",
+            "optional Code Intelligence project policy",
+            "project configuration",
+        )
     _add(
         entries,
         "Documents",

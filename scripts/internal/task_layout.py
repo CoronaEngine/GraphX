@@ -12,6 +12,9 @@ TASK_PATH_PATTERNS = {
     "plan_decisions": "plan-decisions.json",
     "working_set": "working-set.json",
     "progress": "runtime/progress.json",
+    "code_intelligence_runtime": "runtime/code-intelligence",
+    "code_intelligence_revision": "code-intelligence/r{revision:03d}",
+    "code_intelligence_record": "code-intelligence/r{revision:03d}/{record_name}.json",
     "work_item": "revisions/work-item-r{revision:03d}.json",
     "implementation_revision": "implementations/r{revision:03d}",
     "implementation_handoff": (
@@ -44,6 +47,7 @@ def task_relative_path(
     attempt: int = 1,
     reviewer: int = 1,
     exploration_id: str = "EXP-0001",
+    record_name: str = "planning",
 ) -> Path:
     pattern = TASK_PATH_PATTERNS[artifact]
     reviewer_suffix = "" if reviewer == 1 else f"-{reviewer}"
@@ -53,6 +57,7 @@ def task_relative_path(
             attempt=attempt,
             reviewer_suffix=reviewer_suffix,
             exploration_id=exploration_id,
+            record_name=record_name,
         )
     )
 
@@ -71,6 +76,9 @@ TEMPLATE_SAMPLE_PATHS = {
     "plan_decisions": task_relative_path("plan_decisions"),
     "working_set": task_relative_path("working_set"),
     "progress": task_relative_path("progress"),
+    "code_intelligence_record": task_relative_path(
+        "code_intelligence_record", record_name="planning"
+    ),
     "work_item": task_relative_path("work_item"),
     "implementation_handoff": task_relative_path("implementation_handoff"),
     "implementation": task_relative_path("implementation"),
@@ -88,6 +96,7 @@ TEMPLATE_SOURCE_PATHS = {
     "plan_decisions": Path("plan-decisions.json"),
     "working_set": Path("working-set.json"),
     "progress": Path("implementation-progress.json"),
+    "code_intelligence_record": Path("code-intelligence-record.json"),
     "work_item": Path("work-item.json"),
     "implementation_handoff": Path("implementation-handoff.json"),
     "implementation": Path("implementation.json"),
@@ -144,6 +153,24 @@ def progress_relative_path() -> Path:
 
 def progress_path(directory: Path) -> Path:
     return directory / progress_relative_path()
+
+
+def code_intelligence_runtime_dir(directory: Path) -> Path:
+    return directory / task_relative_path("code_intelligence_runtime")
+
+
+def code_intelligence_revision_dir(directory: Path, revision: int) -> Path:
+    return directory / task_relative_path(
+        "code_intelligence_revision", revision=revision
+    )
+
+
+def code_intelligence_record_path(
+    directory: Path, revision: int, record_name: str
+) -> Path:
+    return directory / task_relative_path(
+        "code_intelligence_record", revision=revision, record_name=record_name
+    )
 
 
 def work_item_relative_path(revision: int) -> Path:
@@ -247,6 +274,7 @@ def revision_directories(directory: Path, revision: int) -> tuple[Path, ...]:
         validation_revision_dir(directory, revision),
         result_revision_dir(directory, revision),
         evidence_dir(directory, revision),
+        code_intelligence_revision_dir(directory, revision),
         explorations_dir(directory),
     )
 
