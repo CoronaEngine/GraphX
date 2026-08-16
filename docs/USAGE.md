@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.17。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
+> 当前版本：v0.1.18。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -181,7 +181,17 @@ Claude Code 应加载 `.claude/skills/engineering-task/SKILL.md`。R1/R2 Impleme
 
 Polaris 默认按 `tools/polaris/providers/code-intelligence/*.json` 自动发现 Provider。首个 Descriptor 是 CodeGraph MCP Adapter；核心 artifact、Schema 和阶段 Skill 只使用 `Code Intelligence`、Provider ID 与逻辑能力名，不含 CodeGraph 专用字段。检测不到完整能力、工具缺失、查询超时、错误响应或刷新失败时，阶段立即记录 `UNAVAILABLE` 或 `FAILED`，并继续原有的源码搜索、读取、构建、测试和 Review 流程。
 
-`.polaris/code-intelligence.json` 不是启用开关；仅在需要禁用、指定 Provider 优先级或限制索引范围时创建。例如：
+已经按 CodeGraph 自身方式完成仓库索引和宿主 MCP 配置后，在 Polaris 项目中运行：
+
+```powershell
+polaris code-intelligence add codegraph --repo .
+```
+
+该命令会创建或更新 `.polaris/code-intelligence.json`，将模式设为 `auto_optional`、将 CodeGraph 放到 Provider 优先级首位，并保留已有 `include` / `exclude` 规则。命令可幂等重跑，未知 Provider 或非法旧配置会在写入前拒绝。
+
+Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工具，因此成功只表示 Provider 已加入 Polaris；返回的 `runtime_status` 为 `checked_by_next_workflow`。下一次 Polaris Workflow 会检查实际工具能力，不可用时仍非阻断降级。
+
+不执行该命令时仍保留默认自动发现。`.polaris/code-intelligence.json` 也可用于禁用 Provider、调整优先级或限制索引范围。例如：
 
 ```json
 {
@@ -607,6 +617,8 @@ polaris validate-project --repo .
 确认差异后，把宿主 Skills/agents、`tools/polaris/`、安装清单以及 `.polaris/` 迁移记录/事件放在同一个升级提交中。已初始化项目的 `.polaris/workflow.json` 是冻结工作流；不要因为 vendoring 升级就手工覆盖它。v0.1.2 新增 `DISPATCH_IMPLEMENTATION`；v0.1.3 使用结构化恢复索引；v0.1.4 使用线性 `implementation_steps`；v0.1.5 镜像任务模板目录；v0.1.6 集中任务路径；v0.1.7 引入声明式宿主适配器；v0.1.8 补齐有限 Schema 子集；v0.1.9 引入安装清单；v0.1.10 引入显式相邻迁移协议；v0.1.11 加固 Adapter v2；v0.1.12 统一版本门禁、迁移锁恢复和事务化 vendoring；v0.1.13 增加 Plan Human 决策登记、CD 绑定、交接包传播和可移动任务根；v0.1.14 增加跨平台文本哈希模式和旧清单换行兼容；v0.1.15 增加只读聚合 Doctor 与版本化 JSON 报告；v0.1.16 增加可选 Code Intelligence Provider、精简证据记录和非阻断刷新策略；v0.1.17 增加无运行时第三方依赖的薄 `polaris` CLI。Workflow 版本仍为 v0.1.2。
 
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
+
+v0.1.18 增加 `polaris code-intelligence add <provider>`，用于把已配置 Provider 显式加入 Polaris 流程；Workflow 版本仍为 v0.1.2。
 
 ## 13. 失败探索与卡点
 

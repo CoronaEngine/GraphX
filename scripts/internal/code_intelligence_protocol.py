@@ -146,6 +146,55 @@ def validate_static_configuration(repo: Path, root: Path | None = None) -> dict[
     }
 
 
+def add_provider(
+    repo: Path, provider_id: str, root: Path | None = None
+) -> dict[str, Any]:
+    """Enable and prioritize one installed Provider without probing its runtime."""
+    root = protocol_root(repo) if root is None else root
+    validate_static_configuration(repo, root)
+    providers = load_providers(root)
+    if provider_id not in providers:
+        raise InputFailure(
+            f"unknown Code Intelligence provider: {provider_id}; "
+            f"available providers: {', '.join(sorted(providers))}"
+        )
+    config = load_config(repo, root)
+    priority = [
+        provider_id,
+        *(item for item in config["provider_priority"] if item != provider_id),
+    ]
+    changed = config["mode"] != "auto_optional" or priority != config["provider_priority"]
+    config["mode"] = "auto_optional"
+    config["provider_priority"] = priority
+    errors = validate_schema(
+        config, read_json(root / "schemas" / "code-intelligence-config.schema.json")
+    )
+    if errors:
+        raise RuleFailure(
+            "Code Intelligence configuration failed schema validation:\n- "
+            + "\n- ".join(errors)
+        )
+    destination = repo / CONFIG_PATH
+    if not destination.is_file():
+        changed = True
+    if changed:
+        write_json_atomic(destination, config)
+    return {
+        "message": (
+            f"added {providers[provider_id]['display_name']} to Polaris Code Intelligence; "
+            "runtime MCP availability will be checked by the next workflow; "
+            "fallback remains enabled"
+        ),
+        "provider": provider_id,
+        "configuration": CONFIG_PATH.as_posix(),
+        "mode": config["mode"],
+        "provider_priority": config["provider_priority"],
+        "changed": changed,
+        "runtime_status": "checked_by_next_workflow",
+        "fallback": "enabled",
+    }
+
+
 def _matches_scope(path: str, config: dict[str, Any]) -> bool:
     included = not config["include"] or any(
         fnmatch.fnmatchcase(path, pattern) for pattern in config["include"]

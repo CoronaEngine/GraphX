@@ -8,7 +8,7 @@ Polaris 是一套运行在受支持 Coding Agent 宿主之上的、以仓库为�
 
 Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须按当前宿主适配器的语法主动调用 `engineering-task`（Codex 为 `$engineering-task`，Claude Code 为 `/engineering-task`）。其他阶段 Skills 只能由已启动的工作流在合法节点分派。
 
-> 当前版本：`0.1.17`（开发中）
+> 当前版本：`0.1.18`（开发中）
 
 ## 核心目标
 
@@ -87,7 +87,7 @@ v0.1 明确不实现：
 - 只读聚合 Doctor：检查运行环境、协议、安装清单、迁移、任务位置、恢复索引、全部任务和操作残留，并输出证据与人工动作
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 85 个带场景日志的自动化测试；GitHub Actions 使用 Python 3.10 在 Linux、Windows 和 macOS 运行，symlink 安全场景通过跨平台模拟覆盖
+- 87 个带场景日志的自动化测试；GitHub Actions 使用 Python 3.10 在 Linux、Windows 和 macOS 运行，symlink 安全场景通过跨平台模拟覆盖
 
 仍在建设：
 
@@ -194,7 +194,15 @@ python -m pip install .
 
 CLI 只负责定位并分发到 Polaris 源仓库或目标项目内锁定的 Python 脚本；原脚本入口仍保持兼容。
 
-用户命令面仅包含 `vendor`、`init-project`、`init-task`、`doctor`、`validate-project`、`validate-task`、`recover` 和 `migrate`。各命令的原脚本参数保持不变，可用 `polaris <command> --help` 查看。内部状态转换和 artifact 构建脚本不通过 CLI 暴露。
+用户命令面仅包含 `vendor`、`init-project`、`init-task`、`doctor`、`validate-project`、`validate-task`、`recover`、`migrate` 和 `code-intelligence`。各命令的原脚本参数保持不变，可用 `polaris <command> --help` 查看。内部状态转换和 artifact 构建脚本不通过 CLI 暴露。
+
+已经在当前 Coding Agent 宿主中配置好 CodeGraph MCP 后，可将它显式加入 Polaris 流程：
+
+```powershell
+polaris code-intelligence add codegraph --repo .
+```
+
+该命令启用 `auto_optional` 模式、将 CodeGraph 置于 Provider 优先级首位，并保留已有的索引范围和排除规则。它不安装、启动或验证 MCP 服务；实际工具可用性由下一次 Polaris Workflow 检查。
 
 ### 1. Vendor Polaris
 
@@ -214,7 +222,7 @@ polaris vendor C:\path\to\target-repo --force
 
 `--force` 会先校验旧安装清单，再在隔离事务目录中完整生成并校验新版；只有预生成成功后才替换目标文件。应用失败或进程崩溃时会从备份回滚/恢复，已从新版移除的受管文件不会残留，项目自有文件与清单外宿主配置不会被删除。受管文件有本地修改时默认拒绝覆盖；确认丢弃这些修改时必须额外传入 `--discard-managed-changes`。项目校验会拒绝受管文件缺失、哈希漂移或归属声明缺失。
 
-已初始化的 `0.1.16` 项目升级到当前版本时，在 vendoring 后显式执行：
+已初始化的 `0.1.17` 项目升级到当前版本时，在 vendoring 后显式执行：
 
 ```powershell
 python -m pip install --upgrade ./tools/polaris
@@ -226,6 +234,8 @@ polaris migrate --repo .
 `0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code；`0.1.8` 补齐有限 Schema 子集；`0.1.9` 引入安装清单；`0.1.10` 引入显式迁移协议；`0.1.11` 加固 Adapter v2 的入口、overlay、symlink 与能力声明；`0.1.12` 统一写操作版本门禁、恢复迁移崩溃锁，并提供事务化 vendoring；`0.1.13` 引入 Plan Human 决策门禁，并解耦逻辑任务路径与物理目录；`0.1.14` 让 vendored 文本哈希兼容 Git 的跨平台换行转换，同时保持二进制严格校验；`0.1.15` 引入只读聚合 Doctor 和版本化诊断报告；`0.1.16` 增加自动发现、非阻断降级的可选 Code Intelligence Provider 协议与首个 CodeGraph MCP Adapter。Workflow Graph 协议仍是 `0.1.2`。
 
 `0.1.17` 在不改变 Workflow `0.1.2` 的前提下增加无运行时第三方依赖的薄 `polaris` CLI。
+
+`0.1.18` 增加 `polaris code-intelligence add <provider>`，用于把已配置的 Provider 显式加入 Polaris 流程；Workflow 仍为 `0.1.2`。
 
 ### 2. 初始化项目状态
 

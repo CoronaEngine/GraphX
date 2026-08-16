@@ -18,6 +18,10 @@ COMMANDS = {
     "validate-task": ("validate_task.py", "Validate a task"),
     "recover": ("recover_task.py", "Recover a task from repository Authority"),
     "migrate": ("migrate_project.py", "Run the next explicit project migration"),
+    "code-intelligence": (
+        "configure_code_intelligence.py",
+        "Configure an optional Code Intelligence Provider",
+    ),
 }
 
 

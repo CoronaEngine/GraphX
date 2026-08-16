@@ -51,7 +51,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - 项目初始化、任务初始化、状态转换、结构校验、文档影响检查、工作集生成脚本。
 - 通过 pip 安装、只暴露用户命令的薄 `polaris` CLI；保留原 Python 脚本入口。
 - 只读聚合 Doctor；复用现有 Validator，一次输出环境、协议、Authority、任务与操作残留的证据和人工动作。
-- 可选 Code Intelligence Provider 协议；自动发现、按阶段查询/刷新、保存精简证据，并在任何不可用或失败时非阻断降级。
+- 可选 Code Intelligence Provider 协议；自动发现、显式 add 已配置 Provider、按阶段查询/刷新、保存精简证据，并在任何不可用或失败时非阻断降级。
 - 独立 Implementer worker、不可变 Implementation handoff 与事件驱动实时进度快照。
 - 验收标准绑定的线性 `implementation_steps`；步骤只能依次推进或在末尾追加，最终结果冻结进 Implementation artifact。
 - 独立 worker context 的对抗审查协议。
@@ -489,7 +489,7 @@ AGENTS.md
 ### 可选 Code Intelligence 协议
 
 - Provider 由 `providers/code-intelligence/*.json` 声明 MCP Transport、文件扩展名和逻辑操作到工具名的映射；CodeGraph 是首个 Adapter，但核心 Schema、Artifact 和 Skill 不使用 CodeGraph 专用字段。
-- 默认无需配置即可按当前宿主实际暴露的 MCP 工具自动发现 Provider；`.polaris/code-intelligence.json` 只覆盖模式、优先级、include 和 exclude。
+- 默认无需配置即可按当前宿主实际暴露的 MCP 工具自动发现 Provider；`polaris code-intelligence add <provider>` 可将已配置 Provider 显式置于优先级首位并启用 `auto_optional`；`.polaris/code-intelligence.json` 只覆盖模式、优先级、include 和 exclude。
 - Planning 的查询结果必须经源码确认才可进入 Working Set；不存在、越界或没有依赖理由的路径一律拒绝。
 - Implementation 仅在查询能改变编辑决策时使用；中途刷新只发生在后续工作依赖刚修改的调用关系时。
 - Documentation Sync 在最终 subject checkpoint 后规划刷新：新增/修改文件使用增量刷新，删除/重命名使用工作区刷新，无相关代码变化则跳过。
@@ -514,6 +514,7 @@ AGENTS.md
 | `update_implementation_progress.py` | 通过明确事件原子更新 ignored 的线性步骤进度；拒绝 session 接管、跳步、回退、未知验收 ID 和非法 blocker |
 | `doctor_project.py` | 只读聚合环境、协议、Authority、清单、迁移、索引、任务与操作残留诊断，输出版本化报告、证据和人工动作 |
 | `record_code_intelligence.py` | 发现可用 Provider、规划增量/工作区刷新并写入不可变的精简 Code Intelligence Record |
+| `configure_code_intelligence.py` | 启用并优先一个已配置 Provider，保留现有索引范围，不安装或运行 Provider |
 | `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
 | `transition_task.py` | 获取任务锁，校验合法边与 gate，追加带 sequence 的事件，再原子替换 `state.json` |
@@ -646,7 +647,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 - [x] 实现 init、revision、validate、transition、state rebuild、docs check
 - [x] 实现只读聚合 Doctor、版本化诊断报告与多故障/无写入测试
-- [x] 实现可选 Code Intelligence Provider、CodeGraph MCP Adapter、阶段降级/刷新策略、精简记录与测试
+- [x] 实现可选 Code Intelligence Provider、CodeGraph MCP Adapter、显式 Provider add 命令、阶段降级/刷新策略、精简记录与测试
 - [x] 所有工作流状态转换经 `transition_task.py`
 - [x] `QUALIFY` 机械拒绝空白或 `TODO` 的验收描述与证据
 - [x] 单元测试覆盖第 9 节失败场景

@@ -26,6 +26,7 @@ from init_task import initialize as init_task  # noqa: E402
 from internal.artifact_protocol import normalized_reference  # noqa: E402
 from internal.doctor_protocol import diagnose_project  # noqa: E402
 from internal.code_intelligence_protocol import (  # noqa: E402
+    add_provider,
     load_config,
     plan_refresh,
     record as record_code_intelligence,
@@ -47,6 +48,7 @@ from build_working_set import build as build_working_set  # noqa: E402
 from build_implementation_handoff import build as build_implementation_handoff  # noqa: E402
 from build_review_handoff import build as build_review_handoff  # noqa: E402
 from check_docs import check as check_docs  # noqa: E402
+from configure_code_intelligence import add as configure_code_intelligence  # noqa: E402
 from new_revision import create as new_revision  # noqa: E402
 from internal.polaris_core import (  # noqa: E402
     InputFailure,
@@ -544,6 +546,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "validate-task": "validate_task.py",
                 "recover": "recover_task.py",
                 "migrate": "migrate_project.py",
+                "code-intelligence": "configure_code_intelligence.py",
             },
         )
         completed = subprocess.CompletedProcess([], 7)
@@ -595,6 +598,26 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(explicit_result.returncode, 0, explicit_result.stderr)
         self.assertEqual(json.loads(explicit_result.stdout)["status"], "PASS")
+
+        configure_result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "polaris_cli.py"),
+                "code-intelligence",
+                "add",
+                "codegraph",
+                "--json",
+            ],
+            cwd=nested,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+        self.assertEqual(configure_result.returncode, 0, configure_result.stderr)
+        configured = json.loads(configure_result.stdout)
+        self.assertEqual(configured["status"], "PASS")
+        self.assertEqual(configured["provider"], "codegraph")
+        self.assertEqual(configured["runtime_status"], "checked_by_next_workflow")
 
         errors = io.StringIO()
         with tempfile.TemporaryDirectory(prefix="polaris-no-protocol-") as empty:
@@ -1365,25 +1388,25 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.16")
+        self.set_protocol_version("0.1.17")
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.16")
-        self.assertEqual(result["to"], "0.1.17")
+        self.assertEqual(result["from"], "0.1.17")
+        self.assertEqual(result["to"], "0.1.18")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.16")
+        self.assertEqual(events[0]["polaris_version"], "0.1.17")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.17")
+        self.assertEqual(events[1]["polaris_version"], "0.1.18")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.16-to-0.1.17.json"
+            / "MIG-0.1.17-to-0.1.18.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -1395,15 +1418,15 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.16")
+        self.set_protocol_version("0.1.17")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
             "record_version": 1,
-            "migration_id": "0.1.16-to-0.1.17",
-            "from_polaris_version": "0.1.16",
-            "to_polaris_version": "0.1.17",
+            "migration_id": "0.1.17-to-0.1.18",
+            "from_polaris_version": "0.1.17",
+            "to_polaris_version": "0.1.18",
             "from_workflow_version": "0.1.2",
             "to_workflow_version": "0.1.2",
             "status": "IN_PROGRESS",
@@ -1421,7 +1444,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.16-to-0.1.17.json",
+            / "MIG-0.1.17-to-0.1.18.json",
             record,
         )
         append_jsonl(
@@ -1434,7 +1457,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.17",
+                "polaris_version": "0.1.18",
                 "workflow_version": "0.1.2",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
@@ -1442,7 +1465,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.16-to-0.1.17",
+                "migration_id": "0.1.17-to-0.1.18",
             },
         )
 
@@ -1454,7 +1477,7 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
-        self.set_protocol_version("0.1.16")
+        self.set_protocol_version("0.1.17")
         vendor(ROOT, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
@@ -1462,7 +1485,7 @@ class PolarisCoreTests(unittest.TestCase):
             {
                 "lock_version": 1,
                 "kind": "polaris_migration",
-                "migration_id": "0.1.16-to-0.1.17",
+                "migration_id": "0.1.17-to-0.1.18",
                 "task_id": "TASK-0001",
                 "hostname": socket.gethostname(),
                 "pid": 2147483647,
@@ -1616,6 +1639,49 @@ class PolarisCoreTests(unittest.TestCase):
         raw.write_text("{}\n", encoding="utf-8")
         ignored = run_git(self.repo, "check-ignore", raw.relative_to(self.repo).as_posix())
         self.assertEqual(ignored, raw.relative_to(self.repo).as_posix())
+
+    def test_code_intelligence_add_enables_prioritizes_and_preserves_scope(self) -> None:
+        """add 命令启用并优先 Provider，同时保留已有索引范围且可幂等重跑。"""
+        config_path = self.repo / ".polaris" / "code-intelligence.json"
+        write_json_atomic(
+            config_path,
+            {
+                "config_version": 1,
+                "mode": "disabled",
+                "provider_priority": [],
+                "include": ["src/**", "tests/**"],
+                "exclude": ["vendor/**", "generated/**"],
+            },
+        )
+
+        result = configure_code_intelligence(self.repo, "codegraph")
+
+        self.assertTrue(result["changed"])
+        self.assertEqual(result["runtime_status"], "checked_by_next_workflow")
+        config = read_json(config_path)
+        self.assertEqual(config["mode"], "auto_optional")
+        self.assertEqual(config["provider_priority"], ["codegraph"])
+        self.assertEqual(config["include"], ["src/**", "tests/**"])
+        self.assertEqual(config["exclude"], ["vendor/**", "generated/**"])
+        before = config_path.read_bytes()
+
+        repeated = configure_code_intelligence(self.repo, "codegraph")
+
+        self.assertFalse(repeated["changed"])
+        self.assertEqual(config_path.read_bytes(), before)
+        self.assertEqual(
+            validate_static_configuration(self.repo, ROOT)["mode"], "auto_optional"
+        )
+
+    def test_code_intelligence_add_rejects_unknown_provider_without_writing(self) -> None:
+        """未知 Provider 返回输入错误，且不会创建或改写项目配置。"""
+        config_path = self.repo / ".polaris" / "code-intelligence.json"
+        self.assertFalse(config_path.exists())
+
+        with self.assertRaises(InputFailure):
+            add_provider(self.repo, "unknown-provider", ROOT)
+
+        self.assertFalse(config_path.exists())
 
     def test_code_intelligence_refresh_uses_file_or_workspace_operations(self) -> None:
         """新增修改走文件刷新，删除重命名走工作区刷新，无代码变化则跳过。"""
