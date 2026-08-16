@@ -8,7 +8,7 @@ Polaris 是一套运行在受支持 Coding Agent 宿主之上的、以仓库为�
 
 Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须按当前宿主适配器的语法主动调用 `engineering-task`（Codex 为 `$engineering-task`，Claude Code 为 `/engineering-task`）。其他阶段 Skills 只能由已启动的工作流在合法节点分派。
 
-> 当前版本：`0.1.16`（开发中）
+> 当前版本：`0.1.17`（开发中）
 
 ## 核心目标
 
@@ -44,12 +44,13 @@ v0.1 是 Repo-native Skill System，由以下部分组成：
 Host-native Skills
 + Repository Authority State
 + Deterministic Python Scripts
++ Thin standard-library CLI
 + Supported Agent Host Runtime
 ```
 
 v0.1 明确不实现：
 
-- `polaris` CLI 或 shell wrapper
+- 在 CLI 中重复实现协议逻辑，或扩展 CLI 为独立运行时
 - daemon、watchdog、scheduler、队列或后台服务
 - Dashboard、TUI、IDE 或独立 App
 - 数据库、向量库或由 Polaris 运行的知识图谱服务；外部 MCP Code Intelligence Provider 仅作为可选线索源
@@ -67,6 +68,7 @@ v0.1 明确不实现：
 - 八个宿主无关的同源 Workflow Skills，以及声明式、多宿主渲染与 vendoring
 - 可选 Code Intelligence 协议：自动发现外部 Provider，按阶段查询或刷新，任何不可用/失败均非阻断降级
 - Skills 和协议实现的目标仓库 vendoring
+- 无运行时第三方依赖的 `polaris` 命令，薄层分发到项目锁定的脚本
 - 项目、任务和 Work Item Revision 初始化
 - 状态转换、项目/任务校验、事件账本和状态重建
 - Git subject commit/diff hash 绑定
@@ -85,7 +87,7 @@ v0.1 明确不实现：
 - 只读聚合 Doctor：检查运行环境、协议、安装清单、迁移、任务位置、恢复索引、全部任务和操作残留，并输出证据与人工动作
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 82 个带场景日志的自动化测试；GitHub Actions 使用 Python 3.10 在 Linux、Windows 和 macOS 运行，symlink 安全场景通过跨平台模拟覆盖
+- 85 个带场景日志的自动化测试；GitHub Actions 使用 Python 3.10 在 Linux、Windows 和 macOS 运行，symlink 安全场景通过跨平台模拟覆盖
 
 仍在建设：
 
@@ -99,6 +101,8 @@ v0.1 明确不实现：
 
 ```text
 Polaris/
+├── pyproject.toml          # pip 包元数据和 polaris console entry
+├── polaris_cli.py         # 薄 CLI 分发器，不包含协议逻辑
 ├── skills/                 # 八个宿主无关的 Workflow Skills 源文件
 ├── hosts/                  # 平级宿主适配器、元数据、执行附录与专用文件
 │   ├── codex/
@@ -135,7 +139,7 @@ target-repo/
 - Python 3.10 或更高版本
 - 一个已有 Polaris 适配器的 Coding Agent 宿主；当前为 Codex 或 Claude Code
 
-Polaris v0.1 的 Python 代码只使用标准库，不需要安装第三方依赖。
+Polaris v0.1 的运行时代码只使用标准库，不安装第三方运行时依赖。`pip` 和 `setuptools` 只用于安装 CLI。
 
 任务目录规则只修改 `scripts/internal/task_layout.py`。模板正文只修改
 `templates/task-sources/`；随后运行下列命令重建并校验生成的
@@ -177,45 +181,58 @@ python -m unittest discover -s tests -v
 检查 Python 语法：
 
 ```powershell
-python -m compileall -q scripts tests
+python -m compileall -q polaris_cli.py scripts tests
 ```
 
 ## 接入一个目标仓库
 
-以下命令均从 Polaris 源仓库运行。它们是直接执行的 Python 脚本，不是 Polaris CLI。
+先在 Polaris 源仓库安装 CLI：
+
+```powershell
+python -m pip install .
+```
+
+CLI 只负责定位并分发到 Polaris 源仓库或目标项目内锁定的 Python 脚本；原脚本入口仍保持兼容。
+
+用户命令面仅包含 `vendor`、`init-project`、`init-task`、`doctor`、`validate-project`、`validate-task`、`recover` 和 `migrate`。各命令的原脚本参数保持不变，可用 `polaris <command> --help` 查看。内部状态转换和 artifact 构建脚本不通过 CLI 暴露。
 
 ### 1. Vendor Polaris
 
 ```powershell
-python scripts/vendor_project.py C:\path\to\target-repo
+polaris vendor C:\path\to\target-repo
 ```
 
 该操作读取所有 `hosts/*/adapter.json`，把 `skills/` 按各宿主的调用语法、frontmatter、overlay 和 appendix 渲染到清单声明的目标目录，同时复制宿主专用文件。`hosts/`、`providers/`、`scripts/`、`schemas/`、`skills/`、`templates/`、`workflow/` 和 `VERSION` 会一起进入 `tools/polaris/`，使目标仓库能够独立初始化、升级和校验适配器。生成的 `tools/polaris/install-manifest.json` 记录所有 Polaris 受管文件的 SHA-256 与哈希模式；文本使用 LF 规范化哈希，二进制保持严格字节哈希。`CLAUDE.md`、`.gitignore` 这类文件只保证存在，内容仍归项目所有。
 
+`pyproject.toml` 和 `polaris_cli.py` 也会进入 `tools/polaris/`，因此目标仓库的锁定版本可以自行安装同一 CLI 入口。
+
 目标仓库已经存在 vendored 文件时，显式使用 `--force` 才会更新：
 
 ```powershell
-python scripts/vendor_project.py C:\path\to\target-repo --force
+polaris vendor C:\path\to\target-repo --force
 ```
 
 `--force` 会先校验旧安装清单，再在隔离事务目录中完整生成并校验新版；只有预生成成功后才替换目标文件。应用失败或进程崩溃时会从备份回滚/恢复，已从新版移除的受管文件不会残留，项目自有文件与清单外宿主配置不会被删除。受管文件有本地修改时默认拒绝覆盖；确认丢弃这些修改时必须额外传入 `--discard-managed-changes`。项目校验会拒绝受管文件缺失、哈希漂移或归属声明缺失。
 
-已初始化的 `0.1.15` 项目升级到当前版本时，在 vendoring 后显式执行：
+已初始化的 `0.1.16` 项目升级到当前版本时，在 vendoring 后显式执行：
 
 ```powershell
-python tools/polaris/scripts/migrate_project.py --repo .
+python -m pip install --upgrade ./tools/polaris
+polaris migrate --repo .
 ```
 
 迁移只接受 `workflow/migrations.json` 中声明的相邻版本步骤；活动任务通过追加 `MIGRATE_POLARIS` 事件升级，不改写旧事件。迁移记录保存在 `.polaris/migrations/`，中断后重复同一命令会继续未完成步骤。没有声明的跨版本跳跃和 workflow 版本变化会被拒绝。
 
 `0.1.2` 增加了新的 Workflow event；`0.1.3` 把恢复索引与 Working Set 从 Markdown 迁移为 JSON；`0.1.4` 将实时实现进度改为事件驱动的线性步骤；`0.1.5` 让任务模板目录镜像实际生成目录；`0.1.6` 将任务路径集中到单一真源；`0.1.7` 引入版本化声明式宿主适配器，并内置 Codex 与 Claude Code；`0.1.8` 补齐有限 Schema 子集；`0.1.9` 引入安装清单；`0.1.10` 引入显式迁移协议；`0.1.11` 加固 Adapter v2 的入口、overlay、symlink 与能力声明；`0.1.12` 统一写操作版本门禁、恢复迁移崩溃锁，并提供事务化 vendoring；`0.1.13` 引入 Plan Human 决策门禁，并解耦逻辑任务路径与物理目录；`0.1.14` 让 vendored 文本哈希兼容 Git 的跨平台换行转换，同时保持二进制严格校验；`0.1.15` 引入只读聚合 Doctor 和版本化诊断报告；`0.1.16` 增加自动发现、非阻断降级的可选 Code Intelligence Provider 协议与首个 CodeGraph MCP Adapter。Workflow Graph 协议仍是 `0.1.2`。
 
+`0.1.17` 在不改变 Workflow `0.1.2` 的前提下增加无运行时第三方依赖的薄 `polaris` CLI。
+
 ### 2. 初始化项目状态
 
 在目标仓库中运行：
 
 ```powershell
-python tools/polaris/scripts/init_project.py my-project --repo .
+polaris init-project my-project --repo .
 ```
 
 这会创建 `.polaris/project.json`、`.polaris/task-locations.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 或 `CLAUDE.md` 时还会创建对应的最小仓库规则，并在 `.gitignore` 中加入活动与未来归档任务的 `runtime/` 忽略规则。
@@ -223,7 +240,7 @@ python tools/polaris/scripts/init_project.py my-project --repo .
 ### 3. 初始化任务
 
 ```powershell
-python tools/polaris/scripts/init_task.py TASK-0001 --rigor R1 --repo .
+polaris init-task TASK-0001 --rigor R1 --repo .
 ```
 
 任务初始状态为 `DRAFT`。填写并冻结 `.polaris/tasks/TASK-0001/revisions/work-item-r001.json` 后，才能进入资格审查和后续阶段。
@@ -231,8 +248,8 @@ python tools/polaris/scripts/init_task.py TASK-0001 --rigor R1 --repo .
 ### 4. 校验项目和任务
 
 ```powershell
-python tools/polaris/scripts/validate_project.py --repo .
-python tools/polaris/scripts/validate_task.py TASK-0001 --repo .
+polaris validate-project --repo .
+polaris validate-task TASK-0001 --repo .
 ```
 
 统一退出码：
@@ -246,8 +263,8 @@ python tools/polaris/scripts/validate_task.py TASK-0001 --repo .
 需要一次查看全部健康状态时运行 Doctor：
 
 ```powershell
-python tools/polaris/scripts/doctor_project.py --repo .
-python tools/polaris/scripts/doctor_project.py --repo . --json
+polaris doctor --repo .
+polaris doctor --repo . --json
 ```
 
 Doctor 不修复、不迁移、不删除残留，也不写入任何项目文件。它复用现有 Validator 的判定，一次聚合运行环境、仓库根、协议版本、Authority、安装清单、迁移记录、任务位置、恢复索引、全部活动任务、`.gitignore` 和未完成操作残留。`WARN` 给出证据与建议动作但返回 `0`；任一规则为 `FAIL` 时返回 `1`；Doctor 自身无法运行时返回 `2`。
@@ -255,7 +272,7 @@ Doctor 不修复、不迁移、不删除残留，也不写入任何项目文件�
 ### 5. 从新会话恢复
 
 ```powershell
-python tools/polaris/scripts/recover_task.py TASK-0001 --repo . --json
+polaris recover TASK-0001 --repo . --json
 ```
 
 恢复脚本先校验 `.polaris/project-index.json`、项目和任务，再只返回当前 Revision、状态与 blocker、最后事件、下一动作、结构化 `working-set.json`，以及存在时的最近有效 Implementation 进度。它不读取聊天历史。
@@ -350,7 +367,7 @@ python tools/polaris/scripts/transition_task.py TASK-0001 <EVENT> --repo .
 - 新增或修改门禁时必须补充自动化测试。
 - 不得让 Skill 或 Agent 直接写入任务完成状态。
 - 不提交 `__pycache__/`、虚拟环境、`.vscode/` 或任务锁文件。
-- v0.1 不扩建 CLI、UI、服务进程或自定义 Agent Runtime。
+- v0.1 的 CLI 保持为现有脚本的薄分发层，不在其中增加协议逻辑、UI、服务进程或自定义 Agent Runtime。
 
 ## License
 

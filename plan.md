@@ -5,7 +5,7 @@
 > 产品形态：Repo-native Skill System
 > 宿主 Runtime：声明式可扩展；v0.1 内置 Codex、Claude Code
 >
-> **已确认的 MVP 决策：v0.1 不实现 CLI，也不提供 shell wrapper。Polaris Skills、版本化声明式宿主适配器、可选 Provider Descriptor、辅助脚本、Schema、模板和默认 Workflow 全部 vendoring 到目标仓库；所有入口由仓库内 Skills 和 Python 脚本提供。所有宿主共享同一套仓库 Authority 和机械协议。**
+> **已确认的 MVP 决策：v0.1 提供无运行时第三方依赖的薄 `polaris` CLI，仅定位并分发到现有 Python 脚本，不承载协议逻辑。Polaris Skills、版本化声明式宿主适配器、可选 Provider Descriptor、CLI、辅助脚本、Schema、模板和默认 Workflow 全部 vendoring 到目标仓库。所有宿主共享同一套仓库 Authority 和机械协议。**
 
 ## 1. 目标与定位
 
@@ -15,6 +15,7 @@ Polaris v0.1 是一套运行在受支持 Coding Agent 宿主之上的、可持�
 Workflow Skills
 + Repository State
 + Deterministic Validators / Helpers
++ Thin standard-library CLI dispatcher
 + Supported Agent Host Runtime
 ```
 
@@ -48,6 +49,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - `.polaris/` 仓库状态协议、模板与默认工作流图。
 - Work Item 修订、任务状态、事件账本、工作集、Review、Validation、Result。
 - 项目初始化、任务初始化、状态转换、结构校验、文档影响检查、工作集生成脚本。
+- 通过 pip 安装、只暴露用户命令的薄 `polaris` CLI；保留原 Python 脚本入口。
 - 只读聚合 Doctor；复用现有 Validator，一次输出环境、协议、Authority、任务与操作残留的证据和人工动作。
 - 可选 Code Intelligence Provider 协议；自动发现、按阶段查询/刷新、保存精简证据，并在任何不可用或失败时非阻断降级。
 - 独立 Implementer worker、不可变 Implementation handoff 与事件驱动实时进度快照。
@@ -59,7 +61,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 
 ### 明确不做
 
-- **任何形式的 `polaris` CLI 或 shell wrapper，包括 `polaris status`、`polaris doctor` 等命令**
+- 在 CLI 中重复协议逻辑、暴露内部状态转换命令，或将 CLI 扩展为独立 runtime
 - daemon、watchdog、scheduler、队列或后台服务
 - Dashboard、TUI、IDE 或独立 App
 - 自定义 Agent Runtime、模型适配层或进程生命周期管理
@@ -116,6 +118,8 @@ polaris/
 ├── README.md
 ├── AGENTS.md
 ├── VERSION
+├── pyproject.toml                     # pip 元数据与 console entry
+├── polaris_cli.py                    # 薄分发器
 ├── hosts/
 │   ├── codex/
 │   │   ├── adapter.json               # Skill 目标、调用语法与资产清单
@@ -677,11 +681,11 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [ ] 修订一次 Skills/validators，但不新增产品层级
 - [ ] 输出 `v0.1-evaluation.md`：有效机制、摩擦点、流程自动化候选痛点、放弃项
 
-完成标准：至少两个不同工程任务闭环，并能够用证据决定是否继续下一阶段。CLI 仅可作为 v0.1 之后的独立产品决策，不属于本计划的交付范围。
+完成标准：至少两个不同工程任务闭环，并能够用证据决定是否继续下一阶段。CLI 只作为现有脚本的安装与分发入口。
 
 ## 14. v0.1 总体验收标准
 
-- [ ] 目标仓库无需安装 Polaris 程序即可使用；适配器声明的宿主文件、`tools/polaris/`、`.polaris/` 和 Python 足以运行。
+- [ ] 目标仓库仅依赖 Python 和 vendored `tools/polaris/` 即可运行；CLI 可从该目录安装，不需要第三方运行时依赖。
 - [ ] 非平凡任务不会在 Work Item 冻结前进入 Implementation。
 - [ ] 每个暂停点和阶段结果都按固定字段展示，Work Item 未经用户确认不进入 `QUALIFIED`。
 - [ ] 自动路径中主任务保持为可查询控制入口；Implementer 只从冻结 handoff 工作并持续写入最近有效进度。
@@ -701,7 +705,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 - [ ] 所有代码变更均完成 Windows、macOS、Linux 兼容性审查；核心规则测试不依赖可选平台能力，真实平台能力不可用时只跳过对应集成测试。
 - [ ] Horizon 和 Vision 各完成至少一个真实闭环，并形成可比较的评估记录。
 - [ ] 两个试点均记录 `Adversarial Review Yield`，用于判断独立 Review 带来的收益是否值得其时间和 token 成本。
-- [ ] v0.1 中没有 CLI、daemon、Dashboard、scheduler、自定义 runtime 或 database。
+- [ ] v0.1 的 CLI 仅为现有脚本的薄分发层；没有 daemon、Dashboard、scheduler、自定义 runtime 或 database。
 - [ ] v0.1 中没有 Task DAG、自动归档或跨任务依赖调度。
 
 ## 15. 开工第一批任务
@@ -715,7 +719,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 5. 写 `engineering-task/SKILL.md`，让其只围绕 graph、owner、artifact、checkpoint 和 gate 编排。
 6. 补齐阶段 Skills、JSON artifact 模板、必要 Markdown 上下文模板、Documentation Sync 和 reviewer handoff。
 7. 将 Skills 和协议实现 vendoring 到 Horizon fixture，验证发现、版本锁定和 Fresh Clone Recovery。
-8. 用 Horizon 的一个小型 R1 任务 dogfood；遇到摩擦先改协议和 Skill，不扩建 CLI/UI。
+8. 用 Horizon 的一个小型 R1 任务 dogfood；遇到摩擦先改协议和 Skill，CLI 保持薄分发层，不扩建 UI。
 
 ## 16. 长期产品方向（不属于 v0.1）
 
@@ -730,7 +734,7 @@ Polaris Thin App / Control Plane
       Codex / Claude Code / Others
 ```
 
-长期能力可以包括多任务依赖管理、跨项目状态、可视化界面、多模型适配和 Reviewer arbitration，但必须建立在 v0.1 的真实试点证据之上。v0.1 不为这些能力预先建设 CLI、daemon、scheduler、数据库或自定义 Agent Runtime。
+长期能力可以包括多任务依赖管理、跨项目状态、可视化界面、多模型适配和 Reviewer arbitration，但必须建立在 v0.1 的真实试点证据之上。v0.1 不把薄 CLI 扩展为 daemon、scheduler、数据库或自定义 Agent Runtime。
 
 v0.1 的核心边界是：Polaris 定义不同 Agent 应读取什么、承担什么职责、产出什么证据，以及满足哪些门禁后任务才能继续；Codex 或 Claude Code 负责 Session、Agent Loop、工具调用、执行环境和上下文运行时。
 

@@ -284,8 +284,9 @@ def _stage_install(
         stage, stage / "tools" / "polaris", "staged vendored protocol target"
     )
     tools_target.mkdir(parents=True)
-    require_regular_file(source / "VERSION", "Polaris VERSION")
-    shutil.copy2(source / "VERSION", tools_target / "VERSION")
+    for name in ("VERSION", "pyproject.toml", "polaris_cli.py"):
+        require_regular_file(source / name, f"Polaris {name} source")
+        shutil.copy2(source / name, tools_target / name)
     for name in ("hosts", "providers", "scripts", "schemas", "skills", "templates", "workflow"):
         require_regular_tree(source / name, f"Polaris {name} source")
         shutil.copytree(source / name, tools_target / name, ignore=ignore_generated)

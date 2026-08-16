@@ -11,13 +11,14 @@ import sys
 import tempfile
 import unittest
 from collections.abc import Iterator
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(SCRIPTS))
 
 from init_project import initialize as init_project  # noqa: E402
@@ -95,6 +96,7 @@ from internal.task_layout import (  # noqa: E402
 from validate_task import validate  # noqa: E402
 from validate_project import validate as validate_project  # noqa: E402
 import doctor_project as doctor_module  # noqa: E402
+import polaris_cli  # noqa: E402
 import vendor_project as vendor_module  # noqa: E402
 from vendor_project import vendor  # noqa: E402
 
@@ -528,6 +530,87 @@ class PolarisCoreTests(unittest.TestCase):
         for path in internal_files:
             source = path.read_text(encoding="utf-8")
             self.assertNotIn('if __name__ == "__main__":', source, path.name)
+
+    def test_cli_exposes_only_user_commands_and_forwards_to_locked_scripts(self) -> None:
+        """统一 CLI 只暴露用户命令，并透传参数、仓库根和退出码。"""
+        self.assertEqual(
+            {command: spec[0] for command, spec in polaris_cli.COMMANDS.items()},
+            {
+                "vendor": "vendor_project.py",
+                "init-project": "init_project.py",
+                "init-task": "init_task.py",
+                "doctor": "doctor_project.py",
+                "validate-project": "validate_project.py",
+                "validate-task": "validate_task.py",
+                "recover": "recover_task.py",
+                "migrate": "migrate_project.py",
+            },
+        )
+        completed = subprocess.CompletedProcess([], 7)
+        with mock.patch.object(
+            polaris_cli.subprocess, "run", return_value=completed
+        ) as invoked:
+            result = polaris_cli.dispatch("doctor", ["--json"], ROOT / "tests")
+        self.assertEqual(result, 7)
+        invoked.assert_called_once_with(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "doctor_project.py"),
+                "--json",
+                "--repo",
+                str(ROOT),
+            ]
+        )
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(polaris_cli.main(["--help"]), 0)
+        for command in polaris_cli.COMMANDS:
+            self.assertIn(command, output.getvalue())
+        self.assertNotIn("transition-task", output.getvalue())
+
+    def test_cli_runs_vendored_protocol_from_nested_and_explicit_repositories(self) -> None:
+        """CLI 从子目录或 --repo 定位 vendored 协议，并保持原脚本 JSON 语义。"""
+        vendor(ROOT, self.repo, False)
+        nested = self.repo / "src" / "nested path"
+        nested.mkdir(parents=True)
+        command = [
+            sys.executable,
+            str(ROOT / "polaris_cli.py"),
+            "validate-project",
+            "--json",
+        ]
+        nested_result = subprocess.run(
+            command, cwd=nested, text=True, encoding="utf-8", capture_output=True
+        )
+        self.assertEqual(nested_result.returncode, 0, nested_result.stderr)
+        self.assertEqual(json.loads(nested_result.stdout)["status"], "PASS")
+
+        explicit_result = subprocess.run(
+            [*command, "--repo", str(self.repo)],
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+        self.assertEqual(explicit_result.returncode, 0, explicit_result.stderr)
+        self.assertEqual(json.loads(explicit_result.stdout)["status"], "PASS")
+
+        errors = io.StringIO()
+        with tempfile.TemporaryDirectory(prefix="polaris-no-protocol-") as empty:
+            with redirect_stderr(errors):
+                self.assertEqual(
+                    polaris_cli.main(["doctor", "--repo", empty]), 2
+                )
+        self.assertIn("cannot locate tools/polaris", errors.getvalue())
+
+    def test_cli_packaging_declares_no_runtime_dependencies(self) -> None:
+        """pip console script 使用独立分发名，且不声明运行时第三方依赖。"""
+        metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('name = "corona-polaris"', metadata)
+        self.assertIn('version = "' + (ROOT / "VERSION").read_text().strip() + '"', metadata)
+        self.assertIn('dependencies = []', metadata)
+        self.assertIn('polaris = "polaris_cli:main"', metadata)
 
     def test_artifact_protocol_rejects_escape_and_registered_hash_drift(self) -> None:
         """共享 artifact 引用层拒绝越界路径和注册后的内容漂移。"""
@@ -1282,25 +1365,25 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.15")
+        self.set_protocol_version("0.1.16")
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.15")
-        self.assertEqual(result["to"], "0.1.16")
+        self.assertEqual(result["from"], "0.1.16")
+        self.assertEqual(result["to"], "0.1.17")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.15")
+        self.assertEqual(events[0]["polaris_version"], "0.1.16")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.16")
+        self.assertEqual(events[1]["polaris_version"], "0.1.17")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.15-to-0.1.16.json"
+            / "MIG-0.1.16-to-0.1.17.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -1312,15 +1395,15 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.15")
+        self.set_protocol_version("0.1.16")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
             "record_version": 1,
-            "migration_id": "0.1.15-to-0.1.16",
-            "from_polaris_version": "0.1.15",
-            "to_polaris_version": "0.1.16",
+            "migration_id": "0.1.16-to-0.1.17",
+            "from_polaris_version": "0.1.16",
+            "to_polaris_version": "0.1.17",
             "from_workflow_version": "0.1.2",
             "to_workflow_version": "0.1.2",
             "status": "IN_PROGRESS",
@@ -1338,7 +1421,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.15-to-0.1.16.json",
+            / "MIG-0.1.16-to-0.1.17.json",
             record,
         )
         append_jsonl(
@@ -1351,7 +1434,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.16",
+                "polaris_version": "0.1.17",
                 "workflow_version": "0.1.2",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
@@ -1359,7 +1442,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.15-to-0.1.16",
+                "migration_id": "0.1.16-to-0.1.17",
             },
         )
 
@@ -1371,7 +1454,7 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
-        self.set_protocol_version("0.1.15")
+        self.set_protocol_version("0.1.16")
         vendor(ROOT, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
@@ -1379,7 +1462,7 @@ class PolarisCoreTests(unittest.TestCase):
             {
                 "lock_version": 1,
                 "kind": "polaris_migration",
-                "migration_id": "0.1.15-to-0.1.16",
+                "migration_id": "0.1.16-to-0.1.17",
                 "task_id": "TASK-0001",
                 "hostname": socket.gethostname(),
                 "pid": 2147483647,
@@ -1597,6 +1680,14 @@ class PolarisCoreTests(unittest.TestCase):
                 / "code-intelligence"
                 / "codegraph.json"
             ).is_file()
+        )
+        self.assertEqual(
+            (self.repo / "tools" / "polaris" / "pyproject.toml").read_bytes(),
+            (ROOT / "pyproject.toml").read_bytes(),
+        )
+        self.assertEqual(
+            (self.repo / "tools" / "polaris" / "polaris_cli.py").read_bytes(),
+            (ROOT / "polaris_cli.py").read_bytes(),
         )
         result = validate_project(self.repo)
         self.assertEqual(result["active_tasks"], 1)
