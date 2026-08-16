@@ -76,10 +76,16 @@ polaris vendor C:\path\to\target-repo --force
 
 ```powershell
 python -m pip install ./tools/polaris
-polaris init-project my-project --repo .
+polaris init-project
 ```
 
-该命令创建 `.polaris/project.json`、`.polaris/task-locations.json`、冻结的 `.polaris/workflow.json` 和结构化 `.polaris/project-index.json`；如果仓库没有 `AGENTS.md` 或 `CLAUDE.md`，还会创建对应的最小仓库规则。生成的 `CLAUDE.md` 通过 `@AGENTS.md` 导入共享规则，再补充 Claude Code 专用的 Skill 与非 fork worker 约束。初始化同时确保 `.gitignore` 包含 `.polaris/tasks/*/runtime/` 与 `.polaris/archive/tasks/*/runtime/`。
+该命令默认使用目标仓库目录名作为 `project_id`，并创建 `.polaris/project.json`、`.polaris/task-locations.json`、冻结的 `.polaris/workflow.json` 和结构化 `.polaris/project-index.json`；如果仓库没有 `AGENTS.md` 或 `CLAUDE.md`，还会创建对应的最小仓库规则。生成的 `CLAUDE.md` 通过 `@AGENTS.md` 导入共享规则，再补充 Claude Code 专用的 Skill 与非 fork worker 约束。初始化同时确保 `.gitignore` 包含 `.polaris/tasks/*/runtime/` 与 `.polaris/archive/tasks/*/runtime/`。
+
+`project_id` 和 `--repo` 都是可选参数。需要覆盖默认项目标识或从其他目录操作时，可以运行：
+
+```powershell
+polaris init-project my-project --repo C:\path\to\target-repo
+```
 
 `.polaris/tasks/TASK-0001/...` 是跨 artifact 使用的稳定逻辑地址。实际目录由 `task-locations.json` 解析；新任务默认位于同名目录，因此通常看不出差异。脚本不得用字符串直接拼接任务路径。即使未来把完整任务目录移动到 `.polaris/archive/tasks/TASK-0001`，已有 state、handoff、Working Set、progress 和 Exploration 仍保留原逻辑地址，由解析层定位实际文件。当前版本只提供这层架构准备，不提供归档或恢复命令。
 

@@ -1,16 +1,124 @@
 # Polaris
 
-完整的首次接入、日常提需求、独立 Implementation、进度查询、Review、恢复与升级流程见 [Polaris 使用说明书](docs/USAGE.md)。
-
-Polaris 是一套运行在受支持 Coding Agent 宿主之上的、以仓库为权威状态的软件工程工作流系统。当前内置 Codex 与 Claude Code 适配器。
-
-它将模糊需求转换为冻结的 Work Item，通过声明式 Workflow、独立实现、可查询进度、独立对抗审查、可复现验证和文档同步，约束 AI 按可审计、可恢复的工程流程工作。
-
-Polaris 采用显式启用：普通工程需求不会自动进入 Polaris；用户必须按当前宿主适配器的语法主动调用 `engineering-task`（Codex 为 `$engineering-task`，Claude Code 为 `/engineering-task`）。其他阶段 Skills 只能由已启动的工作流在合法节点分派。
-
 > 当前版本：`0.1.18`（开发中）
 
-## 核心目标
+## Polaris 为什么存在
+
+AI 很擅长快速生成代码，但真实的软件工程并不只需要“写出代码”。一个需求还要被准确理解、形成可执行计划、经过独立审查和验证，并在中断或换会话后继续推进。
+
+仅靠聊天记录完成这些工作，常见问题是：
+
+- 需求和验收标准在实现过程中发生漂移；
+- AI 写完代码后自行判断“已经完成”，缺少独立审查与可复现证据；
+- 计划、代码、测试和文档不同步；
+- 会话中断后，新的 Agent 不知道任务做到哪里、为什么这样做；
+- 用户只能反复追问进度，难以看到可信、统一的项目状态。
+
+Polaris 的意义，是把 AI 编程从一次性的代码生成，升级为一套**可审计、可验证、可恢复的软件工程流程**。
+
+它把需求、计划、实现、Review、Validation 和任务状态保存在代码仓库中，让仓库成为事实来源；再用确定性的工作流门禁约束 AI：谁负责实现，谁独立审查，什么证据足以通过，以及任务何时才能真正关闭。
+
+最终，用户得到的不是一句“代码写好了”，而是一项能够回答以下问题的工程成果：
+
+- 做什么，为什么做，验收标准是什么？
+- 当前进行到哪一步，还有什么没有完成？
+- 哪些代码、测试和文档发生了变化？
+- 谁审查过，发现了什么，问题是否已经解决？
+- 验证能否复现，任务为什么可以关闭？
+- 换一个会话后，能否从仓库继续工作？
+
+Polaris 当前运行在受支持的 Coding Agent 宿主之上，内置 Codex 与 Claude Code 适配器。它适合需要跨多个步骤完成、值得 Review、或需要保留决策与验证记录的工程任务；对于简单问答和无需工程闭环的小修改，可以继续直接使用 Coding Agent。
+
+## 用户如何使用
+
+Polaris 分为一次性的项目接入，以及日常的工程任务使用。完整说明见 [Polaris 使用说明书](docs/USAGE.md)。
+
+### 1. 准备环境
+
+你需要：
+
+- Git；
+- Python 3.10 或更高版本；
+- Codex 或 Claude Code；
+- 一个已经初始化 Git 的目标仓库。
+
+Polaris v0.1 的运行时代码只使用 Python 标准库，不需要额外的运行时依赖。
+
+### 2. 将 Polaris 接入项目
+
+在 Polaris 源仓库安装 CLI，并把当前版本写入目标仓库：
+
+```powershell
+python -m pip install .
+polaris vendor C:\path\to\target-repo
+```
+
+然后进入目标仓库，安装项目锁定的 Polaris 版本并初始化：
+
+```powershell
+cd C:\path\to\target-repo
+python -m pip install ./tools/polaris
+polaris init-project
+polaris doctor --repo .
+```
+
+`doctor` 用于检查环境、安装文件、项目状态和任务记录；它只诊断，不会自动修改项目。
+
+接入后，请将生成的 `.agents/`、`.claude/`、`tools/polaris/` 和 `.polaris/` 等耐久文件提交到 Git。这样团队成员和后续会话使用的是同一套版本与事实状态。
+
+### 3. 在 Coding Agent 中提出工程需求
+
+从目标仓库根目录新开一个 Codex 或 Claude Code 会话，描述目标、背景和约束，并显式启动 Polaris：
+
+Codex：
+
+```text
+$engineering-task 为订单创建接口增加幂等保护，补充测试和使用文档。
+```
+
+Claude Code：
+
+```text
+/engineering-task 为订单创建接口增加幂等保护，补充测试和使用文档。
+```
+
+普通自然语言请求不会自动进入 Polaris。显式调用可以避免轻量问题被意外升级成完整工程流程；其他阶段 Skills 只会由已经启动的工作流在合法节点调用。
+
+### 4. 确认需求与执行方案
+
+Polaris 会先把你的描述整理为带验收标准的 Work Item，并在开始实现前展示关键范围、风险与计划。你需要确认需求是否准确；如果信息不足，Polaris 会在这一阶段提出澄清问题。
+
+确认后，Polaris 按任务风险采用不同严谨度：
+
+- `R0`：适合低风险、范围清晰的小任务；
+- `R1`：默认工程闭环，包含独立 Review 和 Validation；
+- `R2`：适合高风险变更，要求更严格的证据和双 Reviewer。
+
+### 5. 查看进度并参与决策
+
+执行期间可以直接询问当前任务的进度、已完成步骤、剩余工作和 blocker。Polaris 从仓库状态与实时进度快照回答，而不是依赖聊天记忆。
+
+当需求变化、Review 连续失败、验证发现计划问题，或出现需要业务判断的 blocker 时，Polaris 会暂停并把决定交还给用户，不会擅自改变目标。
+
+### 6. 恢复、检查与完成任务
+
+换会话或中断后，可以从仓库恢复任务：
+
+```powershell
+polaris recover TASK-0001 --repo .
+```
+
+需要检查项目或单个任务时运行：
+
+```powershell
+polaris doctor --repo .
+polaris validate-project --repo .
+polaris validate-task TASK-0001 --repo .
+```
+
+任务只有在实现、文档同步、独立 Review 和 Validation 的门禁全部满足后，才能进入 `CLOSED`。Agent 不能绕过门禁自行宣布完成。
+
+## Polaris 如何工作
 
 Polaris 希望让 AI 从“生成代码”转向“可靠参与软件工程”：
 
@@ -242,10 +350,10 @@ polaris migrate --repo .
 在目标仓库中运行：
 
 ```powershell
-polaris init-project my-project --repo .
+polaris init-project
 ```
 
-这会创建 `.polaris/project.json`、`.polaris/task-locations.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 或 `CLAUDE.md` 时还会创建对应的最小仓库规则，并在 `.gitignore` 中加入活动与未来归档任务的 `runtime/` 忽略规则。
+这会默认使用目标仓库目录名作为 `project_id`，并创建 `.polaris/project.json`、`.polaris/task-locations.json`、冻结的 `.polaris/workflow.json` 和恢复索引；目标仓库没有 `AGENTS.md` 或 `CLAUDE.md` 时还会创建对应的最小仓库规则，并在 `.gitignore` 中加入活动与未来归档任务的 `runtime/` 忽略规则。需要覆盖默认项目标识或从其他目录操作时，仍可使用 `polaris init-project my-project --repo C:\path\to\target-repo`。
 
 ### 3. 初始化任务
 

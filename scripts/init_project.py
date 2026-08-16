@@ -24,7 +24,8 @@ from internal.task_layout import (
 )
 
 
-def initialize(repo: Path, project_id: str) -> dict[str, str]:
+def initialize(repo: Path, project_id: str | None = None) -> dict[str, str]:
+    project_id = project_id or repo.name
     root = protocol_root(repo)
     polaris = repo / ".polaris"
     if polaris.exists():
@@ -61,11 +62,16 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("project_id")
+    parser.add_argument(
+        "project_id",
+        nargs="?",
+        help="project identifier (default: target repository directory name)",
+    )
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    return run_main(lambda: initialize(args.repo.resolve(), args.project_id), args.json)
+    repo = args.repo.resolve()
+    return run_main(lambda: initialize(repo, args.project_id), args.json)
 
 
 if __name__ == "__main__":

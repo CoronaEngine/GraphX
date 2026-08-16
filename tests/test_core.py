@@ -159,6 +159,16 @@ class PolarisCoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_init_project_defaults_to_repository_directory_name(self) -> None:
+        """init-project 无参数时使用目标仓库目录名，同时保留显式项目标识。"""
+        repo = self.repo / "default-project-id"
+        repo.mkdir()
+        init_project(repo)
+        project = read_json(repo / ".polaris" / "project.json")
+        index = read_json(repo / ".polaris" / "project-index.json")
+        self.assertEqual(project["project_id"], "default-project-id")
+        self.assertEqual(index["project_id"], "default-project-id")
+
     @property
     def task(self) -> Path:
         return self.repo / ".polaris" / "tasks" / "TASK-0001"
