@@ -189,6 +189,35 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(events["ACCEPT_REVIEW"]["to"], "VALIDATING")
         self.assertEqual(events["PASS_AND_CLOSE"]["to"], "CLOSED")
 
+    def test_workflow_surfaces_use_simplified_events(self) -> None:
+        """执行 Skills 与恢复入口不再指示已删除的状态或事件。"""
+        surfaces = [
+            ROOT / "skills" / "engineering-task" / "SKILL.md",
+            ROOT / "skills" / "implementation" / "SKILL.md",
+            ROOT / "skills" / "documentation-sync" / "SKILL.md",
+            ROOT / "skills" / "validation" / "SKILL.md",
+            ROOT / "scripts" / "internal" / "recovery_protocol.py",
+            ROOT / "scripts" / "recover_task.py",
+            ROOT / "hosts" / "claude-code" / "agents" / "polaris-implementer.md",
+        ]
+        retired = {
+            "DISPATCH_IMPLEMENTATION",
+            "FINISH_IMPLEMENTATION",
+            "SYNC_DOCS",
+            "START_VALIDATION",
+            '"IMPLEMENTED"',
+            '"DOCS_SYNCED"',
+            '"REVIEWED"',
+        }
+        for path in surfaces:
+            text = path.read_text(encoding="utf-8")
+            for value in retired:
+                self.assertNotIn(value, text, path.relative_to(ROOT).as_posix())
+        validation = (ROOT / "skills" / "validation" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("PASS_AND_CLOSE", validation)
+
     def freeze_work_item(self) -> None:
         path = self.task / "revisions" / "work-item-r001.json"
         value = read_json(path)
@@ -353,6 +382,14 @@ class PolarisCoreTests(unittest.TestCase):
                 None,
                 None,
             )
+
+    def test_recovery_allows_implementing_without_live_progress(self) -> None:
+        """Fresh-session 恢复把缺失进度视为无遥测，而不是流程 blocker。"""
+        self.enter_implementing()
+        self.assertFalse((self.task / "runtime" / "progress.json").exists())
+        recovered = recover(self.repo, "TASK-0001")
+        self.assertIsNone(recovered["live_implementation_progress"])
+        self.assertIn("START_REVIEW", recovered["recommended_next_action"])
 
     def implementation_value(
         self, base: str, head: str, session_id: str
@@ -3141,8 +3178,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "POLARIS_STARTED",
                 "IMPLEMENTATION_SESSION_STARTED",
                 "IMPLEMENTATION_PROGRESS",
-                "IMPLEMENTATION_FINISHED",
-                "DOCS_SYNCED",
+                "REVIEW_HANDOFF_READY",
                 "REVIEW_SESSION_STARTED",
                 "REVIEW_ACCEPTED",
                 "REVIEW_REJECTED",

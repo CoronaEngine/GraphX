@@ -189,6 +189,18 @@ class CodeGraphTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     self.assertIn("codegraph sync", mutated, path.name)
 
+    def test_stage_surfaces_do_not_require_unused_provider_records(self) -> None:
+        """未执行 Provider 操作的阶段明确省略 record，不制造 UNAVAILABLE 噪声。"""
+        for relative in [
+            "skills/architecture-planning/SKILL.md",
+            "skills/implementation/SKILL.md",
+            "skills/documentation-sync/SKILL.md",
+            "skills/adversarial-review/SKILL.md",
+            "skills/code-intelligence/SKILL.md",
+        ]:
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("omit the Code Intelligence record", text, relative)
+
     def adapter_functions(self) -> tuple[object, object]:
         adapter_path = SCRIPTS / "internal" / "codegraph_adapter.py"
         self.assertTrue(
