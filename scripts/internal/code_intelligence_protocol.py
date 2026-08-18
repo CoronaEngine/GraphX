@@ -623,10 +623,24 @@ def _validate_v2_record_value(
         if not status_check_success:
             raise RuleFailure("CURRENT_AT_CHECK requires a successful status check")
     if sync is not None and sync["status"] == "SUCCESS":
-        if not status_check_success or status_check["phase"] != "POST_SYNC":
+        if (
+            freshness["status"] != "CURRENT_AT_CHECK"
+            or not status_check_success
+            or status_check["phase"] != "POST_SYNC"
+        ):
             raise RuleFailure("successful sync requires a successful POST_SYNC status check")
-    elif status_check is not None and status_check["phase"] == "POST_SYNC":
-        raise RuleFailure("POST_SYNC status check requires successful sync")
+    if sync is not None and sync["status"] == "FAILED":
+        if freshness["status"] != "INDEX_STALE" or not any(
+            point["reason"] == "SYNC_FAILED" for point in freshness["stale_points"]
+        ):
+            raise RuleFailure("failed sync requires INDEX_STALE freshness with SYNC_FAILED")
+        if "SYNC_ACKNOWLEDGED" in freshness["basis"]:
+            raise RuleFailure("failed sync cannot claim SYNC_ACKNOWLEDGED")
+    if status_check is not None and status_check["phase"] == "POST_SYNC":
+        if sync is None or sync["status"] not in {"SUCCESS", "FAILED"}:
+            raise RuleFailure("POST_SYNC status check requires an attempted sync")
+        if sync["status"] == "FAILED" and sync["response_sha256"] is None:
+            raise RuleFailure("POST_SYNC status check requires a hashed sync attempt")
     if value["status"] == "UNAVAILABLE" and status_check_success:
         raise RuleFailure("unavailable Code Intelligence record cannot claim a successful status check")
     _validate_source_fallbacks(repo, value, base, head)

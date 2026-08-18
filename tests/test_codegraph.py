@@ -512,14 +512,161 @@ class CodeGraphTests(unittest.TestCase):
                     validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
                 )
 
-    def test_sync_success_requires_post_sync_check_for_every_freshness_status(self) -> None:
+    def test_sync_results_project_to_v2_records_without_false_success(self) -> None:
+        """A sync command is successful only after a healthy post-sync status."""
+        self.initialize_task()
+        (self.repo / ".codegraph").mkdir()
+        _, sync_if_needed = self.adapter_functions()
+        descriptor = load_providers(ROOT)["codegraph"]
+        pending = json.loads(healthy_status(self.repo))
+        pending["pendingChanges"]["modified"] = 1
+
+        def runner_for(
+            responses: list[subprocess.CompletedProcess[str]],
+        ) -> object:
+            iterator = iter(responses)
+            return lambda *args, **kwargs: next(iterator)
+
+        def project(
+            result: dict[str, object], status_check: dict[str, object]
+        ) -> dict[str, object]:
+            freshness = result["freshness"]
+            sync = result["sync"]
+            value = self.v2_record()
+            value.update({
+                "status": "USED" if sync["status"] == "SUCCESS" else "FAILED",
+                "provider": {
+                    "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                    "available_operations": ["status", "sync"],
+                },
+                "status_check": status_check,
+                "sync": sync,
+                "freshness": {
+                    "status": freshness["status"], "checked_at": freshness["checked_at"],
+                    "basis": freshness["basis"], "stale_points": freshness["stale_points"],
+                },
+                "source_fallbacks": ([{
+                    "action": "SEARCH_SOURCE", "path": None,
+                    "observed_sha256": None, "base_commit": None,
+                    "head_commit": None, "diff_hash": None,
+                    "purpose": "recover stale CodeGraph evidence",
+                }] if freshness["stale_points"] else []),
+            })
+            return value
+
+        malformed_post = sync_if_needed(
+            self.repo,
+            descriptor,
+            runner=runner_for([
+                completed(json.dumps(pending)),
+                completed("synced\n"),
+                completed("{not json"),
+            ]),
+        )
+        self.assertEqual(malformed_post["sync"]["status"], "FAILED")
+        self.assertEqual(malformed_post["freshness"]["status"], "INDEX_STALE")
+        self.assertEqual(malformed_post["freshness"]["error"], "CodeGraph post-sync status is not current")
+        self.assertIn("SYNC_FAILED", [
+            point["reason"] for point in malformed_post["freshness"]["stale_points"]
+        ])
+        self.assertEqual(
+            validate_record_value(
+                self.repo,
+                "TASK-0001",
+                project(malformed_post, {
+                    "status": "FAILED", "phase": "POST_SYNC",
+                    "response_sha256": malformed_post["freshness"]["status_response_sha256"],
+                    "error": malformed_post["freshness"]["error"],
+                }),
+                ROOT,
+            )["record_version"],
+            2,
+        )
+
+        unhealthy = json.loads(healthy_status(self.repo))
+        unhealthy["index"]["state"] = "failed"
+        unhealthy_post = sync_if_needed(
+            self.repo,
+            descriptor,
+            runner=runner_for([
+                completed(json.dumps(pending)),
+                completed("synced\n"),
+                completed(json.dumps(unhealthy)),
+            ]),
+        )
+        self.assertEqual(unhealthy_post["sync"]["status"], "FAILED")
+        self.assertEqual(unhealthy_post["freshness"]["status"], "INDEX_STALE")
+        self.assertEqual(unhealthy_post["freshness"]["error"], "CodeGraph post-sync status is not current")
+        self.assertEqual(
+            validate_record_value(
+                self.repo,
+                "TASK-0001",
+                project(unhealthy_post, {
+                    "status": "SUCCESS", "phase": "POST_SYNC",
+                    "response_sha256": unhealthy_post["freshness"]["status_response_sha256"],
+                    "error": None,
+                }),
+                ROOT,
+            )["record_version"],
+            2,
+        )
+
+        healthy_post = sync_if_needed(
+            self.repo,
+            descriptor,
+            runner=runner_for([
+                completed(json.dumps(pending)),
+                completed("synced\n"),
+                completed(healthy_status(self.repo)),
+            ]),
+        )
+        self.assertEqual(healthy_post["sync"]["status"], "SUCCESS")
+        self.assertEqual(
+            validate_record_value(
+                self.repo,
+                "TASK-0001",
+                project(healthy_post, {
+                    "status": "SUCCESS", "phase": "POST_SYNC",
+                    "response_sha256": healthy_post["freshness"]["status_response_sha256"],
+                    "error": None,
+                }),
+                ROOT,
+            )["record_version"],
+            2,
+        )
+
+        raw_failure = sync_if_needed(
+            self.repo,
+            descriptor,
+            runner=runner_for([
+                completed(json.dumps(pending)),
+                completed("sync failed", returncode=1),
+            ]),
+        )
+        self.assertEqual(raw_failure["sync"]["status"], "FAILED")
+        self.assertEqual(raw_failure["freshness"]["status"], "INDEX_STALE")
+        self.assertEqual(
+            validate_record_value(
+                self.repo,
+                "TASK-0001",
+                project(raw_failure, {
+                    "status": "SUCCESS", "phase": "STAGE_ENTRY",
+                    "response_sha256": raw_failure["freshness"]["status_response_sha256"],
+                    "error": None,
+                }),
+                ROOT,
+            )["record_version"],
+            2,
+        )
+
+    def test_noncurrent_post_sync_check_downgrades_sync_evidence(self) -> None:
         self.initialize_task()
         fallback = {
             "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
             "base_commit": None, "head_commit": None, "diff_hash": None,
             "purpose": "recover stale CodeGraph index",
         }
-        for status, reason in (("INDEX_STALE", "INDEX_FAILED"), ("NOT_VERIFIED", "STATUS_UNREADABLE")):
+        for status, reason in (("INDEX_STALE", "INDEX_FAILED"),):
             with self.subTest(status=status):
                 value = self.v2_record()
                 value.update({
@@ -548,6 +695,18 @@ class CodeGraphTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuleFailure, "POST_SYNC status check"):
                     validate_record_value(self.repo, "TASK-0001", value, ROOT)
                 value["status_check"]["phase"] = "POST_SYNC"
+                with self.assertRaisesRegex(RuleFailure, "successful sync requires"):
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)
+                value["sync"] = {
+                    "status": "FAILED", "response_sha256": "0" * 64,
+                    "error": "CodeGraph post-sync status is not current",
+                }
+                value["status"] = "FAILED"
+                value["freshness"]["basis"] = ["STATUS_JSON"]
+                value["freshness"]["stale_points"].append({
+                    "scope": "INDEX", "path": None, "reason": "SYNC_FAILED",
+                    "fallback": "SEARCH_SOURCE", "observed_sha256": None,
+                })
                 self.assertEqual(
                     validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
                 )
@@ -572,7 +731,7 @@ class CodeGraphTests(unittest.TestCase):
             },
             "source_fallbacks": [fallback],
         })
-        with self.assertRaisesRegex(RuleFailure, "POST_SYNC status check requires successful sync"):
+        with self.assertRaisesRegex(RuleFailure, "POST_SYNC status check requires an attempted sync"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
 
     def test_official_descriptor_uses_explore_status_and_sync(self) -> None:
@@ -853,7 +1012,7 @@ class CodeGraphTests(unittest.TestCase):
             result["freshness"]["stale_points"][-1]["reason"], "SYNC_FAILED"
         )
 
-    def test_unhealthy_recheck_preserves_index_reason_and_adds_sync_failure(self) -> None:
+    def test_unhealthy_recheck_downgrades_sync_and_preserves_index_reason(self) -> None:
         _, sync_if_needed = self.adapter_functions()
         (self.repo / ".codegraph").mkdir()
         pending = json.loads(healthy_status(self.repo))
@@ -880,7 +1039,10 @@ class CodeGraphTests(unittest.TestCase):
         )
 
         self.assertEqual([call[1] for call in calls], ["status", "sync", "status"])
-        self.assertEqual(result["sync"]["status"], "SUCCESS")
+        self.assertEqual(result["sync"]["status"], "FAILED")
+        self.assertEqual(
+            result["sync"]["error"], "CodeGraph post-sync status is not current"
+        )
         self.assertEqual(result["freshness"]["status"], "INDEX_STALE")
         self.assertEqual(
             [point["reason"] for point in result["freshness"]["stale_points"]],

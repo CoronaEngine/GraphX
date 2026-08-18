@@ -464,7 +464,7 @@ def _sync_failed(
             "status": "INDEX_STALE",
             "stale_points": points,
             "needs_sync": False,
-            "error": freshness["error"] or sync["error"],
+            "error": sync["error"] or freshness["error"],
         },
         "sync": sync,
     }
@@ -514,6 +514,13 @@ def sync_if_needed(
         repo, descriptor, runner=runner, timeout_seconds=status_timeout
     )
     if rechecked["status"] != "CURRENT_AT_CHECK" or rechecked["needs_sync"]:
-        return _sync_failed(rechecked, sync)
+        return _sync_failed(
+            rechecked,
+            _sync_result(
+                "FAILED",
+                response_sha256,
+                "CodeGraph post-sync status is not current",
+            ),
+        )
     rechecked["basis"] = [*rechecked["basis"], "SYNC_ACKNOWLEDGED"]
     return {"freshness": rechecked, "sync": sync}
