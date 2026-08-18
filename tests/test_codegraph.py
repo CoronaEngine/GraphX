@@ -369,6 +369,44 @@ class CodeGraphTests(unittest.TestCase):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
         )
 
+    def test_current_freshness_requires_a_real_non_none_evidence_path(self) -> None:
+        self.initialize_task()
+        value = self.v2_record()
+        value.update({
+            "status": "SKIPPED",
+            "freshness": {
+                "status": "CURRENT_AT_CHECK",
+                "checked_at": "2026-08-18T00:00:00Z",
+                "basis": ["NONE"],
+                "stale_points": [],
+            },
+        })
+        with self.assertRaisesRegex(RuleFailure, "basis NONE is reserved"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["freshness"]["basis"] = ["CONNECT_RECONCILIATION"]
+        with self.assertRaisesRegex(RuleFailure, "CURRENT_AT_CHECK requires"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["freshness"]["basis"] = ["STATUS_JSON"]
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
+        value.update({
+            "status": "USED",
+            "provider": {
+                "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                "available_operations": ["explore"],
+            },
+            "queries": [{
+                "id": "CIQ-001", "operation": "explore", "purpose": "confirm connection",
+                "status": "SUCCESS", "summary": "connected", "symbols": [],
+                "response_sha256": "0" * 64, "error": None,
+            }],
+        })
+        value["freshness"]["basis"] = ["CONNECT_RECONCILIATION"]
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
+
     def test_official_descriptor_uses_explore_status_and_sync(self) -> None:
         descriptor = load_providers(ROOT)["codegraph"]
         self.assertEqual(descriptor["provider_version"], 2)

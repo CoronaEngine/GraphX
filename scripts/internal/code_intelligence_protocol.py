@@ -516,8 +516,29 @@ def _validate_v2_freshness(
         if _matching_fallback(fallbacks, "SEARCH_SOURCE", None, None) is None:
             raise RuleFailure("stale point requires a matching source fallback")
     status = freshness["status"]
+    basis = freshness["basis"]
+    if status != "UNAVAILABLE" and "NONE" in basis:
+        raise RuleFailure("freshness basis NONE is reserved for UNAVAILABLE")
     if status == "CURRENT_AT_CHECK" and points:
         raise RuleFailure("CURRENT_AT_CHECK cannot contain stale points")
+    if status == "CURRENT_AT_CHECK" and "STATUS_JSON" not in basis:
+        connect_response = any(
+            query["status"] == "SUCCESS" and query["response_sha256"] is not None
+            for query in value["queries"]
+        )
+        sync_acknowledged = (
+            value["sync"] is not None
+            and value["sync"]["status"] == "SUCCESS"
+            and "SYNC_ACKNOWLEDGED" in basis
+        )
+        if not (
+            sync_acknowledged
+            or ("CONNECT_RECONCILIATION" in basis and connect_response)
+        ):
+            raise RuleFailure(
+                "CURRENT_AT_CHECK requires STATUS_JSON, successful sync acknowledgement, "
+                "or confirmed connection response evidence"
+            )
     if status == "PARTIAL_STALE" and (not file_points or index_points):
         raise RuleFailure("PARTIAL_STALE requires only file stale points")
     if status == "INDEX_STALE" and not index_points:
