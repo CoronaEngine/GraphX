@@ -27,14 +27,9 @@ from .task_layout import code_intelligence_record_path, state_path
 
 CONFIG_PATH = Path(".polaris/code-intelligence.json")
 OPERATIONS = {
-    "symbol_search",
-    "context",
-    "dependencies",
-    "call_graph",
-    "impact",
-    "review_context",
-    "refresh_files",
-    "refresh_workspace",
+    "explore",
+    "status",
+    "sync",
 }
 STAGE_NAMES = {
     "PLANNING": "planning",
@@ -95,8 +90,21 @@ def load_providers(root: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _project_marker_path(repo: Path, marker: str) -> Path:
+    path = Path(marker)
+    if path.is_absolute() or len(path.parts) != 1 or path.parts[0] in {".", ".."}:
+        raise RuleFailure(f"unsafe Code Intelligence project marker: {marker}")
+    target = repo / path
+    if target.is_symlink():
+        raise RuleFailure(f"Code Intelligence project marker must not be a symlink: {target}")
+    return target
+
+
 def select_provider(
-    repo: Path, available_tools: Iterable[str], root: Path | None = None
+    repo: Path,
+    available_tools: Iterable[str],
+    root: Path | None = None,
+    available_executables: Iterable[str] = (),
 ) -> dict[str, Any] | None:
     root = protocol_root(repo) if root is None else root
     config = load_config(repo, root)
@@ -110,21 +118,26 @@ def select_provider(
         if provider_id not in configured_priority
     ]
     available = set(available_tools)
+    executables = set(available_executables)
     for provider_id in priority:
         descriptor = providers.get(provider_id)
         if descriptor is None:
             raise RuleFailure(f"unknown configured Code Intelligence provider: {provider_id}")
+        if not _project_marker_path(repo, descriptor["project_marker"]).is_dir():
+            continue
         operations = {
             operation: tool
             for operation, tool in descriptor["operations"].items()
             if tool in available
         }
-        if operations:
+        cli_available = descriptor["cli"]["executable"] in executables
+        if operations or cli_available:
             return {
                 "provider_id": provider_id,
                 "provider_version": descriptor["provider_version"],
                 "transport": descriptor["transport"],
                 "operations": operations,
+                "cli_available": cli_available,
             }
     return None
 
@@ -149,7 +162,7 @@ def validate_static_configuration(repo: Path, root: Path | None = None) -> dict[
 def add_provider(
     repo: Path, provider_id: str, root: Path | None = None
 ) -> dict[str, Any]:
-    """Enable and prioritize one installed Provider without probing its runtime."""
+    """Configure one Provider without probing or initializing its runtime."""
     root = protocol_root(repo) if root is None else root
     validate_static_configuration(repo, root)
     providers = load_providers(root)
@@ -182,7 +195,8 @@ def add_provider(
     return {
         "message": (
             f"added {providers[provider_id]['display_name']} to Polaris Code Intelligence; "
-            "runtime MCP availability will be checked by the next workflow; "
+            "Provider initialization remains the user's decision; "
+            "runtime availability will be checked by the next workflow; "
             "fallback remains enabled"
         ),
         "provider": provider_id,
@@ -326,10 +340,15 @@ def validate_record_value(
         descriptor = descriptors.get(provider["id"])
         if (
             descriptor is None
-            or provider["descriptor_version"] != descriptor["provider_version"]
-            or provider["transport"] != descriptor["transport"]
-            or not set(provider["available_operations"]).issubset(
-                descriptor["operations"]
+            or (
+                value["record_version"] != 1
+                and (
+                    provider["descriptor_version"] != descriptor["provider_version"]
+                    or provider["transport"] != descriptor["transport"]
+                    or not set(provider["available_operations"]).issubset(
+                        descriptor["operations"]
+                    )
+                )
             )
         ):
             raise RuleFailure("Code Intelligence record names an invalid provider capability set")

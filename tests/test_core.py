@@ -1541,18 +1541,19 @@ class PolarisCoreTests(unittest.TestCase):
         )
 
     def test_code_intelligence_auto_detects_available_operations_and_can_be_disabled(self) -> None:
-        """可选代码情报按 MCP 工具能力发现；缺失或禁用时不产生硬依赖。"""
+        """已初始化的可选代码情报按 MCP 工具能力发现；缺失或禁用时不产生硬依赖。"""
+        (self.repo / ".codegraph").mkdir()
         selected = select_provider(
             self.repo,
-            ["codegraph_symbol_search", "codegraph_analyze_impact"],
+            ["codegraph_explore", "codegraph_status"],
             ROOT,
         )
         self.assertEqual(selected["provider_id"], "codegraph")
         self.assertEqual(
             selected["operations"],
             {
-                "symbol_search": "codegraph_symbol_search",
-                "impact": "codegraph_analyze_impact",
+                "explore": "codegraph_explore",
+                "status": "codegraph_status",
             },
         )
         self.assertIsNone(select_provider(self.repo, [], ROOT))
@@ -1561,14 +1562,14 @@ class PolarisCoreTests(unittest.TestCase):
         config["mode"] = "disabled"
         write_json_atomic(self.repo / ".polaris" / "code-intelligence.json", config)
         self.assertIsNone(
-            select_provider(self.repo, ["codegraph_symbol_search"], ROOT)
+            select_provider(self.repo, ["codegraph_explore"], ROOT)
         )
         self.assertEqual(
             validate_static_configuration(self.repo, ROOT)["mode"], "disabled"
         )
 
-    def test_code_intelligence_record_is_compact_safe_and_immutable(self) -> None:
-        """精简记录绑定任务与提交，拒绝越界符号路径并且写入后不可覆盖。"""
+    def test_code_intelligence_v1_record_is_compact_safe_and_immutable(self) -> None:
+        """v1 精简记录升级后仍可读取，并绑定任务、提交和安全路径。"""
         base = run_git(self.repo, "rev-parse", "HEAD")
         value = read_json(
             ROOT / "templates" / "task-sources" / "code-intelligence-record.json"

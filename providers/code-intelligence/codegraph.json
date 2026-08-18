@@ -1,42 +1,25 @@
 {
-    "provider_version": 1,
+    "provider_version": 2,
     "provider_id": "codegraph",
     "display_name": "CodeGraph",
+    "implementation": "https://github.com/colbymchenry/codegraph",
+    "project_marker": ".codegraph",
     "transport": "mcp",
     "file_extensions": [
-        ".c",
-        ".cc",
-        ".cpp",
-        ".cxx",
-        ".h",
-        ".hh",
-        ".hpp",
-        ".hxx",
-        ".m",
-        ".mm",
-        ".py",
-        ".rs",
-        ".go",
-        ".java",
-        ".kt",
-        ".kts",
-        ".js",
-        ".jsx",
-        ".ts",
-        ".tsx",
-        ".cs",
-        ".swift",
-        ".rb",
-        ".php"
+        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".py", ".go", ".rs",
+        ".java", ".cs", ".php", ".rb", ".c", ".h", ".cpp", ".hpp",
+        ".cc", ".m", ".mm", ".swift", ".kt", ".kts", ".scala", ".sc",
+        ".dart", ".svelte", ".vue", ".astro", ".liquid", ".pas", ".dpr",
+        ".dpk", ".lpr", ".lua", ".r", ".luau"
     ],
     "operations": {
-        "symbol_search": "codegraph_symbol_search",
-        "context": "codegraph_get_ai_context",
-        "dependencies": "codegraph_get_dependency_graph",
-        "call_graph": "codegraph_get_call_graph",
-        "impact": "codegraph_analyze_impact",
-        "review_context": "codegraph_pr_context",
-        "refresh_files": "codegraph_index_files",
-        "refresh_workspace": "codegraph_reindex_workspace"
+        "explore": "codegraph_explore",
+        "status": "codegraph_status"
+    },
+    "cli": {
+        "executable": "codegraph",
+        "explore_args": ["explore"],
+        "status_args": ["status", "--json"],
+        "sync_args": ["sync", "--quiet"]
     }
 }

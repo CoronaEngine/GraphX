@@ -6,20 +6,31 @@
         "provider_version",
         "provider_id",
         "display_name",
+        "implementation",
+        "project_marker",
         "transport",
         "file_extensions",
-        "operations"
+        "operations",
+        "cli"
     ],
     "additionalProperties": false,
     "properties": {
         "provider_version": {
-            "const": 1
+            "const": 2
         },
         "provider_id": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]*$"
         },
         "display_name": {
+            "type": "string",
+            "minLength": 1
+        },
+        "implementation": {
+            "type": "string",
+            "minLength": 1
+        },
+        "project_marker": {
             "type": "string",
             "minLength": 1
         },
@@ -39,14 +50,35 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "symbol_search": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"},
-                "context": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"},
-                "dependencies": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"},
-                "call_graph": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"},
-                "impact": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"},
-                "review_context": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"},
-                "refresh_files": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"},
-                "refresh_workspace": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"}
+                "explore": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"},
+                "status": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"},
+                "sync": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"}
+            }
+        },
+        "cli": {
+            "type": "object",
+            "required": ["executable", "explore_args", "status_args", "sync_args"],
+            "additionalProperties": false,
+            "properties": {
+                "executable": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "explore_args": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1}
+                },
+                "status_args": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1}
+                },
+                "sync_args": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1}
+                }
             }
         }
     }
