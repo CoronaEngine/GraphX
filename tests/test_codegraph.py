@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib
 import hashlib
 import io
@@ -245,7 +246,7 @@ class CodeGraphTests(unittest.TestCase):
 
     def v2_record(self) -> dict[str, object]:
         value = json.loads(
-            (ROOT / "templates" / "task-sources" / "code-intelligence-record.json").read_text(
+            (ROOT / "tests/fixtures/code-intelligence-record-v2.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -316,6 +317,48 @@ class CodeGraphTests(unittest.TestCase):
     def proxy_module(self) -> object:
         return importlib.import_module("internal.code_intelligence_proxy")
 
+    def record_current_v3_fixture(self) -> tuple[dict[str, object], dict[str, object]]:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        source = self.repo / "src/a.py"
+        source.parent.mkdir()
+        source.write_text("class A:\n    pass\n", encoding="utf-8")
+        proxy = self.proxy_module()
+        responses = [
+            completed(healthy_status(self.repo)),
+            completed("A is defined in src/a.py\n"),
+            completed(healthy_status(self.repo)),
+        ]
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return responses.pop(0)
+
+        with mock.patch("internal.code_intelligence_proxy.shutil.which", return_value="/bin/codegraph"):
+            query = proxy.execute_proxy_query(
+                self.repo,
+                "TASK-0001",
+                "PLANNING",
+                "CIQ-001",
+                "locate A",
+                "symbol A",
+                False,
+                runner=runner,
+            )
+        protocol = importlib.import_module("internal.code_intelligence_protocol")
+        result = protocol.record_proxy_bundle(
+            self.repo,
+            "TASK-0001",
+            query["bundle_path"],
+            {
+                "summary": "Located the affected symbol.",
+                "symbols": [{"path": "src/a.py", "line": 1, "name": "A"}],
+                "source_fallbacks": [],
+            },
+            ROOT,
+        )
+        recorded = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+        return recorded, query
+
     def test_proxy_stage_context_uses_record_name_and_sequential_query_ids(self) -> None:
         self.qualify_task()
         proxy = self.proxy_module()
@@ -373,8 +416,8 @@ class CodeGraphTests(unittest.TestCase):
         self.assertEqual(documentation["record_name"], "documentation-sync-002")
         self.assertEqual(implementation["target"], {
             "base_commit": base,
-            "head_commit": None,
-            "diff_hash": None,
+            "head_commit": base,
+            "diff_hash": subject_diff_hash(self.repo, base, base),
         })
 
         state["status"] = "REVIEWING"
@@ -903,6 +946,233 @@ For accurate content of those specific files, Read them directly.
         self.assertEqual([item["error"]["code"] for item in responses], [-32700, -32602, -32601])
         self.assertTrue(all("\n" not in line for line in completed_process.stdout.splitlines()))
 
+    def test_v3_record_projects_exact_proxy_bundle(self) -> None:
+        recorded, query = self.record_current_v3_fixture()
+        self.assertEqual(recorded["record_version"], 3)
+        self.assertEqual(recorded["proxy"]["server_id"], "polaris-codegraph")
+        self.assertEqual(
+            recorded["query_window"]["pre_status"]["pending_changes"],
+            {"added": 0, "modified": 0, "removed": 0},
+        )
+        self.assertEqual(recorded["delivery"]["state"], "CURRENT")
+        self.assertEqual(
+            recorded["proxy"]["evidence_bundle_sha256"],
+            file_sha256(query["bundle_path"]),
+        )
+        self.assertEqual(recorded["query"]["symbols"][0]["path"], "src/a.py")
+
+    def test_v3_record_rejects_mutated_window_identity_and_fallbacks(self) -> None:
+        recorded, _query = self.record_current_v3_fixture()
+        protocol = importlib.import_module("internal.code_intelligence_protocol")
+
+        def current_to_stale(value: dict[str, object]) -> None:
+            pending = {
+                "scope": "INDEX",
+                "path": None,
+                "reason": "PENDING_CHANGES",
+                "fallback": "SEARCH_SOURCE",
+                "observed_sha256": None,
+            }
+            value["query_window"]["post_query_status"]["pending_changes"]["added"] = 1
+            value["query_window"]["post_query_status"]["needs_sync"] = True
+            value["delivery"].update({
+                "state": "STALE",
+                "record_status": "INDEX_STALE",
+                "reason": "PENDING_CHANGES",
+                "usage": "NAVIGATION_ONLY",
+                "required_fallback": "SEARCH_SOURCE",
+                "stale_points": [pending],
+                "pending_changes": {"added": 1, "modified": 0, "removed": 0},
+            })
+
+        mutations: list[tuple[str, object]] = [
+            (
+                "current pending",
+                lambda value: value["delivery"]["pending_changes"].update(
+                    {"modified": 1}
+                ),
+            ),
+            (
+                "missing post status",
+                lambda value: value["query_window"].update(
+                    {"post_query_status": None}
+                ),
+            ),
+            (
+                "response hash mismatch",
+                lambda value: value["query_window"]["response_classification"].update(
+                    {"response_sha256": "1" * 64}
+                ),
+            ),
+            (
+                "bundle hash shape",
+                lambda value: value["proxy"].update(
+                    {"evidence_bundle_sha256": "short"}
+                ),
+            ),
+            (
+                "repository mismatch",
+                lambda value: value["repository"].update(
+                    {"project_id": "another-project"}
+                ),
+            ),
+            (
+                "delivery usage",
+                lambda value: value["delivery"].update(
+                    {"usage": "NAVIGATION_ONLY"}
+                ),
+            ),
+            (
+                "sync without post-sync",
+                lambda value: value["query_window"].update({
+                    "sync": {
+                        "status": "SUCCESS",
+                        "response_sha256": "2" * 64,
+                        "error": None,
+                    },
+                    "post_sync_status": None,
+                }),
+            ),
+        ]
+        for name, mutation in mutations:
+            with self.subTest(name=name):
+                value = copy.deepcopy(recorded)
+                mutation(value)
+                with self.assertRaises(RuleFailure):
+                    protocol.validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+        stale_without_fallback = copy.deepcopy(recorded)
+        current_to_stale(stale_without_fallback)
+        with self.assertRaisesRegex(RuleFailure, "source fallback"):
+            protocol.validate_record_value(
+                self.repo, "TASK-0001", stale_without_fallback, ROOT
+            )
+
+        unsafe_fallback = copy.deepcopy(stale_without_fallback)
+        unsafe_fallback["source_fallbacks"] = [{
+            "action": "SEARCH_SOURCE",
+            "path": None,
+            "observed_sha256": None,
+            "base_commit": None,
+            "head_commit": None,
+            "diff_hash": None,
+            "purpose": "inspect current repository source",
+            "result_paths": [{
+                "path": "../outside.py",
+                "observed_sha256": "0" * 64,
+            }],
+        }]
+        with self.assertRaises(RuleFailure):
+            protocol.validate_record_value(
+                self.repo, "TASK-0001", unsafe_fallback, ROOT
+            )
+
+        with self.assertRaisesRegex(InputFailure, "record_version 3"):
+            record(self.repo, "TASK-0001", self.v2_record(), ROOT)
+
+    def test_v3_record_preserves_stale_unknown_and_unavailable_restrictions(self) -> None:
+        cases = [
+            ("stale", "STALE", "USED"),
+            ("unknown", "UNKNOWN", "FAILED"),
+            ("unavailable", "UNAVAILABLE", "UNAVAILABLE"),
+        ]
+        for index, (case, delivery_state, record_status) in enumerate(cases, start=1):
+            with self.subTest(case=case):
+                if index > 1:
+                    self.tearDown()
+                    self.setUp()
+                self.qualify_task()
+                source = self.repo / "src/a.py"
+                source.parent.mkdir()
+                source.write_text("class A:\n    pass\n", encoding="utf-8")
+                if case != "unavailable":
+                    (self.repo / ".codegraph").mkdir()
+                if case == "stale":
+                    pending = json.loads(healthy_status(self.repo))
+                    pending["pendingChanges"]["modified"] = 1
+                    responses = [
+                        completed(json.dumps(pending)),
+                        completed("A is defined in src/a.py\n"),
+                        completed(json.dumps(pending)),
+                    ]
+                elif case == "unknown":
+                    responses = [completed("not-json\n")]
+                else:
+                    responses = []
+
+                def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                    if not responses:
+                        raise AssertionError(f"unexpected provider call: {command}")
+                    return responses.pop(0)
+
+                proxy = self.proxy_module()
+                with mock.patch(
+                    "internal.code_intelligence_proxy.shutil.which",
+                    return_value="/bin/codegraph",
+                ):
+                    query = proxy.execute_proxy_query(
+                        self.repo,
+                        "TASK-0001",
+                        "PLANNING",
+                        "CIQ-001",
+                        "locate A conservatively",
+                        "symbol A",
+                        False,
+                        runner=runner,
+                    )
+                fallback = {
+                    "action": "SEARCH_SOURCE",
+                    "path": None,
+                    "observed_sha256": None,
+                    "base_commit": None,
+                    "head_commit": None,
+                    "diff_hash": None,
+                    "purpose": "verify the graph conclusion in current source",
+                    "result_paths": [{
+                        "path": "src/a.py",
+                        "observed_sha256": file_sha256(source),
+                    }],
+                }
+                protocol = importlib.import_module("internal.code_intelligence_protocol")
+                result = protocol.record_proxy_bundle(
+                    self.repo,
+                    "TASK-0001",
+                    query["bundle_path"],
+                    {
+                        "summary": "Used source fallback.",
+                        "symbols": [],
+                        "source_fallbacks": [fallback],
+                    },
+                    ROOT,
+                )
+                recorded = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+                self.assertEqual(recorded["delivery"]["state"], delivery_state)
+                self.assertEqual(recorded["status"], record_status)
+                self.assertEqual(recorded["delivery"]["usage"], (
+                    "NO_GRAPH" if case == "unavailable" else "NAVIGATION_ONLY"
+                ))
+                self.assertEqual(
+                    recorded["source_fallbacks"][0]["action"], "SEARCH_SOURCE"
+                )
+
+    def test_v2_schema_is_frozen_for_historical_reads(self) -> None:
+        frozen = ROOT / "schemas/code-intelligence-record-v2.schema.json"
+        self.assertTrue(frozen.is_file())
+        self.assertEqual(json.loads(frozen.read_text(encoding="utf-8"))["title"],
+                         "Polaris Code Intelligence record v2")
+
+        self.initialize_task()
+        value = self.v2_record()
+        path = self.repo / ".polaris/tasks/TASK-0001/code-intelligence/r001/planning.json"
+        write_json_atomic(path, value)
+        original = path.read_bytes()
+        protocol = importlib.import_module("internal.code_intelligence_protocol")
+        validated = protocol.validate_historical_v2_record_value(
+            self.repo, "TASK-0001", path, value, ROOT
+        )
+        self.assertEqual(validated["record_version"], 2)
+        self.assertEqual(path.read_bytes(), original)
+
     def set_protocol_version(self, version: str) -> None:
         project_path = self.repo / ".polaris/project.json"
         project = json.loads(project_path.read_text(encoding="utf-8"))
@@ -982,7 +1252,7 @@ For accurate content of those specific files, Read them directly.
         }
         self.assertEqual(legacy_validator(self.repo, "TASK-0001", value, ROOT)["record_version"], 1)
         with self.assertRaisesRegex(
-            InputFailure, "new Code Intelligence records must use record_version 2"
+            InputFailure, "new Code Intelligence records must use record_version 3"
         ):
             record(self.repo, "TASK-0001", value, ROOT)
 
@@ -1052,11 +1322,10 @@ For accurate content of those specific files, Read them directly.
 
         current = self.v2_record()
         current.update({"stage": "IMPLEMENTATION", "artifact_attempt": 1})
-        result = record(self.repo, "TASK-0001", current, ROOT)
-        self.assertEqual(
-            Path(result["path"]).parts[-3:],
-            ("code-intelligence", "r001", "implementation-001.json"),
-        )
+        with self.assertRaisesRegex(
+            InputFailure, "new Code Intelligence records must use record_version 3"
+        ):
+            record(self.repo, "TASK-0001", current, ROOT)
 
     def test_migration_rejects_noncanonical_v2_record_paths(self) -> None:
         """Migration scans only the canonical Code Intelligence record layout."""
@@ -2242,7 +2511,7 @@ For accurate content of those specific files, Read them directly.
         with self.assertRaisesRegex(RuleFailure, "must not be a symlink"):
             _project_marker_path(self.repo, ".codegraph")
 
-    def test_record_cli_requires_task_id_and_input(self) -> None:
+    def test_record_cli_requires_task_id_bundle_and_annotations(self) -> None:
         completed = subprocess.run(
             [
                 sys.executable,
@@ -2260,7 +2529,10 @@ For accurate content of those specific files, Read them directly.
         self.assertEqual(completed.returncode, 2)
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["status"], "ERROR")
-        self.assertEqual(payload["message"], "recording requires task_id and --input")
+        self.assertEqual(
+            payload["message"],
+            "recording requires task_id, --bundle, and --annotations",
+        )
 
     def test_old_product_tool_names_are_absent_from_descriptor(self) -> None:
         text = (ROOT / "providers/code-intelligence/codegraph.json").read_text(

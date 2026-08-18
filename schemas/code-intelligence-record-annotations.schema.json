@@ -1,0 +1,56 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Polaris Code Intelligence v3 record annotations",
+    "type": "object",
+    "required": ["summary", "symbols", "source_fallbacks"],
+    "additionalProperties": false,
+    "properties": {
+        "summary": {"type": "string"},
+        "symbols": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["path", "line", "name"],
+                "additionalProperties": false,
+                "properties": {
+                    "path": {"type": "string", "minLength": 1},
+                    "line": {"type": ["integer", "null"], "minimum": 1},
+                    "name": {"type": "string", "minLength": 1}
+                }
+            }
+        },
+        "source_fallbacks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "action", "path", "observed_sha256", "base_commit",
+                    "head_commit", "diff_hash", "purpose", "result_paths"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "action": {"type": "string", "enum": ["READ_SOURCE", "INSPECT_GIT_DIFF", "SEARCH_SOURCE"]},
+                    "path": {"type": ["string", "null"]},
+                    "observed_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+                    "base_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+                    "head_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+                    "diff_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+                    "purpose": {"type": "string", "minLength": 1},
+                    "result_paths": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": {
+                            "type": "object",
+                            "required": ["path", "observed_sha256"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "path": {"type": "string", "minLength": 1},
+                                "observed_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

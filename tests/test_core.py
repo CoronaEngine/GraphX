@@ -29,10 +29,12 @@ from internal.code_intelligence_protocol import (  # noqa: E402
     add_provider,
     load_config,
     record as record_code_intelligence,
+    record_proxy_bundle,
     select_provider,
     validate_record_value,
     validate_static_configuration,
 )
+from internal.code_intelligence_proxy import execute_proxy_query  # noqa: E402
 from internal.host_adapters import (  # noqa: E402
     discover_skills,
     load_host_adapters,
@@ -345,6 +347,53 @@ class PolarisCoreTests(unittest.TestCase):
     def enter_implementing(self) -> None:
         self.enter_planned()
         self.register_implementation_handoff()
+
+    def record_current_proxy_intelligence(self, stage: str) -> dict[str, object]:
+        """Create genuine current v3 evidence for an active implementation stage."""
+        (self.repo / ".codegraph").mkdir(exist_ok=True)
+        status = json.dumps({
+            "initialized": True,
+            "projectPath": str(self.repo.resolve()),
+            "pendingChanges": {"added": 0, "modified": 0, "removed": 0},
+            "worktreeMismatch": None,
+            "index": {
+                "state": "complete",
+                "pendingRefs": 0,
+                "reindexRecommended": False,
+            },
+        })
+        responses = [
+            subprocess.CompletedProcess([], 0, status, ""),
+            subprocess.CompletedProcess([], 0, "graph context\n", ""),
+            subprocess.CompletedProcess([], 0, status, ""),
+        ]
+
+        def runner(
+            _command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            query = execute_proxy_query(
+                self.repo,
+                "TASK-0001",
+                stage,
+                "CIQ-001",
+                "bind final subject",
+                "final subject symbols",
+                False,
+                runner=runner,
+            )
+        return record_proxy_bundle(
+            self.repo,
+            "TASK-0001",
+            query["bundle_path"],
+            {"summary": "Current graph context.", "symbols": [], "source_fallbacks": []},
+            ROOT,
+        )
 
     def register_implementation_handoff(self) -> dict[str, object]:
         """Register the next deterministic handoff for initial work or rework."""
@@ -2554,7 +2603,7 @@ class PolarisCoreTests(unittest.TestCase):
         """v1 精简记录升级后仍可读取，并绑定任务、提交和安全路径。"""
         base = run_git(self.repo, "rev-parse", "HEAD")
         value = read_json(
-            ROOT / "templates" / "task-sources" / "code-intelligence-record.json"
+            ROOT / "tests" / "fixtures" / "code-intelligence-record-v2.json"
         )
         value["record_version"] = 1
         value.pop("sync")
@@ -2567,7 +2616,7 @@ class PolarisCoreTests(unittest.TestCase):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["status"],
             "UNAVAILABLE",
         )
-        with self.assertRaisesRegex(InputFailure, "record_version 2"):
+        with self.assertRaisesRegex(InputFailure, "record_version 3"):
             record_code_intelligence(self.repo, "TASK-0001", value, ROOT)
 
         invalid = copy.deepcopy(value)
@@ -4351,22 +4400,8 @@ class PolarisCoreTests(unittest.TestCase):
         final_head = run_git(self.repo, "rev-parse", "HEAD")
         final_diff_hash = subject_diff_hash(self.repo, base, final_head)
 
-        implementation_intelligence = read_json(
-            ROOT / "templates" / "task-sources" / "code-intelligence-record.json"
-        )
-        implementation_intelligence.update(
-            {
-                "stage": "IMPLEMENTATION",
-                "artifact_attempt": 1,
-                "target": {
-                    "base_commit": base,
-                    "head_commit": final_head,
-                    "diff_hash": final_diff_hash,
-                },
-            }
-        )
-        implementation_intelligence_result = record_code_intelligence(
-            self.repo, "TASK-0001", implementation_intelligence, ROOT
+        implementation_intelligence_result = self.record_current_proxy_intelligence(
+            "IMPLEMENTATION"
         )
         implementation_intelligence_path = Path(
             implementation_intelligence_result["path"]
@@ -4374,26 +4409,14 @@ class PolarisCoreTests(unittest.TestCase):
         implementation_path = self.task / "implementations" / "r001" / "attempt-001.json"
         implementation = self.implementation_value(base, final_head, "impl-session")
         implementation["code_intelligence"] = {
-            "path": implementation_intelligence_path.relative_to(self.task).as_posix(),
+            "path": implementation_intelligence_path.relative_to(
+                self.task.resolve()
+            ).as_posix(),
             "sha256": file_sha256(implementation_intelligence_path),
         }
         write_json_atomic(implementation_path, implementation)
-        documentation_intelligence = read_json(
-            ROOT / "templates" / "task-sources" / "code-intelligence-record.json"
-        )
-        documentation_intelligence.update(
-            {
-                "stage": "DOCUMENTATION_SYNC",
-                "artifact_attempt": 1,
-                "target": {
-                    "base_commit": base,
-                    "head_commit": final_head,
-                    "diff_hash": final_diff_hash,
-                },
-            }
-        )
-        documentation_intelligence_result = record_code_intelligence(
-            self.repo, "TASK-0001", documentation_intelligence, ROOT
+        documentation_intelligence_result = self.record_current_proxy_intelligence(
+            "DOCUMENTATION_SYNC"
         )
         documentation_intelligence_path = Path(
             documentation_intelligence_result["path"]
@@ -4401,7 +4424,9 @@ class PolarisCoreTests(unittest.TestCase):
         knowledge_path = self.task / "knowledge" / "r001" / "knowledge-delta-001.json"
         knowledge = self.knowledge_value(1, base, final_head)
         knowledge["code_intelligence"] = {
-            "path": documentation_intelligence_path.relative_to(self.task).as_posix(),
+            "path": documentation_intelligence_path.relative_to(
+                self.task.resolve()
+            ).as_posix(),
             "sha256": file_sha256(documentation_intelligence_path),
         }
         knowledge["entries"][0].update(

@@ -64,7 +64,9 @@ def _target(base: str, head: str | None, diff_hash: str | None) -> dict[str, str
 
 def _validated_subject(repo: Path, subject: Any, fallback_base: str) -> dict[str, str | None]:
     if subject is None:
-        return _target(full_commit(repo, fallback_base), None, None)
+        base = full_commit(repo, fallback_base)
+        head = full_commit(repo)
+        return _target(base, head, subject_diff_hash(repo, base, head))
     if not isinstance(subject, dict):
         raise RuleFailure("CodeGraph stage context has an invalid subject")
     base = full_commit(repo, subject.get("base_commit", ""))

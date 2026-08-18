@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -15,12 +17,18 @@ from .polaris_core import (
     read_json,
     subject_diff_hash,
     task_dir,
+    utc_now,
     validate_json_file,
     validate_schema,
     write_json_atomic,
 )
 from .task_location_protocol import resolve_repo_reference
-from .task_layout import code_intelligence_record_path, state_path
+from .task_layout import (
+    code_intelligence_record_path,
+    code_intelligence_runtime_dir,
+    state_path,
+    task_relative_path,
+)
 
 
 CONFIG_PATH = Path(".polaris/code-intelligence.json")
@@ -364,11 +372,18 @@ def validate_historical_legacy_record_value(
 
 
 def _validate_record_identity(
-    repo: Path, task_id: str, value: dict[str, Any]
+    repo: Path,
+    task_id: str,
+    value: dict[str, Any],
+    *,
+    require_current_revision: bool = True,
 ) -> tuple[Path, str, str | None]:
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
-    if value["task_id"] != task_id or value["work_item_revision"] != state["current_revision"]:
+    if value["task_id"] != task_id or (
+        require_current_revision
+        and value["work_item_revision"] != state["current_revision"]
+    ):
         raise RuleFailure("Code Intelligence record targets the wrong task revision")
     _record_name(value)
     target = value["target"]
@@ -532,14 +547,24 @@ def _validate_v2_freshness(
 
 
 def _validate_v2_record_value(
-    repo: Path, task_id: str, value: dict[str, Any], root: Path
+    repo: Path,
+    task_id: str,
+    value: dict[str, Any],
+    root: Path,
+    *,
+    require_current_revision: bool = True,
 ) -> dict[str, Any]:
     errors = validate_schema(
-        value, read_json(root / "schemas" / "code-intelligence-record.schema.json")
+        value, read_json(root / "schemas" / "code-intelligence-record-v2.schema.json")
     )
     if errors:
         raise RuleFailure("Code Intelligence record failed schema validation:\n- " + "\n- ".join(errors))
-    _, base, head = _validate_record_identity(repo, task_id, value)
+    _, base, head = _validate_record_identity(
+        repo,
+        task_id,
+        value,
+        require_current_revision=require_current_revision,
+    )
     provider = value["provider"]
     if value["status"] in {"USED", "FAILED"} and provider is None:
         raise RuleFailure("used or failed Code Intelligence record requires a provider")
@@ -689,13 +714,433 @@ def _validate_v2_record_value(
     return value
 
 
+def validate_historical_v2_record_value(
+    repo: Path,
+    task_id: str,
+    path: Path,
+    value: dict[str, Any],
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Validate immutable v2 evidence at its canonical historical location."""
+    root = protocol_root(repo) if root is None else root
+    value = _validate_v2_record_value(
+        repo,
+        task_id,
+        value,
+        root,
+        require_current_revision=False,
+    )
+    expected = code_intelligence_record_path(
+        task_dir(repo, task_id), value["work_item_revision"], _record_name(value)
+    )
+    if path != expected:
+        raise RuleFailure("Code Intelligence record reference uses a non-canonical path")
+    return value
+
+
+def _require_exact_keys(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise RuleFailure(f"{label} has an invalid field set")
+    return value
+
+
+def _zero_pending(value: Any) -> bool:
+    return isinstance(value, dict) and value == {
+        "added": 0,
+        "modified": 0,
+        "removed": 0,
+    }
+
+
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _validate_v3_stale_point(repo: Path, point: Any) -> dict[str, Any]:
+    point = _require_exact_keys(
+        point,
+        {"scope", "path", "reason", "fallback", "observed_sha256"},
+        "Code Intelligence stale point",
+    )
+    if point["scope"] == "FILE":
+        if (
+            not isinstance(point["path"], str)
+            or point["reason"] != "PENDING_SYNC"
+            or point["fallback"] not in {"READ_SOURCE", "INSPECT_GIT_DIFF"}
+        ):
+            raise RuleFailure("v3 file stale point is invalid")
+        resolved = resolve_repo_reference(repo, point["path"])
+        if point["fallback"] == "READ_SOURCE":
+            if (
+                not resolved.is_file()
+                or point["observed_sha256"] != file_sha256(resolved)
+            ):
+                raise RuleFailure("v3 READ_SOURCE stale point hash is stale")
+        elif point["observed_sha256"] is not None or resolved.is_file():
+            raise RuleFailure("v3 INSPECT_GIT_DIFF stale point must name a missing path")
+    elif point["scope"] == "INDEX":
+        if (
+            point["path"] is not None
+            or point["fallback"] != "SEARCH_SOURCE"
+            or point["observed_sha256"] is not None
+            or point["reason"] not in {
+                "PENDING_CHANGES",
+                "AUTO_SYNC_DISABLED",
+                "WORKTREE_MISMATCH",
+                "INDEX_PARTIAL",
+                "INDEX_INDEXING",
+                "INDEX_FAILED",
+                "PENDING_REFERENCES",
+                "REINDEX_RECOMMENDED",
+                "SYNC_FAILED",
+                "STATUS_UNREADABLE",
+            }
+        ):
+            raise RuleFailure("v3 index stale point is invalid")
+    else:
+        raise RuleFailure("v3 stale point scope is invalid")
+    return point
+
+
+def _validate_v3_status_observation(
+    repo: Path, observation: Any, label: str
+) -> dict[str, Any]:
+    observation = _require_exact_keys(
+        observation,
+        {
+            "status",
+            "checked_at",
+            "basis",
+            "stale_points",
+            "status_response_sha256",
+            "error",
+            "needs_sync",
+            "pending_changes",
+        },
+        label,
+    )
+    if (
+        observation["status"]
+        not in {"CURRENT_AT_CHECK", "INDEX_STALE", "NOT_VERIFIED", "UNAVAILABLE"}
+        or not isinstance(observation["checked_at"], str)
+        or not observation["checked_at"]
+        or not isinstance(observation["basis"], list)
+        or not isinstance(observation["needs_sync"], bool)
+        or not isinstance(observation["stale_points"], list)
+    ):
+        raise RuleFailure(f"{label} has invalid status fields")
+    for point in observation["stale_points"]:
+        _validate_v3_stale_point(repo, point)
+    status = observation["status"]
+    if status in {"CURRENT_AT_CHECK", "INDEX_STALE"}:
+        if (
+            not _is_sha256(observation["status_response_sha256"])
+            or not isinstance(observation["pending_changes"], dict)
+            or set(observation["pending_changes"])
+            != {"added", "modified", "removed"}
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in observation["pending_changes"].values()
+            )
+            or observation["error"] is not None
+            or "STATUS_JSON" not in observation["basis"]
+            or len(observation["basis"]) != len(set(observation["basis"]))
+            or not set(observation["basis"]).issubset(
+                {"STATUS_JSON", "SYNC_ACKNOWLEDGED"}
+            )
+        ):
+            raise RuleFailure(f"{label} successful status evidence is incomplete")
+        if status == "CURRENT_AT_CHECK" and observation["stale_points"]:
+            raise RuleFailure(f"{label} current status cannot contain stale points")
+        if status == "INDEX_STALE" and not observation["stale_points"]:
+            raise RuleFailure(f"{label} stale status requires stale points")
+    elif status == "NOT_VERIFIED":
+        if (
+            observation["pending_changes"] is not None
+            or not observation["error"]
+            or observation["basis"] != ["STATUS_JSON"]
+            or (
+                observation["status_response_sha256"] is not None
+                and not _is_sha256(observation["status_response_sha256"])
+            )
+        ):
+            raise RuleFailure(f"{label} NOT_VERIFIED evidence is incomplete")
+    elif (
+        observation["status_response_sha256"] is not None
+        or observation["pending_changes"] is not None
+        or not observation["error"]
+        or observation["basis"] != ["NONE"]
+        or observation["stale_points"]
+    ):
+        raise RuleFailure(f"{label} UNAVAILABLE evidence is invalid")
+    return observation
+
+
+def _validate_v3_sync(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    value = _require_exact_keys(
+        value,
+        {"status", "response_sha256", "error"},
+        "Code Intelligence v3 sync",
+    )
+    if value["status"] not in {"SUCCESS", "FAILED"}:
+        raise RuleFailure("v3 sync must describe exactly one attempted command")
+    if value["status"] == "SUCCESS" and (
+        not _is_sha256(value["response_sha256"]) or value["error"] is not None
+    ):
+        raise RuleFailure("successful v3 sync requires a response hash")
+    if value["status"] == "FAILED" and (
+        not value["error"]
+        or (
+            value["response_sha256"] is not None
+            and not _is_sha256(value["response_sha256"])
+        )
+    ):
+        raise RuleFailure("failed v3 sync requires an error")
+    return value
+
+
+def _validate_v3_response(repo: Path, value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    value = _require_exact_keys(
+        value,
+        {
+            "classification",
+            "checked_at",
+            "basis",
+            "stale_points",
+            "response_sha256",
+            "error",
+        },
+        "Code Intelligence v3 response classification",
+    )
+    if (
+        value["classification"]
+        not in {"NONE", "PARTIAL_STALE", "INDEX_STALE", "NOT_VERIFIED"}
+        or not _is_sha256(value["response_sha256"])
+        or value["basis"] != ["RESPONSE_BANNER"]
+    ):
+        raise RuleFailure("v3 response classification is invalid")
+    for point in value["stale_points"]:
+        _validate_v3_stale_point(repo, point)
+    if value["classification"] == "NONE" and (
+        value["stale_points"] or value["error"] is not None
+    ):
+        raise RuleFailure("neutral v3 response cannot contain stale evidence")
+    if value["classification"] in {"PARTIAL_STALE", "INDEX_STALE"} and (
+        not value["stale_points"] or value["error"] is not None
+    ):
+        raise RuleFailure("stale v3 response requires explicit stale points")
+    if value["classification"] == "NOT_VERIFIED" and not value["error"]:
+        raise RuleFailure("unverified v3 response requires an error")
+    return value
+
+
+def _validate_v3_fallback_matches(value: dict[str, Any]) -> None:
+    fallbacks = value["source_fallbacks"]
+    points = value["delivery"]["stale_points"]
+    for point in points:
+        if point["reason"] == "STATUS_UNREADABLE":
+            continue
+        if _matching_fallback(
+            fallbacks,
+            point["fallback"],
+            point["path"],
+            point["observed_sha256"],
+        ) is None:
+            raise RuleFailure("v3 stale point requires exact source fallback evidence")
+    required = value["delivery"]["required_fallback"]
+    if required == "NONE" and fallbacks:
+        raise RuleFailure("CURRENT v3 evidence cannot contain source fallbacks")
+    if required != "NONE" and not fallbacks:
+        raise RuleFailure("non-current v3 evidence requires source fallback evidence")
+    if required == "SEARCH_SOURCE" and not any(
+        fallback["action"] == "SEARCH_SOURCE" for fallback in fallbacks
+    ):
+        raise RuleFailure("v3 evidence requires a SEARCH_SOURCE fallback")
+
+
+def _validate_v3_record_value(
+    repo: Path, task_id: str, value: dict[str, Any], root: Path
+) -> dict[str, Any]:
+    errors = validate_schema(
+        value, read_json(root / "schemas/code-intelligence-record.schema.json")
+    )
+    if errors:
+        raise RuleFailure(
+            "Code Intelligence record failed schema validation:\n- "
+            + "\n- ".join(errors)
+        )
+    _, base, head = _validate_record_identity(repo, task_id, value)
+    project = read_json(repo / ".polaris/project.json")
+    expected_repository = {
+        "project_id": project["project_id"],
+        "root_sha256": hashlib.sha256(
+            str(repo.resolve()).encode("utf-8")
+        ).hexdigest(),
+    }
+    if value["repository"] != expected_repository:
+        raise RuleFailure("Code Intelligence v3 repository identity does not match")
+    if value["provider"] != {"id": "codegraph", "descriptor_version": 2}:
+        raise RuleFailure("Code Intelligence v3 requires the official CodeGraph provider")
+    query = value["query"]
+    if query["status"] == "SUCCESS":
+        if query["response_sha256"] is None or query["error"] is not None:
+            raise RuleFailure("successful v3 query requires a response hash and no error")
+    elif not query["error"] or query["response_sha256"] is not None:
+        raise RuleFailure("unsuccessful v3 query requires only a finite error")
+    for symbol in query["symbols"]:
+        if not resolve_repo_reference(repo, symbol["path"]).is_file():
+            raise RuleFailure(f"v3 symbol path is not a current file: {symbol['path']}")
+
+    window = value["query_window"]
+    pre = _validate_v3_status_observation(repo, window["pre_status"], "pre-query status")
+    sync = _validate_v3_sync(window["sync"])
+    post_sync = (
+        _validate_v3_status_observation(repo, window["post_sync_status"], "post-sync status")
+        if window["post_sync_status"] is not None
+        else None
+    )
+    response = _validate_v3_response(repo, window["response_classification"])
+    post = (
+        _validate_v3_status_observation(repo, window["post_query_status"], "post-query status")
+        if window["post_query_status"] is not None
+        else None
+    )
+    if sync is None and post_sync is not None:
+        raise RuleFailure("post-sync status requires one sync attempt")
+    if sync is not None and post_sync is None:
+        raise RuleFailure("attempted sync requires post-sync status evidence")
+    if sync is not None and sync["status"] == "SUCCESS" and (
+        post_sync["status"] != "CURRENT_AT_CHECK" or post_sync["needs_sync"]
+    ):
+        raise RuleFailure("successful sync requires a current post-sync status")
+    if query["status"] == "SUCCESS" and (
+        response is None
+        or response["response_sha256"] != query["response_sha256"]
+        or post is None
+    ):
+        raise RuleFailure("successful v3 query requires matching response and post-status evidence")
+    if query["status"] != "SUCCESS" and (response is not None or post is not None):
+        raise RuleFailure("unsuccessful v3 query cannot claim response or post-status evidence")
+
+    delivery = value["delivery"]
+    for point in delivery["stale_points"]:
+        _validate_v3_stale_point(repo, point)
+    effective = post_sync if sync is not None else pre
+    observed_points: list[dict[str, Any]] = []
+    for observation in (effective, post):
+        if observation is None:
+            continue
+        observed_points.extend(observation["stale_points"])
+        pending = observation["pending_changes"]
+        if isinstance(pending, dict) and any(pending.values()):
+            pending_point = {
+                "scope": "INDEX",
+                "path": None,
+                "reason": "PENDING_CHANGES",
+                "fallback": "SEARCH_SOURCE",
+                "observed_sha256": None,
+            }
+            if pending_point not in observed_points:
+                observed_points.append(pending_point)
+    if response is not None:
+        observed_points.extend(response["stale_points"])
+    unique_points: list[dict[str, Any]] = []
+    for point in observed_points:
+        if point not in unique_points:
+            unique_points.append(point)
+    if delivery["stale_points"] != unique_points:
+        raise RuleFailure("v3 delivery stale points do not match the observed query window")
+    successful_pending = [
+        observation["pending_changes"]
+        for observation in (effective, post)
+        if observation is not None and isinstance(observation["pending_changes"], dict)
+    ]
+    expected_pending = {
+        key: max((pending[key] for pending in successful_pending), default=0)
+        for key in ("added", "modified", "removed")
+    }
+    if delivery["pending_changes"] != expected_pending:
+        raise RuleFailure("v3 delivery pending counts do not match the query window")
+    state = delivery["state"]
+    expected_record_status = {
+        "CURRENT": "CURRENT_AT_CHECK",
+        "STALE": delivery["record_status"],
+        "UNKNOWN": "NOT_VERIFIED",
+        "UNAVAILABLE": "UNAVAILABLE",
+    }[state]
+    if delivery["record_status"] != expected_record_status:
+        raise RuleFailure("v3 delivery state contradicts its record freshness status")
+    if value["status"] != {
+        "CURRENT": "USED",
+        "STALE": "USED",
+        "UNKNOWN": "FAILED",
+        "UNAVAILABLE": "UNAVAILABLE",
+    }[state]:
+        raise RuleFailure("v3 record status contradicts proxy delivery")
+    if state == "CURRENT":
+        if (
+            query["status"] != "SUCCESS"
+            or response["classification"] != "NONE"
+            or effective["status"] != "CURRENT_AT_CHECK"
+            or effective["needs_sync"]
+            or not _zero_pending(effective["pending_changes"])
+            or post["status"] != "CURRENT_AT_CHECK"
+            or post["needs_sync"]
+            or not _zero_pending(post["pending_changes"])
+            or delivery["usage"] != "NON_AUTHORITATIVE_CONTEXT"
+            or delivery["required_fallback"] != "NONE"
+            or delivery["stale_points"]
+            or not _zero_pending(delivery["pending_changes"])
+            or delivery["error"] is not None
+        ):
+            raise RuleFailure("CURRENT v3 evidence lacks a complete zero-pending window")
+    elif state == "STALE":
+        if (
+            query["status"] != "SUCCESS"
+            or delivery["usage"] != "NAVIGATION_ONLY"
+            or delivery["required_fallback"] == "NONE"
+            or not any(
+                point["reason"] != "STATUS_UNREADABLE"
+                for point in delivery["stale_points"]
+            )
+        ):
+            raise RuleFailure("STALE v3 evidence lacks an explicit stale reason")
+    elif state == "UNKNOWN":
+        if (
+            delivery["usage"] != "NAVIGATION_ONLY"
+            or delivery["required_fallback"] != "SEARCH_SOURCE"
+            or not delivery["error"]
+        ):
+            raise RuleFailure("UNKNOWN v3 evidence lacks verification failure evidence")
+    elif (
+        query["status"] != "UNAVAILABLE"
+        or pre["status"] != "UNAVAILABLE"
+        or any(item is not None for item in (sync, post_sync, response, post))
+        or delivery["usage"] != "NO_GRAPH"
+        or delivery["stale_points"]
+    ):
+        raise RuleFailure("UNAVAILABLE v3 evidence contains an attempted operation")
+    _validate_source_fallbacks(repo, value, base, head)
+    _validate_v3_fallback_matches(value)
+    return value
+
+
 def validate_record_value(
     repo: Path, task_id: str, value: dict[str, Any], root: Path | None = None
 ) -> dict[str, Any]:
     root = protocol_root(repo) if root is None else root
-    if value.get("record_version") == 1:
+    version = value.get("record_version")
+    if version == 1:
         return validate_legacy_record_value(repo, task_id, value, root)
-    return _validate_v2_record_value(repo, task_id, value, root)
+    if version == 2:
+        return _validate_v2_record_value(repo, task_id, value, root)
+    if version == 3:
+        return _validate_v3_record_value(repo, task_id, value, root)
+    raise RuleFailure("unsupported Code Intelligence record version")
 
 
 def record(
@@ -705,8 +1150,8 @@ def record(
     root: Path | None = None,
 ) -> dict[str, Any]:
     root = protocol_root(repo) if root is None else root
-    if value.get("record_version") == 1:
-        raise InputFailure("new Code Intelligence records must use record_version 2")
+    if value.get("record_version") != 3:
+        raise InputFailure("new Code Intelligence records must use record_version 3")
     value = validate_record_value(repo, task_id, value, root)
     directory = task_dir(repo, task_id)
     destination = code_intelligence_record_path(
@@ -723,6 +1168,172 @@ def record(
         "path": str(destination),
         "status": value["status"],
     }
+
+
+def record_proxy_bundle(
+    repo: Path,
+    task_id: str,
+    bundle_path: Path,
+    annotations: dict[str, Any],
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Project one immutable proxy bundle into the only writable v3 record shape."""
+    repo = repo.resolve()
+    root = protocol_root(repo) if root is None else root
+    directory = task_dir(repo, task_id)
+    runtime = code_intelligence_runtime_dir(directory)
+    candidate = bundle_path if bundle_path.is_absolute() else repo / bundle_path
+    candidate = confined_target(runtime, candidate, "CodeGraph proxy bundle")
+    require_regular_file(candidate, "CodeGraph proxy bundle")
+    bundle_digest = file_sha256(candidate)
+    bundle = read_json(candidate)
+    _require_exact_keys(
+        bundle,
+        {
+            "bundle_version",
+            "proxy",
+            "provider",
+            "repository",
+            "task_context",
+            "query",
+            "pre_status",
+            "sync",
+            "post_sync_status",
+            "response_classification",
+            "post_query_status",
+            "delivery",
+            "response_path",
+        },
+        "CodeGraph proxy bundle",
+    )
+    if bundle["bundle_version"] != 1 or bundle["proxy"] != {
+        "server_id": "polaris-codegraph",
+        "tool": "polaris_codegraph_explore",
+    }:
+        raise RuleFailure("CodeGraph proxy bundle has an unsupported identity")
+    if bundle["provider"] != {"id": "codegraph", "descriptor_version": 2}:
+        raise RuleFailure("CodeGraph proxy bundle does not use the official provider")
+    context = bundle["task_context"]
+    _require_exact_keys(
+        context,
+        {
+            "task_id",
+            "work_item_revision",
+            "stage",
+            "artifact_attempt",
+            "reviewer_slot",
+            "record_name",
+            "target",
+        },
+        "CodeGraph proxy task context",
+    )
+    if context["task_id"] != task_id:
+        raise RuleFailure("CodeGraph proxy bundle targets the wrong task")
+    from .code_intelligence_proxy import resolve_stage_context
+
+    if context != resolve_stage_context(repo, task_id, context["stage"]):
+        raise RuleFailure("CodeGraph proxy bundle stage context is no longer current")
+    query = _require_exact_keys(
+        bundle["query"],
+        {"id", "purpose", "text", "status", "response_sha256", "error"},
+        "CodeGraph proxy query",
+    )
+    query_match = re.fullmatch(r"CIQ-([0-9]{3})", str(query["id"]))
+    if query_match is None or query_match.group(1) == "000":
+        raise RuleFailure("CodeGraph proxy bundle has an invalid query ID")
+    expected_path = directory / task_relative_path(
+        "code_intelligence_proxy_bundle",
+        record_name=context["record_name"],
+        query_id=query["id"],
+    )
+    if candidate != expected_path:
+        raise RuleFailure("CodeGraph proxy bundle uses a non-canonical runtime path")
+    query_number = int(query_match.group(1))
+    for number in range(1, query_number + 1):
+        prior = directory / task_relative_path(
+            "code_intelligence_proxy_bundle",
+            record_name=context["record_name"],
+            query_id=f"CIQ-{number:03d}",
+        )
+        require_regular_file(prior, "sequential CodeGraph proxy bundle")
+    project = read_json(repo / ".polaris/project.json")
+    expected_repository = {
+        "project_id": project["project_id"],
+        "root_sha256": hashlib.sha256(
+            str(repo.resolve()).encode("utf-8")
+        ).hexdigest(),
+    }
+    if bundle["repository"] != expected_repository:
+        raise RuleFailure("CodeGraph proxy bundle repository identity does not match")
+    response_path = bundle["response_path"]
+    if response_path is None:
+        if query["status"] == "SUCCESS" and bundle["delivery"]["state"] != "UNKNOWN":
+            raise RuleFailure("successful CodeGraph bundle lost its response evidence")
+    else:
+        if not isinstance(response_path, str):
+            raise RuleFailure("CodeGraph proxy response path is invalid")
+        response_file = confined_target(
+            directory, directory / response_path, "CodeGraph proxy response"
+        )
+        require_regular_file(response_file, "CodeGraph proxy response")
+        if query["response_sha256"] != file_sha256(response_file):
+            raise RuleFailure("CodeGraph proxy response hash does not match")
+    annotation_errors = validate_schema(
+        annotations,
+        read_json(root / "schemas/code-intelligence-record-annotations.schema.json"),
+    )
+    if annotation_errors:
+        raise RuleFailure(
+            "Code Intelligence annotations failed schema validation:\n- "
+            + "\n- ".join(annotation_errors)
+        )
+    if response_path is None and annotations["symbols"]:
+        raise RuleFailure("discarded CodeGraph output cannot annotate graph symbols")
+    delivery = bundle.get("delivery")
+    if not isinstance(delivery, dict) or delivery.get("state") not in {
+        "CURRENT",
+        "STALE",
+        "UNKNOWN",
+        "UNAVAILABLE",
+    }:
+        raise RuleFailure("CodeGraph proxy bundle has an invalid delivery state")
+    record_value = {
+        "record_version": 3,
+        "task_id": task_id,
+        "work_item_revision": context["work_item_revision"],
+        "stage": context["stage"],
+        "artifact_attempt": context["artifact_attempt"],
+        "reviewer_slot": context["reviewer_slot"],
+        "provider": bundle["provider"],
+        "repository": bundle["repository"],
+        "target": context["target"],
+        "status": {
+            "CURRENT": "USED",
+            "STALE": "USED",
+            "UNKNOWN": "FAILED",
+            "UNAVAILABLE": "UNAVAILABLE",
+        }[delivery["state"]],
+        "proxy": {
+            **bundle["proxy"],
+            "evidence_bundle_sha256": bundle_digest,
+        },
+        "query": {
+            **query,
+            "summary": annotations["summary"],
+            "symbols": annotations["symbols"],
+        },
+        "query_window": {
+            "pre_status": bundle["pre_status"],
+            "sync": bundle["sync"],
+            "post_sync_status": bundle["post_sync_status"],
+            "response_classification": bundle["response_classification"],
+            "post_query_status": bundle["post_query_status"],
+        },
+        "delivery": delivery,
+        "source_fallbacks": annotations["source_fallbacks"],
+        "recorded_at": utc_now(),
+    }
+    return record(repo, task_id, record_value, root)
 
 
 def record_reference(repo: Path, task_id: str, reference: Any) -> dict[str, Any]:

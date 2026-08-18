@@ -1,27 +1,83 @@
 {
-    "record_version": 2,
+    "record_version": 3,
     "task_id": "TASK-0001",
     "work_item_revision": 1,
     "stage": "PLANNING",
     "artifact_attempt": null,
     "reviewer_slot": null,
-    "provider": null,
+    "provider": {
+        "id": "codegraph",
+        "descriptor_version": 2
+    },
+    "repository": {
+        "project_id": "PROJECT_ID",
+        "root_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
     "target": {
         "base_commit": "0000000000000000000000000000000000000000",
         "head_commit": null,
         "diff_hash": null
     },
     "status": "UNAVAILABLE",
-    "queries": [],
-    "status_check": null,
-    "sync": null,
-    "freshness": {
-        "status": "UNAVAILABLE",
-        "checked_at": "1970-01-01T00:00:00Z",
-        "basis": ["NONE"],
-        "response_sha256": null,
-        "stale_points": []
+    "proxy": {
+        "server_id": "polaris-codegraph",
+        "tool": "polaris_codegraph_explore",
+        "evidence_bundle_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     },
-    "source_fallbacks": [],
+    "query": {
+        "id": "CIQ-001",
+        "purpose": "Record unavailable CodeGraph context",
+        "text": "No CodeGraph query was executed",
+        "status": "UNAVAILABLE",
+        "summary": "",
+        "symbols": [],
+        "response_sha256": null,
+        "error": "CodeGraph provider unavailable"
+    },
+    "query_window": {
+        "pre_status": {
+            "status": "UNAVAILABLE",
+            "checked_at": "1970-01-01T00:00:00Z",
+            "basis": [
+                "NONE"
+            ],
+            "stale_points": [],
+            "status_response_sha256": null,
+            "error": "CodeGraph provider unavailable",
+            "needs_sync": false,
+            "pending_changes": null
+        },
+        "sync": null,
+        "post_sync_status": null,
+        "response_classification": null,
+        "post_query_status": null
+    },
+    "delivery": {
+        "state": "UNAVAILABLE",
+        "record_status": "UNAVAILABLE",
+        "reason": "PROVIDER_UNAVAILABLE",
+        "checked_at": "1970-01-01T00:00:00Z",
+        "usage": "NO_GRAPH",
+        "required_fallback": "SEARCH_SOURCE",
+        "stale_points": [],
+        "pending_changes": {
+            "added": 0,
+            "modified": 0,
+            "removed": 0
+        },
+        "error": "CodeGraph provider unavailable"
+    },
+    "source_fallbacks": [
+        {
+            "action": "SEARCH_SOURCE",
+            "path": null,
+            "observed_sha256": null,
+            "base_commit": null,
+            "head_commit": null,
+            "diff_hash": null,
+            "purpose": "Use repository source because CodeGraph is unavailable",
+            "result_paths": []
+        }
+    ],
     "recorded_at": "1970-01-01T00:00:00Z"
 }
