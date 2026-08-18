@@ -495,8 +495,8 @@ Implementer 只接收 task ID 和已注册 handoff，不继承主任务聊天。
 实现和 Documentation Sync 完成后，由主任务根据 Implementer 的最终产物生成冻结 handoff：
 
 ```powershell
-python tools/polaris/scripts/build_review_handoff.py TASK-0001 --repo . --implementer-session-id impl-20260813 --isolation fresh_session
-python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . --artifact review_handoff=reviews/r001/handoff-001.json
+python tools/polaris/scripts/build_review_handoff.py TASK-0001 --repo . --implementer-session-id impl-20260813 --isolation fresh_session --implementation .polaris/tasks/TASK-0001/implementations/r001/attempt-001.json --knowledge-delta .polaris/tasks/TASK-0001/knowledge/r001/knowledge-delta-001.json --subject-base <BASE_COMMIT> --subject-head <HEAD_COMMIT>
+python tools/polaris/scripts/transition_task.py TASK-0001 START_REVIEW --repo . --artifact implementation=implementations/r001/attempt-001.json --artifact knowledge_delta=knowledge/r001/knowledge-delta-001.json --artifact review_handoff=reviews/r001/handoff-001.json --subject-base <BASE_COMMIT> --subject-head <HEAD_COMMIT>
 ```
 
 然后按严谨度处理：
