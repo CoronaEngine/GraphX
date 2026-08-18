@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
+from migrate_project import migrate as migrate_project  # noqa: E402
 from internal.code_intelligence_protocol import (  # noqa: E402
     _project_marker_path,
     load_providers,
@@ -27,7 +28,10 @@ from internal.polaris_core import (  # noqa: E402
     RuleFailure,
     file_sha256,
     subject_diff_hash,
+    write_json_atomic,
+    write_text_atomic,
 )
+from vendor_project import vendor  # noqa: E402
 
 
 def completed(
@@ -106,6 +110,24 @@ class CodeGraphTests(unittest.TestCase):
     def initialize_task(self) -> None:
         init_task(self.repo, "TASK-0001", "R1")
 
+    def set_protocol_version(self, version: str) -> None:
+        project_path = self.repo / ".polaris/project.json"
+        project = json.loads(project_path.read_text(encoding="utf-8"))
+        project["polaris_version"] = version
+        write_json_atomic(project_path, project)
+        state_path = self.repo / ".polaris/tasks/TASK-0001/state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["polaris_version"] = version
+        write_json_atomic(state_path, state)
+        event_path = self.repo / ".polaris/tasks/TASK-0001/events.jsonl"
+        events = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+        for event in events:
+            event["polaris_version"] = version
+        write_text_atomic(
+            event_path,
+            "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
+        )
+
     def test_legacy_v1_records_remain_readable_but_cannot_be_written(self) -> None:
         self.initialize_task()
         protocol = importlib.import_module("internal.code_intelligence_protocol")
@@ -147,6 +169,88 @@ class CodeGraphTests(unittest.TestCase):
             InputFailure, "new Code Intelligence records must use record_version 2"
         ):
             record(self.repo, "TASK-0001", value, ROOT)
+
+    def test_migration_retires_v1_records_without_rewriting_them(self) -> None:
+        """0.1.19 inventories frozen v1 evidence while leaving its bytes intact."""
+        self.initialize_task()
+        self.set_protocol_version("0.1.18")
+        legacy_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/code-intelligence/r001/planning.json"
+        )
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy = {
+            "record_version": 1,
+            "task_id": "TASK-0001",
+            "work_item_revision": 1,
+            "stage": "PLANNING",
+            "artifact_attempt": None,
+            "reviewer_slot": None,
+            "provider": None,
+            "target": {
+                "base_commit": subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=self.repo,
+                    capture_output=True,
+                    check=True,
+                    encoding="utf-8",
+                    text=True,
+                ).stdout.strip(),
+                "head_commit": None,
+                "diff_hash": None,
+            },
+            "status": "UNAVAILABLE",
+            "queries": [],
+            "refresh": None,
+            "recorded_at": "1970-01-01T00:00:00Z",
+        }
+        write_json_atomic(legacy_path, legacy)
+        legacy_bytes = legacy_path.read_bytes()
+        vendor(ROOT, self.repo, False)
+
+        result = migrate_project(self.repo)
+
+        self.assertEqual(result["from"], "0.1.18")
+        self.assertEqual(result["to"], "0.1.19")
+        self.assertEqual(
+            json.loads((self.repo / ".polaris/project.json").read_text(encoding="utf-8"))["workflow_version"],
+            "0.1.2",
+        )
+        migration = json.loads(
+            (
+                self.repo
+                / ".polaris/migrations/MIG-0.1.18-to-0.1.19.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            migration["retired_code_intelligence_records"],
+            [{
+                "task_id": "TASK-0001",
+                "path": "code-intelligence/r001/planning.json",
+                "sha256": file_sha256(legacy_path),
+            }],
+        )
+        self.assertEqual(json.loads(legacy_path.read_text(encoding="utf-8"))["record_version"], 1)
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+
+        current = self.v2_record()
+        current.update({"stage": "IMPLEMENTATION", "artifact_attempt": 1})
+        result = record(self.repo, "TASK-0001", current, ROOT)
+        self.assertTrue(result["path"].endswith("code-intelligence/r001/implementation-001.json"))
+
+    def test_migration_rejects_noncanonical_v2_record_paths(self) -> None:
+        """Migration scans only the canonical Code Intelligence record layout."""
+        self.initialize_task()
+        self.set_protocol_version("0.1.18")
+        noncanonical = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/code-intelligence/r001/not-a-stage.json"
+        )
+        write_json_atomic(noncanonical, self.v2_record())
+        vendor(ROOT, self.repo, False)
+
+        with self.assertRaisesRegex(RuleFailure, "non-canonical"):
+            migrate_project(self.repo)
 
     def test_partial_stale_record_requires_matching_source_fallback(self) -> None:
         self.initialize_task()

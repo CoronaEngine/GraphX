@@ -5,12 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .code_intelligence_protocol import (
+    _record_name,
+    validate_legacy_record_value,
+    validate_record_value,
+)
 from .polaris_core import (
     InputFailure,
     RuleFailure,
     acquire_migration_lock,
     append_jsonl,
     ensure_gitignore_rule,
+    file_sha256,
     load_events_checked,
     read_json,
     rebuild_state_value,
@@ -20,9 +26,15 @@ from .polaris_core import (
     validate_json_file,
     write_json_atomic,
 )
+from .path_security import require_regular_tree
 from .recovery_protocol import refresh_project_index
 from .task_location_protocol import initialize_task_locations
-from .task_layout import ARCHIVED_RUNTIME_IGNORE_PATTERN, events_path, state_path
+from .task_layout import (
+    ARCHIVED_RUNTIME_IGNORE_PATTERN,
+    code_intelligence_record_path,
+    events_path,
+    state_path,
+)
 
 
 MIGRATIONS_ROOT = Path(".polaris/migrations")
@@ -183,13 +195,55 @@ def _step_for_record(
     return step
 
 
+def _retired_code_intelligence_records(
+    repo: Path, task_id: str, directory: Path, protocol_root: Path
+) -> list[dict[str, str]]:
+    """Inventory immutable v1 records at their canonical task-local locations."""
+    records_root = directory / "code-intelligence"
+    if not records_root.exists():
+        return []
+    require_regular_tree(records_root, "Code Intelligence record directory")
+    retired: list[dict[str, str]] = []
+    for path in sorted(records_root.rglob("*")):
+        if path.is_dir():
+            continue
+        if path.suffix != ".json":
+            raise RuleFailure(f"Code Intelligence record path is non-canonical: {path}")
+        value = read_json(path)
+        if not isinstance(value, dict):
+            raise RuleFailure(f"Code Intelligence record path is non-canonical: {path}")
+        if value.get("record_version") == 1:
+            value = validate_legacy_record_value(repo, task_id, value, protocol_root)
+        elif value.get("record_version") == 2:
+            value = validate_record_value(repo, task_id, value, protocol_root)
+        else:
+            raise RuleFailure(f"Code Intelligence record path is non-canonical: {path}")
+        expected = code_intelligence_record_path(
+            directory, value["work_item_revision"], _record_name(value)
+        )
+        if path != expected:
+            raise RuleFailure(f"Code Intelligence record path is non-canonical: {path}")
+        if value["record_version"] != 1:
+            continue
+        retired.append(
+            {
+                "task_id": task_id,
+                "path": path.relative_to(directory).as_posix(),
+                "sha256": file_sha256(path),
+            }
+        )
+    return retired
+
+
 def _new_record(
     repo: Path,
+    protocol_root: Path,
     project: dict[str, Any],
     step: dict[str, Any],
     timestamp: str,
 ) -> dict[str, Any]:
     tasks: list[dict[str, Any]] = []
+    retired_code_intelligence_records: list[dict[str, str]] = []
     for task_id in sorted(project["active_tasks"]):
         directory = task_dir(repo, task_id)
         state = read_json(state_path(directory))
@@ -206,6 +260,9 @@ def _new_record(
                 "migration_sequence": state["sequence"] + 1,
             }
         )
+        retired_code_intelligence_records.extend(
+            _retired_code_intelligence_records(repo, task_id, directory, protocol_root)
+        )
     return {
         "record_version": 1,
         "migration_id": step["migration_id"],
@@ -217,6 +274,7 @@ def _new_record(
         "started_at": timestamp,
         "completed_at": None,
         "tasks": tasks,
+        "retired_code_intelligence_records": retired_code_intelligence_records,
     }
 
 
@@ -280,7 +338,7 @@ def migrate_project(repo: Path, protocol_root: Path) -> dict[str, Any]:
             raise RuleFailure(
                 f"completed migration cannot be replayed: {step['migration_id']}"
             )
-        record = _new_record(repo, project, step, utc_now())
+        record = _new_record(repo, protocol_root, project, step, utc_now())
 
     if target_version != step["to_polaris_version"]:
         raise RuleFailure("migration target does not match vendored Polaris version")

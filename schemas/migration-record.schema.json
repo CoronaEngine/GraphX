@@ -81,6 +81,32 @@
                     }
                 }
             }
+        },
+        "retired_code_intelligence_records": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "task_id",
+                    "path",
+                    "sha256"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "pattern": "^TASK-[0-9]{4}$"
+                    },
+                    "path": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                    }
+                }
+            }
         }
     }
 }
