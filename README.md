@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> Current version: `0.1.18` (in development)
+> Current version: `0.1.19` (in development)
 
 Polaris is a repo-native engineering workflow for coding agent hosts. It stores requirements, plans, implementation results, independent reviews, validation evidence, and task state in Git, then uses deterministic gates to prevent requirement drift, stale evidence, and agents declaring their own work complete.
 
@@ -77,6 +77,20 @@ Do not advance task state by editing files. Internal workflow skills must execut
 python tools/polaris/scripts/transition_task.py TASK-0001 <EVENT> --repo .
 ```
 
+## Optional CodeGraph context
+
+The only formal Code Intelligence Provider is [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph). It is optional and never a workflow gate. The repository owner, not Polaris, installs and initializes it:
+
+```text
+codegraph install
+codegraph init
+polaris code-intelligence add codegraph --repo .
+```
+
+Run these commands from the target repository as appropriate. `codegraph init` creates the `.codegraph/` marker; without it Polaris records `UNAVAILABLE` and uses source and Git directly. Polaris can only read CodeGraph status, explore indexed relationships, and perform one bounded `codegraph sync` at a declared stage boundary. It never installs, initializes, starts, configures, waits for, or manages CodeGraph or its watcher/daemon/MCP configuration.
+
+CodeGraph's watcher and connection reconciliation are the primary freshness mechanisms. Polaris records a limited conclusion at the time it checks: `CURRENT_AT_CHECK`, `PARTIAL_STALE`, `INDEX_STALE`, `NOT_VERIFIED`, or `UNAVAILABLE`; it never claims commit-exact graph freshness. A `PARTIAL_STALE` response names specific files: read each current file directly (`READ_SOURCE`), or inspect the registered Git diff if it was deleted (`INSPECT_GIT_DIFF`). For `INDEX_STALE` or `NOT_VERIFIED`, treat the graph only as a lead and search the repository plus Git (`SEARCH_SOURCE`). Validation remains graph-free and relies on source, Git, builds, tests, static checks, and Human Checks.
+
 ## v0.1 scope
 
 Polaris v0.1 includes:
@@ -85,7 +99,7 @@ Polaris v0.1 includes:
 - repository-resident JSON authority, workflow, and recovery indexes;
 - standard-library validators, handoff, migration, and recovery scripts;
 - a thin CLI that only locates and dispatches existing scripts;
-- optional, non-blocking external Code Intelligence providers.
+- optional, non-blocking CodeGraph context from [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph).
 
 Polaris v0.1 does not include:
 

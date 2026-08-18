@@ -51,7 +51,7 @@ v0.1 的目标是验证这套工程方法能否提高 Horizon / Vision 上复杂
 - 项目初始化、任务初始化、状态转换、结构校验、文档影响检查、工作集生成脚本。
 - 通过 pip 安装、只暴露用户命令的薄 `polaris` CLI；保留原 Python 脚本入口。
 - 只读聚合 Doctor；复用现有 Validator，一次输出环境、协议、Authority、任务与操作残留的证据和人工动作。
-- 可选 Code Intelligence Provider 协议；自动发现、显式 add 已配置 Provider、按阶段查询/刷新、保存精简证据，并在任何不可用或失败时非阻断降级。
+- 可选 Code Intelligence 协议；唯一正式 Provider 是 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)，按阶段检查新鲜度、必要时有限同步、保存精简证据，并在任何不可用或失败时非阻断降级。
 - 独立 Implementer worker、不可变 Implementation handoff 与事件驱动实时进度快照。
 - 验收标准绑定的线性 `implementation_steps`；步骤只能依次推进或在末尾追加，最终结果冻结进 Implementation artifact。
 - 独立 worker context 的对抗审查协议。
@@ -488,14 +488,13 @@ AGENTS.md
 
 ### 可选 Code Intelligence 协议
 
-- Provider 由 `providers/code-intelligence/*.json` 声明 MCP Transport、文件扩展名和逻辑操作到工具名的映射；CodeGraph 是首个 Adapter，但核心 Schema、Artifact 和 Skill 不使用 CodeGraph 专用字段。
-- 默认无需配置即可按当前宿主实际暴露的 MCP 工具自动发现 Provider；`polaris code-intelligence add <provider>` 可将已配置 Provider 显式置于优先级首位并启用 `auto_optional`；`.polaris/code-intelligence.json` 只覆盖模式、优先级、include 和 exclude。
-- Planning 的查询结果必须经源码确认才可进入 Working Set；不存在、越界或没有依赖理由的路径一律拒绝。
-- Implementation 仅在查询能改变编辑决策时使用；中途刷新只发生在后续工作依赖刚修改的调用关系时。
-- Documentation Sync 在最终 subject checkpoint 后规划刷新：新增/修改文件使用增量刷新，删除/重命名使用工作区刷新，无相关代码变化则跳过。
-- Reviewer 必须独立查询影响面和 Review context；Validation 不调用代码图替代构建、测试或 Human Check。
-- 不可用、能力缺失、超时、错误响应与刷新失败都写为降级状态，并立即继续既有流程，永远不构成 Workflow blocker。
-- Git 中只保存绑定 Provider、阶段、subject、目的、符号/路径摘要、文件哈希与响应哈希的精简 Record；原始响应只进入 ignored runtime。索引新鲜度只能记为 `refresh_acknowledged`、`spot_checked` 或 `not_verified`，不能宣称与 Git commit 严格一致。
+- v0.1 的唯一正式 Provider 是 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)。`providers/code-intelligence/codegraph.json` 声明其 MCP `codegraph_explore` 和 CLI `status`、`explore`、`sync` 能力；核心 record 使用 Provider-neutral 的新鲜度和回退字段。
+- `.codegraph/` 由用户创建和维护。Polaris 允许用户显式运行 `polaris code-intelligence add codegraph --repo .`，但绝不安装、初始化、启动或配置 Provider、watcher、daemon、锁或 MCP；缺少 marker 时记录 `UNAVAILABLE` 并直接回退源码。
+- Provider 原生 watcher 与连接时 reconciliation 是保持索引接近工作树的主机制。Polaris 只在阶段入口、已知索引冻结或最终 Documentation Sync 的有界点读取 status；仅在 status 表示 pending 时至多执行一次 `codegraph sync`，随后至多复查一次，绝不等待或轮询。
+- 记录的结论限定为检查时：`CURRENT_AT_CHECK`、`PARTIAL_STALE`、`INDEX_STALE`、`NOT_VERIFIED` 或 `UNAVAILABLE`，不得宣称与某个 Git commit 严格一致。逐文件 stale point 必须记录路径和原因；文件仍存在时 Agent 直接读取源码并记录 `READ_SOURCE`，已删除时检查注册 subject 的 Git diff 并记录 `INSPECT_GIT_DIFF`；索引级失效使用 `SEARCH_SOURCE` 和 Git 证据。
+- Planning、Implementation 与 Reviewer 只在冻结范围内使用图关系；返回路径必须经源码确认才可进入 Working Set，Reviewer 必须独立查询。响应的局部 stale 不会丢弃其余图线索，但 stale 路径不能直接作为编辑或 Review 结论。
+- Provider 不可用、能力缺失、超时、错误响应或同步失败都必须记录准确的新鲜度并继续既有流程。图不扩展 scope，也不是 Workflow gate；Validation 完全不调用 CodeGraph，仍只依赖源码、Git、构建、测试、静态检查和 Human Check。
+- Git 只保存绑定 Provider、阶段、subject、目的、有限摘要、响应哈希、新鲜度、stale point 与源码回退证据；原始响应只进入 ignored runtime。已提交 v1 record 是不可变历史证据，迁移后标为 `retired_provider_evidence`，不能支持新的新鲜度结论。
 
 ## 9. 确定性脚本
 
@@ -513,7 +512,8 @@ AGENTS.md
 | `materialize_task_layout.py` | 从 `internal/task_layout.py` 生成模板样例树和真实任务目录，并校验生成物与平铺模板正文一致 |
 | `update_implementation_progress.py` | 通过明确事件原子更新 ignored 的线性步骤进度；拒绝 session 接管、跳步、回退、未知验收 ID 和非法 blocker |
 | `doctor_project.py` | 只读聚合环境、协议、Authority、清单、迁移、索引、任务与操作残留诊断，输出版本化报告、证据和人工动作 |
-| `record_code_intelligence.py` | 发现可用 Provider、规划增量/工作区刷新并写入不可变的精简 Code Intelligence Record |
+| `record_code_intelligence.py` | 写入不可变的精简 Code Intelligence Record；只接受已检查的 v2 新鲜度、stale point 和源码回退证据 |
+| `code_intelligence_runtime.py` | 内部阶段工具：读取一次 status、按需至多 sync 一次并复查一次，或分类 explore 响应；不暴露为用户 CLI 命令 |
 | `configure_code_intelligence.py` | 启用并优先一个已配置 Provider，保留现有索引范围，不安装或运行 Provider |
 | `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
@@ -647,7 +647,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 - [x] 实现 init、revision、validate、transition、state rebuild、docs check
 - [x] 实现只读聚合 Doctor、版本化诊断报告与多故障/无写入测试
-- [x] 实现可选 Code Intelligence Provider、CodeGraph MCP Adapter、显式 Provider add 命令、阶段降级/刷新策略、精简记录与测试
+- [x] 实现唯一正式的 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph) Provider、用户显式 add、watcher/connect reconciliation、有限 sync、新鲜度/失效点记录与非阻断源码回退测试
 - [x] 所有工作流状态转换经 `transition_task.py`
 - [x] `QUALIFY` 机械拒绝空白或 `TODO` 的验收描述与证据
 - [x] 单元测试覆盖第 9 节失败场景

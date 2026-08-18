@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.18。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
+> 当前版本：v0.1.19。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -34,7 +34,7 @@ Polaris 不保存以下瞬时状态：
 - 能够从目标仓库根目录打开所选宿主。
 
 Polaris v0.1 的运行时代码只使用 Python 标准库，不安装额外运行时依赖。`pip` 和 `setuptools` 只用于安装 CLI。
-Code Intelligence 是可选能力；Polaris 不安装或运行 CodeGraph，也不要求项目配置 Provider。只有宿主当前暴露出某个 Descriptor 所需的 MCP 工具时，该 Provider 才会被自动选中。
+Code Intelligence 是可选能力；唯一正式 Provider 是 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)。Polaris 不安装、初始化或管理它，也不要求项目配置 Provider；没有 `.codegraph/` 时会直接使用源码和 Git。
 
 ## 3. 首次接入一个项目
 
@@ -185,17 +185,17 @@ Claude Code 应加载 `.claude/skills/engineering-task/SKILL.md`。R1/R2 Impleme
 
 ### 3.7 可选 Code Intelligence
 
-Polaris 默认按 `tools/polaris/providers/code-intelligence/*.json` 自动发现 Provider。首个 Descriptor 是 CodeGraph MCP Adapter；核心 artifact、Schema 和阶段 Skill 只使用 `Code Intelligence`、Provider ID 与逻辑能力名，不含 CodeGraph 专用字段。检测不到完整能力、工具缺失、查询超时、错误响应或刷新失败时，阶段立即记录 `UNAVAILABLE` 或 `FAILED`，并继续原有的源码搜索、读取、构建、测试和 Review 流程。
+Polaris v0.1 只支持 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph) 作为正式 Code Intelligence Provider。用户拥有安装、初始化和宿主 MCP 配置；在目标仓库中自行按顺序运行：
 
-已经按 CodeGraph 自身方式完成仓库索引和宿主 MCP 配置后，在 Polaris 项目中运行：
-
-```powershell
+```text
+codegraph install
+codegraph init
 polaris code-intelligence add codegraph --repo .
 ```
 
-该命令会创建或更新 `.polaris/code-intelligence.json`，将模式设为 `auto_optional`、将 CodeGraph 放到 Provider 优先级首位，并保留已有 `include` / `exclude` 规则。命令可幂等重跑，未知 Provider 或非法旧配置会在写入前拒绝。
+前两个命令绝不会由 Polaris 执行；`codegraph init` 创建 `.codegraph/`，它是 Polaris 允许查询的前提。最后一个命令只创建或更新 `.polaris/code-intelligence.json`，将模式设为 `auto_optional`、将 CodeGraph 放到 Provider 优先级首位，并保留已有 `include` / `exclude` 规则。命令可幂等重跑，未知 Provider 或非法旧配置会在写入前拒绝。
 
-Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工具，因此成功只表示 Provider 已加入 Polaris；返回的 `runtime_status` 为 `checked_by_next_workflow`。下一次 Polaris Workflow 会检查实际工具能力，不可用时仍非阻断降级。
+Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工具，因此成功只表示 Provider 已加入 Polaris；返回的 `runtime_status` 为 `checked_by_next_workflow`。下一次 Workflow 只有在仓库已经存在 `.codegraph/` 时才会检查实际能力；缺少 marker、工具、健康 status 或可解析响应时记录 `UNAVAILABLE` 或 `NOT_VERIFIED`，并继续原有的源码搜索、读取、构建、测试和 Review 流程。
 
 不执行该命令时仍保留默认自动发现。`.polaris/code-intelligence.json` 也可用于禁用 Provider、调整优先级或限制索引范围。例如：
 
@@ -217,9 +217,11 @@ Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工�
 }
 ```
 
-阶段策略固定如下：Planning 用依赖和影响面发现候选路径，但必须读取源码确认后才可加入 Working Set；Implementation 只在修改前有价值时查询 edit context，且仅当后续工作依赖刚改变的调用关系时中途刷新；Documentation Sync 在最终 subject checkpoint 后刷新，新增/修改文件走文件增量刷新，删除/重命名触发工作区刷新；Reviewer 独立查询，不继承 Implementer 的判断；Validation 不把代码图当作构建、测试或人工验收证据。
+CodeGraph watcher 与连接时 reconciliation 是常规实时更新机制。Polaris 只在 Planning、Implementation、Review 的阶段入口和最终 Documentation Sync 的有界点读取 status；仅 status 指出 pending changes 时，才至多运行一次 `codegraph sync` 并至多复查一次 status。Polaris 只会 `status`、`explore` 和这一次有界 `sync`，不会等待 watcher、循环查询、启动 daemon 或改写 MCP 配置。
 
-精简记录保存在任务的 `code-intelligence/rNNN/*.json`，包含 Provider、阶段、目标 commit/diff、查询目的、符号/路径摘要、刷新文件哈希、响应哈希和结果状态。原始 MCP 响应只允许进入 ignored 的 `runtime/code-intelligence/`。刷新最多报告 `refresh_acknowledged` 或经独立抽查后的 `spot_checked`，不得声称索引与 Git commit 严格一致。
+精简 record 保存在任务的 `code-intelligence/rNNN/*.json`，包含 Provider、阶段、目标 commit/diff、查询目的、响应哈希、新鲜度、stale point 与实际源码回退证据；原始 MCP 响应只允许进入 ignored 的 `runtime/code-intelligence/`。新鲜度只表示检查时的有限结论：`CURRENT_AT_CHECK`、`PARTIAL_STALE`、`INDEX_STALE`、`NOT_VERIFIED` 或 `UNAVAILABLE`，不宣称与 Git commit 严格一致。
+
+`PARTIAL_STALE` 会精确列出 pending 文件。若列出的受限路径仍是当前普通文件，Agent 必须直接读取它并记录 `READ_SOURCE`；若已删除，必须检查注册 subject 的 Git diff 并记录 `INSPECT_GIT_DIFF`。`INDEX_STALE` 或 `NOT_VERIFIED` 表示整个图只能作为导航线索，Agent 必须以仓库搜索和 Git 证据回退并记录 `SEARCH_SOURCE`。没有 `.codegraph/`、Provider 故障或 sync 失败都不阻塞阶段；图不能扩大冻结 scope、替代源码或决定 Review verdict，Validation 完全不调用 CodeGraph。
 
 ## 4. Polaris 仓库自举
 
@@ -625,6 +627,8 @@ polaris validate-project --repo .
 早期 v0.1 已冻结的 Work Item 可能没有 `implementation_dispatch` 或 `review_dispatch`。缺少前者的旧任务只能使用同会话 Implementation，缺少后者的旧任务只能使用手动 Review handoff；Polaris 不会把缺失字段解释为自动创建授权。创建新 Revision 后会生成两组 `authorized=false` 字段，用户再次“确认并执行”后才启用自动 Worker 任务。
 
 v0.1.18 增加 `polaris code-intelligence add <provider>`，用于把已配置 Provider 显式加入 Polaris 流程；Workflow 版本仍为 v0.1.2。
+
+v0.1.19 将正式 Provider 固定为 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)，引入 watcher/connect reconciliation 下的检查时新鲜度、精确 stale point 和源码回退记录。已提交的 v1 Code Intelligence record 保持不可变，并在迁移中标为 `retired_provider_evidence`；新阶段必须生成 v2 record。Workflow 版本仍为 v0.1.2。
 
 ## 13. 失败探索与卡点
 

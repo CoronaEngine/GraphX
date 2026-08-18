@@ -74,6 +74,49 @@ class CodeGraphTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_managed_surfaces_only_name_the_official_codegraph(self) -> None:
+        """Current product surfaces retain only the official CodeGraph identity."""
+        official = "https://github.com/" + "colbymchenry/" + "codegraph"
+        retired_names = {
+            "codegraph_" + "symbol_" + "search",
+            "codegraph_" + "get_" + "ai_" + "context",
+            "codegraph_" + "get_" + "dependency_" + "graph",
+            "codegraph_" + "get_" + "call_" + "graph",
+            "codegraph_" + "analyze_" + "impact",
+            "codegraph_" + "pr_" + "context",
+            "codegraph_" + "index_" + "files",
+            "codegraph_" + "reindex_" + "workspace",
+        }
+        managed_roots = [
+            ROOT / "hosts",
+            ROOT / "providers",
+            ROOT / "schemas",
+            ROOT / "scripts",
+            ROOT / "skills",
+            ROOT / "templates",
+            ROOT / "tests",
+        ]
+        managed_paths = [
+            path
+            for root in managed_roots
+            for path in root.rglob("*")
+            if path.is_file()
+            and "__pycache__" not in path.parts
+            and path != ROOT / "schemas" / "code-intelligence-record-v1.schema.json"
+        ]
+        managed_paths.extend([ROOT / "README.md", ROOT / "docs" / "USAGE.md", ROOT / "plan.md"])
+        for path in managed_paths:
+            text = path.read_text(encoding="utf-8")
+            for retired in retired_names:
+                self.assertNotIn(retired, text, path.relative_to(ROOT).as_posix())
+        for path in [
+            ROOT / "providers" / "code-intelligence" / "codegraph.json",
+            ROOT / "README.md",
+            ROOT / "docs" / "USAGE.md",
+            ROOT / "plan.md",
+        ]:
+            self.assertIn(official, path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
+
     def adapter_functions(self) -> tuple[object, object]:
         adapter_path = SCRIPTS / "internal" / "codegraph_adapter.py"
         self.assertTrue(
