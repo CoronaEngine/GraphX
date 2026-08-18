@@ -403,9 +403,8 @@ class CodeGraphTests(unittest.TestCase):
             }],
         })
         value["freshness"]["basis"] = ["CONNECT_RECONCILIATION"]
-        self.assertEqual(
-            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
-        )
+        with self.assertRaisesRegex(RuleFailure, "CURRENT_AT_CHECK requires"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
 
     def test_official_descriptor_uses_explore_status_and_sync(self) -> None:
         descriptor = load_providers(ROOT)["codegraph"]

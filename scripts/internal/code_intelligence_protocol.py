@@ -522,22 +522,14 @@ def _validate_v2_freshness(
     if status == "CURRENT_AT_CHECK" and points:
         raise RuleFailure("CURRENT_AT_CHECK cannot contain stale points")
     if status == "CURRENT_AT_CHECK" and "STATUS_JSON" not in basis:
-        connect_response = any(
-            query["status"] == "SUCCESS" and query["response_sha256"] is not None
-            for query in value["queries"]
-        )
         sync_acknowledged = (
             value["sync"] is not None
             and value["sync"]["status"] == "SUCCESS"
             and "SYNC_ACKNOWLEDGED" in basis
         )
-        if not (
-            sync_acknowledged
-            or ("CONNECT_RECONCILIATION" in basis and connect_response)
-        ):
+        if not sync_acknowledged:
             raise RuleFailure(
-                "CURRENT_AT_CHECK requires STATUS_JSON, successful sync acknowledgement, "
-                "or confirmed connection response evidence"
+                "CURRENT_AT_CHECK requires STATUS_JSON or successful sync acknowledgement"
             )
     if status == "PARTIAL_STALE" and (not file_points or index_points):
         raise RuleFailure("PARTIAL_STALE requires only file stale points")
