@@ -89,9 +89,11 @@ codegraph init
 polaris code-intelligence add codegraph --repo .
 ```
 
-`codegraph init` 创建 `.codegraph/` marker。只有目标仓库已经有这个 marker 且项目策略允许时，Polaris 才会使用 CodeGraph；没有 marker 时直接使用源码和 Git，不生成阶段 record。只有实际执行 Provider `status`、`sync` 或 `explore` 操作时才写 Code Intelligence record。Polaris 只会读取 `status`、查询 `explore`，以及只在声明的阶段边界至多执行一次有界 `codegraph sync`；它绝不安装、初始化、启动、配置、重新配置、等待或管理 CodeGraph、watcher、daemon 或 MCP 配置。
+`codegraph init` 创建 `.codegraph/` marker；没有 marker 时 Polaris 直接使用源码和 Git，不生成阶段 record。Vendoring 会在 `.codex/config.toml` 与 `.mcp.json` 中非破坏地注册项目级 `polaris-codegraph` 代理，并保留其他设置。宿主可能要求信任项目或首次使用确认；是否批准仍由用户决定。
 
-CodeGraph 的 watcher 和连接时 reconciliation 是正常情况下的实时更新机制。Polaris 只记录检查时的有限结论：`CURRENT_AT_CHECK`、`PARTIAL_STALE`、`INDEX_STALE`、`NOT_VERIFIED` 或 `UNAVAILABLE`，不会宣称与 Git commit 精确一致。`PARTIAL_STALE` 会精确列出待同步文件：当前普通文件必须直接读取并记录 `READ_SOURCE`；已删除文件必须检查注册 subject 的 Git diff 并记录 `INSPECT_GIT_DIFF`。`INDEX_STALE` 或 `NOT_VERIFIED` 时，图只能作为导航线索，Agent 必须通过仓库搜索和 Git 证据记录 `SEARCH_SOURCE`。Provider 不可用、status 不可读或 sync 失败都不阻断阶段；Validation 不调用 CodeGraph，仍以源码、Git、构建、测试、静态检查和 Human Check 为准。
+Polaris 阶段只调用 `polaris_codegraph_explore`。代理先检查 status，按请求且确有 pending 时至多执行一次有界 `codegraph sync`，再执行一次 explore、复查 status，并保证 freshness envelope 位于图内容之前；阶段没有独立的 status/sync MCP 调用。`CURRENT` 表示 `NON_AUTHORITATIVE_CONTEXT`；`STALE` 与 `UNKNOWN` 表示 `NAVIGATION_ONLY`，必须完成 envelope 指定的源码/Git 回退；`UNAVAILABLE` 表示没有图内容。当前具名文件使用 `READ_SOURCE`，已删除文件使用 `INSPECT_GIT_DIFF`，索引级或不安全结果使用 `SEARCH_SOURCE`。Validation 不调用 CodeGraph，仍以源码、Git、构建、测试、静态检查和 Human Check 为准。
+
+CodeGraph 的安装、初始化、配置、raw MCP 注册、watcher 与 daemon 归仓库所有者，而不是 Polaris。Polaris 绝不启动、配置、重新配置、等待或管理这些能力。raw `codegraph_explore` 或 `codegraph explore` 仍可作为带外工具使用，但不能支持 Polaris 的 `CURRENT` 证据。新 record 必须由保留的代理 bundle 与已完成回退投影为 v3；v1/v2 仅供历史读取。CodeGraph 始终可选，永远不是 Workflow 门禁。
 
 协议 `0.1.21` 新增项目级 Polaris CodeGraph 代理、Host Adapter v3 注册和可审计的 Code Intelligence record v3，Workflow 仍为 `0.1.3`。record v1/v2 仅作为不可变历史证据读取；新证据必须由保留的代理 bundle 投影为 v3。
 

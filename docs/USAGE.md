@@ -175,17 +175,17 @@ Claude Code 应加载 `.claude/skills/engineering-task/SKILL.md`。R1/R2 Impleme
 
 ### 3.6 添加新的宿主适配器（维护者）
 
-1. 新建 `hosts/<host-id>/adapter.json`，使用 `adapter_version: 2`，并按 `schemas/host-adapter.schema.json` 声明 Skill 目标、调用前缀、真实入口、能力、入口 frontmatter、overlay、appendix 与专用文件。
+1. 新建 `hosts/<host-id>/adapter.json`，使用 `adapter_version: 3`，并按 `schemas/host-adapter.schema.json` 声明 Skill 目标、调用前缀、真实入口、能力、入口 frontmatter、overlay、appendix、专用文件与唯一 `project_mcp` 注册。
 2. `capabilities` 必须显式声明 `structured_user_input / worker_create / worker_status / worker_resume / stable_worker_identity`。`worker_status` 和稳定身份依赖 worker 创建；续接同时依赖创建与稳定身份。声明可创建 worker 的宿主必须提供入口 Skill appendix，写清创建、身份、查询和续接机制。
 3. 只把宿主能力差异放入该目录：metadata 放在 overlay，worker 创建/身份/等待/续接规则放在 `skill-appendices/engineering-task.md`，原生 agent 或仓库规则放在 `files` 清单中。
 4. 不要在共享 `skills/`、Workflow、Authority schema 或三个生命周期脚本中新增宿主名分支。共享 Skill 引用另一 Skill 时使用 `{{skill:<name>}}`。
 5. 运行完整测试，并在真实宿主中 smoke test 入口发现、显式触发边界、隔离 worker、handoff 拒绝和同一 Implementer 续接 Documentation Sync。
 
-`entry_skill` 必须对应 canonical `skills/<name>/SKILL.md`。Overlay 只能在已知 Skill 下增加 canonical 源中不存在的普通文件，不能提供 `SKILL.md`、覆盖任何同路径内容或包含未知 Skill；appendix 也只能使用 `<installed-skill>.md`。适配器源树、manifest、overlay、appendix、专用源文件和目标写入路径都禁止 symlink，所有目标必须留在仓库内。不同宿主不能声明重叠目标。若新宿主无法用 v2 的“文件复制 + Skill 渲染 + 能力声明 + 执行附录”表达，应先升级适配器契约，而不是在核心脚本里写例外。
+`entry_skill` 必须对应 canonical `skills/<name>/SKILL.md`。Overlay 只能在已知 Skill 下增加 canonical 源中不存在的普通文件，不能提供 `SKILL.md`、覆盖任何同路径内容或包含未知 Skill；appendix 也只能使用 `<installed-skill>.md`。适配器源树、manifest、overlay、appendix、专用源文件、MCP 配置目标和启动器路径都禁止 symlink，所有目标必须留在仓库内。`project_mcp` 固定 server ID、`python3` 启动器、vendored 脚本及 `--repo .`；不同宿主不能声明重叠目标。若新宿主无法用 v3 契约表达，应先升级适配器契约，而不是在核心脚本里写例外。
 
 ### 3.7 可选 Code Intelligence
 
-Polaris v0.1 只支持 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph) 作为正式 Code Intelligence Provider。用户拥有安装、初始化和宿主 MCP 配置；在目标仓库中自行按顺序运行：
+Polaris v0.1 只支持 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph) 作为正式 Code Intelligence Provider。用户拥有 CodeGraph 的安装、初始化、配置、raw MCP 注册、watcher 与 daemon；在目标仓库中自行按顺序运行：
 
 ```text
 codegraph install
@@ -193,9 +193,11 @@ codegraph init
 polaris code-intelligence add codegraph --repo .
 ```
 
-前两个命令绝不会由 Polaris 执行；`codegraph init` 创建 `.codegraph/`，它是 Polaris 允许查询的前提。最后一个命令只创建或更新 `.polaris/code-intelligence.json`，将模式设为 `auto_optional`、将 CodeGraph 放到 Provider 优先级首位，并保留已有 `include` / `exclude` 规则。命令可幂等重跑，未知 Provider 或非法旧配置会在写入前拒绝。
+前两个命令绝不会由 Polaris 执行；`codegraph init` 创建 `.codegraph/`，它是 Polaris 允许查询的前提。最后一个命令只创建或更新 `.polaris/code-intelligence.json`，将模式设为 `auto_optional`、将 CodeGraph 放到 Provider 优先级首位，并保留已有 `include` / `exclude` 规则。命令可幂等重跑，未知 Provider 或非法旧配置会在写入前拒绝。Polaris 不会启动、配置、重新配置或等待 CodeGraph。
 
-Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工具，因此成功只表示 Provider 已加入 Polaris；返回的 `runtime_status` 为 `checked_by_next_workflow`。下一次 Workflow 只有在仓库已经存在 `.codegraph/` 时才会检查实际能力；缺少 marker 或策略禁用时直接继续源码搜索、读取、构建、测试和 Review，不生成阶段 record。只有实际执行 `status`、`sync` 或 `explore` 后才写 record；操作失败时如实记录 `UNAVAILABLE` 或 `NOT_VERIFIED`，但不阻断阶段。
+Vendoring 会非破坏地把项目级 `polaris-codegraph` 代理注册到 Codex 的 `.codex/config.toml` 和 Claude Code 的 `.mcp.json`，只管理同名条目并把配置列入安装清单的 `preserved_files`。已有无关设置与服务器会保留；损坏配置、同名冲突、越界路径或 symlink 会在覆盖前拒绝。宿主可能在首次启动时要求信任项目或批准 MCP；这是用户决定，Polaris 不绕过。
+
+Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工具，因此配置命令成功只表示 Provider 已加入 Polaris；返回的 `runtime_status` 为 `checked_by_next_workflow`。下一次 Workflow 只有在仓库已经存在 `.codegraph/` 时才会调用项目代理；缺少 marker 或策略禁用时直接继续源码搜索、读取、构建、测试和 Review，不生成阶段 record。
 
 不执行该命令时仍保留默认自动发现。`.polaris/code-intelligence.json` 也可用于禁用 Provider、调整优先级或限制索引范围。例如：
 
@@ -217,11 +219,13 @@ Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工�
 }
 ```
 
-CodeGraph watcher 与连接时 reconciliation 是常规实时更新机制。Polaris 只在 Planning、Implementation、Review 的阶段入口和最终 Documentation Sync 的有界点读取 status；仅 status 指出 pending changes 时，才至多运行一次 `codegraph sync` 并至多复查一次 status。Polaris 只会 `status`、`explore` 和这一次有界 `sync`，不会等待 watcher、循环查询、启动 daemon 或改写 MCP 配置。
+CodeGraph watcher 与连接时 reconciliation 是常规实时更新机制。Polaris 阶段只调用 `polaris_codegraph_explore`：代理在同一有界窗口内检查 status，按调用参数且确有 pending 时至多运行一次 `codegraph sync`，执行一次 explore，再复查 status。阶段没有独立的 status/sync MCP 工具，也不会等待 watcher、轮询、重试、启动 daemon 或改写用户的 raw MCP 配置。Documentation Sync 仅在 supported source 变化时执行一次查询，使用 `sync_if_needed: true`，并把 query 限制到 changed source paths 与 documented symbols。
 
-精简 record 保存在任务的 `code-intelligence/rNNN/*.json`，包含 Provider、阶段、目标 commit/diff、查询目的、响应哈希、新鲜度、stale point 与实际源码回退证据；原始 MCP 响应只允许进入 ignored 的 `runtime/code-intelligence/`。新鲜度只表示检查时的有限结论：`CURRENT_AT_CHECK`、`PARTIAL_STALE`、`INDEX_STALE`、`NOT_VERIFIED` 或 `UNAVAILABLE`，不宣称与 Git commit 严格一致。
+代理结果的第一个内容块总是 freshness envelope。`CURRENT / NON_AUTHORITATIVE_CONTEXT` 表示图可作为非权威上下文；`STALE / NAVIGATION_ONLY` 表示已知失效；`UNKNOWN / NAVIGATION_ONLY` 表示无法证明新鲜度；`UNAVAILABLE / NO_GRAPH` 表示没有图输出。任何状态都不宣称与 Git commit 严格一致，`UNKNOWN` 绝不能当作 current。raw `codegraph_explore` 或 `codegraph explore` 仍可由用户带外调用，但不能支持 Polaris 的 `CURRENT` 证据。
 
-`PARTIAL_STALE` 会精确列出 pending 文件。若列出的受限路径仍是当前普通文件，Agent 必须直接读取它并记录 `READ_SOURCE`；若已删除，必须检查注册 subject 的 Git diff 并记录 `INSPECT_GIT_DIFF`。`INDEX_STALE` 或 `NOT_VERIFIED` 表示整个图只能作为导航线索，Agent 必须以仓库搜索和 Git 证据回退并记录 `SEARCH_SOURCE`。没有 `.codegraph/`、Provider 故障或 sync 失败都不阻塞阶段；图不能扩大冻结 scope、替代源码或决定 Review verdict，Validation 完全不调用 CodeGraph。
+`STALE` 或 `UNKNOWN` 必须先完成 envelope 指定的源码/Git fallback。当前具名普通文件直接读取并记录 `READ_SOURCE` 与当前 SHA-256；安全但已删除的路径检查注册 subject 的 Git diff，记录 `INSPECT_GIT_DIFF`、null observed SHA-256 与 base/head/diff hashes；不安全路径或索引级失效执行 `SEARCH_SOURCE`，记录有限、受限的当前文件路径与 SHA-256。图不能扩大冻结 scope、替代源码或决定 Review verdict，Validation 完全不调用 CodeGraph。
+
+每次代理调用都会把精确响应和 bundle 留在 ignored 的 `runtime/code-intelligence/`。完成 fallback 后，Agent 写只含 summary、已确认 symbols 和 source_fallbacks 的 annotations JSON，再运行 `record_code_intelligence.py <task-id> --repo . --bundle <bundle-path> --annotations <annotations-path>` 投影不可变 v3 record。不得手写 record；没有代理调用就省略 record。v1/v2 record 仅作为不可变历史证据读取。
 
 ## 4. Polaris 仓库自举
 

@@ -1,5 +1,11 @@
 # CodeGraph Freshness Integration Implementation Plan
 
+> **Historical plan:** This v2 plan has been superseded by
+> `docs/superpowers/plans/2026-08-19-codegraph-polaris-mcp-proxy.md`.
+> Current stages must use only `polaris_codegraph_explore`; the direct
+> status/sync/raw-explore instructions below are retained solely as migration
+> history and cannot support new Polaris `CURRENT` evidence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make `colbymchenry/codegraph` the only formal `codegraph` Provider, keep its graph current with watcher-aware one-shot sync, and record precise stale points that force bounded source fallback.

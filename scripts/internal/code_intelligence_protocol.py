@@ -1125,6 +1125,20 @@ def _validate_v3_record_value(
     ):
         raise RuleFailure("UNAVAILABLE v3 evidence contains an attempted operation")
     _validate_source_fallbacks(repo, value, base, head)
+    if state in {"STALE", "UNKNOWN"}:
+        confirmed_paths: set[str] = set()
+        for fallback in value["source_fallbacks"]:
+            if fallback["action"] == "READ_SOURCE":
+                confirmed_paths.add(fallback["path"])
+            elif fallback["action"] == "SEARCH_SOURCE":
+                confirmed_paths.update(
+                    result["path"] for result in fallback["result_paths"]
+                )
+        for symbol in query["symbols"]:
+            if symbol["path"] not in confirmed_paths:
+                raise RuleFailure(
+                    "non-current v3 symbol requires current source fallback evidence"
+                )
     _validate_v3_fallback_matches(value)
     return value
 

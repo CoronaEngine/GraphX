@@ -5,6 +5,7 @@ import importlib
 import hashlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -961,6 +962,256 @@ For accurate content of those specific files, Read them directly.
         self.assertEqual([item["error"]["code"] for item in responses], [-32700, -32602, -32601])
         self.assertTrue(all("\n" not in line for line in completed_process.stdout.splitlines()))
 
+    def test_vendored_mcp_proxy_runs_one_auditable_fake_cli_window(self) -> None:
+        """Registered MCP, fake CLI, v3 projection, and Validation compose end to end."""
+        with tempfile.TemporaryDirectory(prefix="polaris-codegraph-e2e-") as temporary:
+            fixture_root = Path(temporary)
+            repo = fixture_root / "repository"
+            fake_bin = fixture_root / "bin"
+            repo.mkdir()
+            fake_bin.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "polaris@test.local"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Polaris Test"],
+                cwd=repo,
+                check=True,
+            )
+            vendor(ROOT, repo, False)
+            init_project(repo, "codegraph-e2e")
+            source = repo / "src/a.py"
+            source.parent.mkdir()
+            source.write_text("class A:\n    pass\n", encoding="utf-8")
+            (repo / ".codegraph").mkdir()
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "initialize fixture"],
+                cwd=repo,
+                check=True,
+            )
+            init_task(repo, "TASK-0001", "R1")
+            work_item_path = (
+                repo
+                / ".polaris/tasks/TASK-0001/revisions/work-item-r001.json"
+            )
+            work_item = json.loads(work_item_path.read_text(encoding="utf-8"))
+            work_item.update({
+                "title": "Exercise the registered proxy",
+                "goal": "Prove one bounded CodeGraph window",
+                "motivation": "Keep graph evidence auditable",
+            })
+            work_item["scope"]["in"] = ["src/a.py"]
+            work_item["acceptance"][0].update({
+                "statement": "The registered proxy emits a current envelope",
+                "evidence": "v3 Code Intelligence record",
+            })
+            work_item["implementation_dispatch"]["authorized"] = True
+            work_item["review_dispatch"]["authorized"] = True
+            write_json_atomic(work_item_path, work_item)
+            transition(
+                repo,
+                "TASK-0001",
+                "QUALIFY",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+            call_log = fixture_root / "codegraph-calls.jsonl"
+            executable = fake_bin / "codegraph"
+            write_text_atomic(
+                executable,
+                """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+log = Path(os.environ["POLARIS_FAKE_CODEGRAPH_LOG"])
+entry = {"cwd": str(Path.cwd().resolve()), "argv": sys.argv[1:]}
+with log.open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(entry, separators=(",", ":")) + "\\n")
+entries = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+args = sys.argv[1:]
+if args == ["status", "--json"]:
+    status_count = sum(item["argv"] == ["status", "--json"] for item in entries)
+    pending = 1 if status_count == 1 else 0
+    print(json.dumps({
+        "initialized": True,
+        "projectPath": str(Path.cwd().resolve()),
+        "pendingChanges": {"added": 0, "modified": pending, "removed": 0},
+        "worktreeMismatch": None,
+        "index": {"state": "complete", "pendingRefs": 0, "reindexRecommended": False},
+    }))
+elif args == ["sync", "--quiet"]:
+    print("synchronized")
+elif len(args) == 2 and args[0] == "explore":
+    print("A is defined in src/a.py")
+else:
+    print("unexpected fake CodeGraph arguments", file=sys.stderr)
+    raise SystemExit(2)
+""",
+            )
+            executable.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = str(fake_bin) + os.pathsep + environment["PATH"]
+            environment["POLARIS_FAKE_CODEGRAPH_LOG"] = str(call_log)
+
+            registration = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))[
+                "mcpServers"
+            ]["polaris-codegraph"]
+            transcript = "\n".join([
+                json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {"name": "Polaris test", "version": "1"},
+                    },
+                }),
+                json.dumps({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                }),
+                json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "polaris_codegraph_explore",
+                        "arguments": {
+                            "task_id": "TASK-0001",
+                            "stage": "PLANNING",
+                            "query_id": "CIQ-001",
+                            "purpose": "locate A",
+                            "query": "symbol A",
+                            "sync_if_needed": True,
+                        },
+                    },
+                }),
+            ]) + "\n"
+            mcp = subprocess.run(
+                [registration["command"], *registration["args"]],
+                cwd=repo,
+                env=environment,
+                input=transcript,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(mcp.returncode, 0, mcp.stderr)
+            responses = [json.loads(line) for line in mcp.stdout.splitlines()]
+            self.assertEqual([response["id"] for response in responses], [1, 2])
+            tool_result = responses[1]["result"]
+            self.assertFalse(tool_result["isError"])
+            self.assertTrue(
+                tool_result["content"][0]["text"].startswith(
+                    "[POLARIS_CODEGRAPH_FRESHNESS]\nstate: CURRENT\n"
+                )
+            )
+            self.assertEqual(
+                tool_result["content"][1]["text"], "A is defined in src/a.py\n"
+            )
+            bundle = tool_result["structuredContent"]["bundle"]
+            envelope = tool_result["content"][0]["text"]
+            bundle_relative = next(
+                line.split(": ", 1)[1]
+                for line in envelope.splitlines()
+                if line.startswith("evidence_bundle: ")
+            )
+            task_relative = Path(".polaris/tasks/TASK-0001")
+            bundle_repo_relative = task_relative / bundle_relative
+            bundle_path = repo / bundle_repo_relative
+            response_relative = task_relative / bundle["response_path"]
+            for ignored in (bundle_repo_relative, response_relative):
+                ignored_result = subprocess.run(
+                    ["git", "check-ignore", "-q", ignored.as_posix()],
+                    cwd=repo,
+                    check=False,
+                )
+                self.assertEqual(ignored_result.returncode, 0, ignored.as_posix())
+
+            calls = [
+                json.loads(line)
+                for line in call_log.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(
+                [entry["argv"] for entry in calls],
+                [
+                    ["status", "--json"],
+                    ["sync", "--quiet"],
+                    ["status", "--json"],
+                    ["explore", "symbol A"],
+                    ["status", "--json"],
+                ],
+            )
+            self.assertTrue(all(entry["cwd"] == str(repo.resolve()) for entry in calls))
+
+            annotations_path = fixture_root / "annotations.json"
+            write_json_atomic(
+                annotations_path,
+                {
+                    "summary": "Located A through the bounded proxy.",
+                    "symbols": [{"path": "src/a.py", "line": 1, "name": "A"}],
+                    "source_fallbacks": [],
+                },
+            )
+            recorder = subprocess.run(
+                [
+                    sys.executable,
+                    "tools/polaris/scripts/record_code_intelligence.py",
+                    "TASK-0001",
+                    "--repo",
+                    ".",
+                    "--bundle",
+                    bundle_repo_relative.as_posix(),
+                    "--annotations",
+                    str(annotations_path),
+                    "--json",
+                ],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(recorder.returncode, 0, recorder.stderr)
+            record_result = json.loads(recorder.stdout)
+            record_value = json.loads(
+                Path(record_result["path"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                record_value["proxy"]["evidence_bundle_sha256"],
+                file_sha256(bundle_path),
+            )
+
+            calls_before_validation = call_log.read_bytes()
+            validation = subprocess.run(
+                [
+                    sys.executable,
+                    "tools/polaris/scripts/validate_project.py",
+                    "--repo",
+                    ".",
+                    "--json",
+                ],
+                cwd=repo,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(validation.returncode, 0, validation.stderr)
+            self.assertEqual(call_log.read_bytes(), calls_before_validation)
+
     def test_v3_record_projects_exact_proxy_bundle(self) -> None:
         recorded, query = self.record_current_v3_fixture()
         self.assertEqual(recorded["record_version"], 3)
@@ -1061,6 +1312,22 @@ For accurate content of those specific files, Read them directly.
         with self.assertRaisesRegex(RuleFailure, "source fallback"):
             protocol.validate_record_value(
                 self.repo, "TASK-0001", stale_without_fallback, ROOT
+            )
+
+        unconfirmed_symbol = copy.deepcopy(stale_without_fallback)
+        unconfirmed_symbol["source_fallbacks"] = [{
+            "action": "SEARCH_SOURCE",
+            "path": None,
+            "observed_sha256": None,
+            "base_commit": None,
+            "head_commit": None,
+            "diff_hash": None,
+            "purpose": "inspect current repository source",
+            "result_paths": [],
+        }]
+        with self.assertRaisesRegex(RuleFailure, "symbol.*source fallback"):
+            protocol.validate_record_value(
+                self.repo, "TASK-0001", unconfirmed_symbol, ROOT
             )
 
         unsafe_fallback = copy.deepcopy(stale_without_fallback)
@@ -2517,45 +2784,19 @@ For accurate content of those specific files, Read them directly.
         )
         self.assertEqual(descriptor["cli"]["sync_args"], ["sync", "--quiet"])
 
-    def test_all_agent_surfaces_share_codegraph_fallback_rules(self) -> None:
-        """Stage instructions keep CodeGraph stale-data fallbacks identical per host."""
-        required_fragments = (
-            ".codegraph/",
-            "codegraph_explore",
-            "codegraph explore",
-            "codegraph sync",
-            "PARTIAL_STALE",
-            "INDEX_STALE",
-            "directly read",
-            "never run `codegraph init`",
-        )
-        partial_stale_branches = (
-            "current confined regular file",
-            "READ_SOURCE",
-            "current SHA-256",
-            "missing/deleted",
-            "INSPECT_GIT_DIFF",
-            "null observed SHA-256",
-            "base/head/diff evidence",
-            "unsafe paths",
-            "NOT_VERIFIED",
-            "source search",
-        )
-        audit_binding_fragments = (
-            "freshness.response_sha256",
-            "successful explore response",
-            "result_paths",
-            "at most 100",
-            "POSIX",
-            "current confined regular file",
-            "empty `result_paths`",
-        )
-        retired_operations = (
-            "symbol" + "_search",
-            "call" + "_graph",
-            "review" + "_context",
-            "refresh" + "_files",
-            "refresh" + "_workspace",
+    def test_all_agent_surfaces_require_proxy_provenance(self) -> None:
+        """Every CodeGraph-capable stage requires the proxy envelope and fallbacks."""
+        anchors = (
+            "polaris_codegraph_explore",
+            "freshness envelope",
+            "NON_AUTHORITATIVE_CONTEXT",
+            "NAVIGATION_ONLY",
+            "never substantiates",
+            "source/Git fallback",
+            "no separate status/sync MCP tool",
+            "do not retry",
+            "raw `codegraph_explore`",
+            "cannot back `CURRENT` Polaris evidence",
         )
         stage_skills = (
             "code-intelligence",
@@ -2565,6 +2806,15 @@ For accurate content of those specific files, Read them directly.
             "documentation-sync",
         )
         available_skills = set(discover_skills(ROOT))
+
+        def assert_contract(text: str, label: str) -> None:
+            for anchor in anchors:
+                self.assertIn(anchor, text, f"{label}: {anchor}")
+            self.assertIn("record_code_intelligence.py", text, label)
+            self.assertIn("--bundle", text, label)
+            self.assertIn("--annotations", text, label)
+            self.assertIn("v3", text, label)
+
         for adapter in load_host_adapters(ROOT):
             for skill_name in stage_skills:
                 source = (ROOT / "skills" / skill_name / "SKILL.md").read_text(
@@ -2573,30 +2823,59 @@ For accurate content of those specific files, Read them directly.
                 rendered = render_skill(
                     source, skill_name, adapter, available_skills
                 )
-                for fragment in required_fragments:
-                    self.assertIn(fragment, rendered, f"{adapter['host_id']}:{skill_name}")
-                for fragment in partial_stale_branches:
-                    self.assertIn(fragment, rendered, f"{adapter['host_id']}:{skill_name}")
-                for fragment in audit_binding_fragments:
-                    self.assertIn(fragment, rendered, f"{adapter['host_id']}:{skill_name}")
-                self.assertIn("v2", rendered, f"{adapter['host_id']}:{skill_name}")
-                self.assertNotIn("directly read every listed stale file", rendered)
-                for retired in retired_operations:
-                    self.assertNotIn(retired, rendered, f"{adapter['host_id']}:{skill_name}")
-
-        validation = (ROOT / "skills" / "validation" / "SKILL.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("Do not invoke Code Intelligence", validation)
+                assert_contract(rendered, f"{adapter['host_id']}:{skill_name}")
 
         agents = (ROOT / "templates" / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("stop CodeGraph calls for this session", agents)
-        self.assertIn("installer-managed marker block", agents)
-        for fragment in partial_stale_branches:
-            self.assertIn(fragment, agents)
-        for fragment in audit_binding_fragments:
-            self.assertIn(fragment, agents)
-        self.assertNotIn("directly read every listed stale file", agents)
+        assert_contract(agents, "templates/AGENTS.md")
+
+        rendered = render_skill(
+            (ROOT / "skills/implementation/SKILL.md").read_text(encoding="utf-8"),
+            "implementation",
+            load_host_adapters(ROOT)[0],
+            available_skills,
+        )
+        for mutation in (
+            rendered.replace("polaris_codegraph_explore", "missing_proxy"),
+            rendered.replace("source/Git fallback", "missing fallback"),
+        ):
+            with self.assertRaises(AssertionError):
+                assert_contract(mutation, "mutated implementation")
+
+    def test_documentation_sync_uses_one_proxy_query(self) -> None:
+        """Documentation Sync uses one bounded changed-path/symbol proxy query."""
+        source = (ROOT / "skills/documentation-sync/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        for adapter in load_host_adapters(ROOT):
+            rendered = render_skill(
+                source,
+                "documentation-sync",
+                adapter,
+                set(discover_skills(ROOT)),
+            )
+            for anchor in (
+                "polaris_codegraph_explore",
+                "sync_if_needed: true",
+                "changed source paths",
+                "documented symbols",
+                "no separate status/sync MCP tool",
+            ):
+                self.assertIn(anchor, rendered, f"{adapter['host_id']}: {anchor}")
+
+    def test_validation_remains_graph_free(self) -> None:
+        """Validation never invokes the proxy or raw CodeGraph lifecycle commands."""
+        source = (ROOT / "skills/validation/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Do not invoke Code Intelligence", source)
+        for adapter in load_host_adapters(ROOT):
+            rendered = render_skill(
+                source, "validation", adapter, set(discover_skills(ROOT))
+            )
+            for forbidden in (
+                "polaris_codegraph_explore",
+                "codegraph status",
+                "codegraph sync",
+            ):
+                self.assertNotIn(forbidden, rendered, adapter["host_id"])
 
     def test_provider_requires_marker_and_accepts_mcp_or_cli(self) -> None:
         self.assertIsNone(
