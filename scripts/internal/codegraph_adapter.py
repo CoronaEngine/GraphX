@@ -259,9 +259,11 @@ def merge_freshness(
     merged_status = max((status, response_status), key=FRESHNESS_ORDER.__getitem__)
     status_basis = status_result.get("basis", [])
     response_basis = response_result.get("basis", [])
-    include_response_basis = classification != "NONE" or (
-        status not in {"NOT_VERIFIED", "UNAVAILABLE"}
-        and "STATUS_JSON" in status_basis
+    include_response_basis = merged_status != "UNAVAILABLE" and (
+        classification != "NONE" or (
+            status not in {"NOT_VERIFIED", "UNAVAILABLE"}
+            and "STATUS_JSON" in status_basis
+        )
     )
     basis = _unique_items(
         [*status_basis, *(response_basis if include_response_basis else [])]
@@ -275,7 +277,9 @@ def merge_freshness(
         "stale_points": _unique_items(
             [*status_result.get("stale_points", []), *response_result.get("stale_points", [])]
         ),
-        "response_sha256": response_result.get("response_sha256"),
+        "response_sha256": (
+            response_result.get("response_sha256") if include_response_basis else None
+        ),
         "error": status_result.get("error") or response_result.get("error"),
     }
 

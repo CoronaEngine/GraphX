@@ -2105,6 +2105,157 @@ For accurate content of those specific files, Read them directly.
         self.assertEqual(result["status"], "NOT_VERIFIED")
         self.assertEqual(result["basis"], ["STATUS_JSON"])
 
+    def test_none_response_suppression_projects_to_v2_unverified_and_unavailable_records(self) -> None:
+        """A discarded neutral response must not leave unverifiable hash evidence."""
+        self.initialize_task()
+        merger = getattr(self.adapter_module(), "merge_freshness", None)
+        self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
+        response = self.classify_response("normal response\n")
+
+        unverified = merger({
+            "status": "NOT_VERIFIED",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["STATUS_JSON"],
+            "stale_points": [{
+                "scope": "INDEX", "path": None, "reason": "STATUS_UNREADABLE",
+                "fallback": "SEARCH_SOURCE", "observed_sha256": None,
+            }],
+            "error": "status unreadable",
+        }, response)
+        self.assertEqual(unverified["basis"], ["STATUS_JSON"])
+        self.assertIsNone(unverified["response_sha256"])
+        value = self.v2_record()
+        value.update({
+            "status": "FAILED",
+            "provider": {
+                "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                "available_operations": ["status"],
+            },
+            "status_check": {
+                "status": "FAILED", "phase": "STAGE_ENTRY",
+                "response_sha256": None, "error": "status unreadable",
+            },
+            "freshness": {
+                "status": unverified["status"], "checked_at": unverified["checked_at"],
+                "basis": unverified["basis"],
+                "response_sha256": unverified["response_sha256"],
+                "stale_points": unverified["stale_points"],
+            },
+            "source_fallbacks": [{
+                "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
+                "base_commit": None, "head_commit": None, "diff_hash": None,
+                "purpose": "recover unreadable CodeGraph status", "result_paths": [],
+            }],
+        })
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
+
+        unavailable = merger({
+            "status": "UNAVAILABLE",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["NONE"],
+            "stale_points": [],
+            "error": "CodeGraph project marker is unavailable",
+        }, response)
+        self.assertEqual(unavailable["basis"], ["NONE"])
+        self.assertIsNone(unavailable["response_sha256"])
+        value = self.v2_record()
+        value["freshness"] = {
+            "status": unavailable["status"], "checked_at": unavailable["checked_at"],
+            "basis": unavailable["basis"],
+            "response_sha256": unavailable["response_sha256"],
+            "stale_points": unavailable["stale_points"],
+        }
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
+
+    def test_retained_response_evidence_projects_to_v2_with_matching_explore_hash(self) -> None:
+        """Retained neutral and banner evidence binds the recorded explore response."""
+        self.initialize_task()
+        merger = getattr(self.adapter_module(), "merge_freshness", None)
+        self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
+        status = {
+            "status": "CURRENT_AT_CHECK",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["STATUS_JSON"],
+            "stale_points": [],
+            "status_response_sha256": "1" * 64,
+            "error": None,
+        }
+        source = self.repo / "src/widget.py"
+        source.parent.mkdir()
+        source.write_text("def widget():\n    return 1\n", encoding="utf-8")
+        responses = [
+            ("normal response\n", []),
+            (
+                "⚠️ Some files referenced below were edited since the last index sync —\n"
+                "their codegraph entries may be stale:\n"
+                "  - src/widget.py (edited 800ms ago, pending sync)\n"
+                "For accurate content of those specific files, Read them directly.\n",
+                [{
+                    "action": "READ_SOURCE", "path": "src/widget.py",
+                    "observed_sha256": file_sha256(source), "base_commit": None,
+                    "head_commit": None, "diff_hash": None,
+                    "purpose": "read CodeGraph stale file from source",
+                    "result_paths": [],
+                }],
+            ),
+            (
+                "⚠️ CodeGraph auto-sync is DISABLED — the index is frozen.\n",
+                [{
+                    "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
+                    "base_commit": None, "head_commit": None, "diff_hash": None,
+                    "purpose": "recover stale CodeGraph index", "result_paths": [],
+                }],
+            ),
+            (
+                "⚠️ Some files referenced below were edited since the last index sync —\n"
+                "their codegraph entries may be stale:\n",
+                [{
+                    "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
+                    "base_commit": None, "head_commit": None, "diff_hash": None,
+                    "purpose": "recover unreadable CodeGraph response", "result_paths": [],
+                }],
+            ),
+        ]
+
+        for response_text, source_fallbacks in responses:
+            with self.subTest(response=response_text[:24]):
+                response = self.classify_response(response_text)
+                merged = merger(status, response)
+                self.assertIn("RESPONSE_BANNER", merged["basis"])
+                self.assertEqual(merged["response_sha256"], response["response_sha256"])
+                value = self.v2_record()
+                value.update({
+                    "status": "USED",
+                    "provider": {
+                        "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                        "available_operations": ["explore", "status"],
+                    },
+                    "queries": [{
+                        "id": "CIQ-001", "operation": "explore",
+                        "purpose": "inspect CodeGraph response freshness", "status": "SUCCESS",
+                        "summary": "CodeGraph response", "symbols": [],
+                        "response_sha256": merged["response_sha256"], "error": None,
+                    }],
+                    "status_check": {
+                        "status": "SUCCESS", "phase": "STAGE_ENTRY",
+                        "response_sha256": status["status_response_sha256"], "error": None,
+                    },
+                    "freshness": {
+                        "status": merged["status"], "checked_at": merged["checked_at"],
+                        "basis": merged["basis"],
+                        "response_sha256": merged["response_sha256"],
+                        "stale_points": merged["stale_points"],
+                    },
+                    "source_fallbacks": source_fallbacks,
+                })
+                self.assertEqual(
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+                )
+
     def test_none_response_records_banner_check_after_successful_stale_status(self) -> None:
         merger = getattr(self.adapter_module(), "merge_freshness", None)
         self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
