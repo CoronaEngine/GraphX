@@ -29,7 +29,11 @@ from internal.code_intelligence_protocol import record_reference
 from internal.review_protocol import validate_handoff, validate_review, validate_review_response
 from internal.plan_decision_protocol import validate_plan_decisions
 from internal.working_set_protocol import validate_working_set
-from internal.validation_protocol import validate_acceptance_coverage, validate_acceptance_ids
+from internal.validation_protocol import (
+    validate_acceptance_coverage,
+    validate_acceptance_ids,
+    validate_validation_identity,
+)
 from internal.task_layout import events_path, explorations_dir
 from internal.task_layout import state_path as task_state_path
 
@@ -279,15 +283,9 @@ def validate_projection(
         if validation["verdict"] != "PASS":
             raise RuleFailure("VERIFIED requires a PASS Validation")
         validate_acceptance_coverage(work_item, validation)
-        if (
-            validation["task_id"] != task_id
-            or validation["work_item_revision"] != state["current_revision"]
-            or validation["artifact_attempt"] != implementation["artifact_attempt"]
-            or validation["subject_base_commit"] != state["subject"]["base_commit"]
-            or validation["subject_head_commit"] != state["subject"]["head_commit"]
-            or validation["subject_diff_hash"] != state["subject"]["diff_hash"]
-        ):
-            raise RuleFailure("Validation targets the wrong revision or subject")
+        validate_validation_identity(
+            state, validation, implementation["artifact_attempt"]
+        )
     if status == "CLOSED":
         result_path = require_artifact(state, directory, "result")
         result = validate_json_file(result_path, root / "schemas" / "result.schema.json")

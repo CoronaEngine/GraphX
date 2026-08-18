@@ -31,3 +31,19 @@ def validate_acceptance_coverage(
         raise RuleFailure(
             "Validation must cover every acceptance criterion exactly once with PASS"
         )
+
+
+def validate_validation_identity(
+    state: dict[str, Any], validation: dict[str, Any], artifact_attempt: int
+) -> None:
+    """Bind Validation authority to the current task, attempt, and frozen subject."""
+    subject = state.get("subject")
+    if not isinstance(subject, dict) or (
+        validation["task_id"] != state["task_id"]
+        or validation["work_item_revision"] != state["current_revision"]
+        or validation["artifact_attempt"] != artifact_attempt
+        or validation["subject_base_commit"] != subject["base_commit"]
+        or validation["subject_head_commit"] != subject["head_commit"]
+        or validation["subject_diff_hash"] != subject["diff_hash"]
+    ):
+        raise RuleFailure("Validation targets the wrong revision, attempt, or subject")

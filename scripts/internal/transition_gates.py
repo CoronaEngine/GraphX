@@ -19,7 +19,11 @@ from .polaris_core import (
 from .review_protocol import validate_handoff, validate_review, validate_review_response
 from .plan_decision_protocol import validate_plan_decisions
 from .working_set_protocol import validate_working_set
-from .validation_protocol import validate_acceptance_coverage, validate_acceptance_ids
+from .validation_protocol import (
+    validate_acceptance_coverage,
+    validate_acceptance_ids,
+    validate_validation_identity,
+)
 
 
 def artifact_file(directory: Path, state: dict[str, Any], name: str) -> Path:
@@ -33,7 +37,7 @@ def artifact_file(directory: Path, state: dict[str, Any], name: str) -> Path:
     if not path.is_file():
         raise RuleFailure(f"artifact does not exist: {path}")
     if isinstance(reference, dict) and reference.get("sha256") != file_sha256(path):
-        raise RuleFailure(f"artifact content changed after registration: {name}")
+        raise RuleFailure(f"artifact {name} changed after it was registered")
     return path
 
 
@@ -245,8 +249,13 @@ def check_gate(
         if validation["verdict"] != "PASS":
             raise RuleFailure("Validation verdict must be PASS")
         validate_acceptance_coverage(work_item, validation)
-        if validation["subject_diff_hash"] != state["subject"]["diff_hash"]:
-            raise RuleFailure("Validation targets the wrong subject")
+        implementation = validate_json_file(
+            artifact_file(directory, state, "implementation"),
+            root / "schemas" / "implementation.schema.json",
+        )
+        validate_validation_identity(
+            state, validation, implementation["artifact_attempt"]
+        )
         if gate == "validation_passed_and_closure_ready":
             from validate_task import validate_projection
 
@@ -257,14 +266,13 @@ def check_gate(
         validation = load_validation(root, directory, state)
         if validation["verdict"] != "FAIL":
             raise RuleFailure("failure transition requires a FAIL Validation")
-        if (
-            validation["task_id"] != state["task_id"]
-            or validation["work_item_revision"] != revision
-            or validation["subject_base_commit"] != state["subject"]["base_commit"]
-            or validation["subject_head_commit"] != state["subject"]["head_commit"]
-            or validation["subject_diff_hash"] != state["subject"]["diff_hash"]
-        ):
-            raise RuleFailure("failed Validation targets the wrong revision or subject")
+        implementation = validate_json_file(
+            artifact_file(directory, state, "implementation"),
+            root / "schemas" / "implementation.schema.json",
+        )
+        validate_validation_identity(
+            state, validation, implementation["artifact_attempt"]
+        )
     elif gate == "closure_ready":
         if state["rigor"] != "R2":
             raise RuleFailure("only R2 closes from VERIFIED")

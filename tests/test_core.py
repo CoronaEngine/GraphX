@@ -1071,6 +1071,47 @@ class PolarisCoreTests(unittest.TestCase):
             )
         validation["acceptance_results"].pop()
         write_json_atomic(validation_path, validation)
+        identity_mismatches = {
+            "task_id": "TASK-9999",
+            "work_item_revision": 2,
+            "artifact_attempt": 2,
+            "subject_base_commit": subject["head_commit"],
+            "subject_head_commit": subject["base_commit"],
+            "subject_diff_hash": "0" * 64,
+        }
+        for field, mismatched_value in identity_mismatches.items():
+            with self.subTest(validation_identity=field):
+                original_value = validation[field]
+                validation[field] = mismatched_value
+                write_json_atomic(validation_path, validation)
+                state_bytes = (self.task / "state.json").read_bytes()
+                event_bytes = (self.task / "events.jsonl").read_bytes()
+                index_path = self.repo / ".polaris" / "project-index.json"
+                index_bytes = index_path.read_bytes()
+                try:
+                    with self.assertRaisesRegex(
+                        RuleFailure, "Validation targets the wrong"
+                    ):
+                        transition(
+                            self.repo,
+                            "TASK-0001",
+                            "PASS_VALIDATION",
+                            ["validation=validations/r001/validation-001.json"],
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                    self.assertEqual((self.task / "state.json").read_bytes(), state_bytes)
+                    self.assertEqual((self.task / "events.jsonl").read_bytes(), event_bytes)
+                finally:
+                    (self.task / "state.json").write_bytes(state_bytes)
+                    (self.task / "events.jsonl").write_bytes(event_bytes)
+                    index_path.write_bytes(index_bytes)
+                    validation[field] = original_value
+                    write_json_atomic(validation_path, validation)
         verified = transition(
             self.repo,
             "TASK-0001",
