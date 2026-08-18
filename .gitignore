@@ -10,3 +10,4 @@ dist/
 .transition.lock
 .polaris-host-smoke/
 .polaris/tasks/*/runtime/
+.worktrees/
