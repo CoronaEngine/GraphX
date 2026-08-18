@@ -151,6 +151,44 @@ class CodeGraphTests(unittest.TestCase):
             self.assertIn("0.1.19", text, path.relative_to(ROOT).as_posix())
             self.assertIn("0.1.2", text, path.relative_to(ROOT).as_posix())
 
+    def test_readmes_keep_codegraph_operational_boundaries(self) -> None:
+        """User-facing authorities retain the source-fallback and ownership boundaries."""
+        shared_anchors = [
+            "codegraph install",
+            "codegraph init",
+            ".codegraph/",
+            "codegraph sync",
+            "READ_SOURCE",
+            "INSPECT_GIT_DIFF",
+            "SEARCH_SOURCE",
+            "Validation",
+            "daemon",
+        ]
+        localized_anchors = {
+            ROOT / "README.md": [
+                "repository owner, not Polaris",
+                "one bounded",
+                "reconfigures",
+                "workflow gate",
+                "Validation remains graph-free",
+            ],
+            ROOT / "README.zh-CN.md": [
+                "仓库所有者（而不是 Polaris）",
+                "至多执行一次有界",
+                "重新配置",
+                "Workflow 门禁",
+                "Validation 不调用 CodeGraph",
+            ],
+        }
+        for path, anchors in localized_anchors.items():
+            with self.subTest(path=path.name):
+                text = path.read_text(encoding="utf-8")
+                for anchor in [*shared_anchors, *anchors]:
+                    self.assertIn(anchor, text, f"{path.name}: {anchor}")
+                mutated = text.replace("codegraph sync", "codegraph-sync", 1)
+                with self.assertRaises(AssertionError):
+                    self.assertIn("codegraph sync", mutated, path.name)
+
     def adapter_functions(self) -> tuple[object, object]:
         adapter_path = SCRIPTS / "internal" / "codegraph_adapter.py"
         self.assertTrue(

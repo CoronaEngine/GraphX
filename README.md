@@ -87,7 +87,7 @@ codegraph init
 polaris code-intelligence add codegraph --repo .
 ```
 
-Run these commands from the target repository as appropriate. `codegraph init` creates the `.codegraph/` marker; without it Polaris records `UNAVAILABLE` and uses source and Git directly. Polaris can only read CodeGraph status, explore indexed relationships, and perform one bounded `codegraph sync` at a declared stage boundary. It never installs, initializes, starts, configures, waits for, or manages CodeGraph or its watcher/daemon/MCP configuration.
+Run these commands from the target repository as appropriate. `codegraph init` creates the `.codegraph/` marker; without it Polaris records `UNAVAILABLE` and uses source and Git directly. Polaris can only read CodeGraph status, explore indexed relationships, and perform one bounded `codegraph sync` at a declared stage boundary. It never installs, initializes, starts, configures, reconfigures, waits for, or manages CodeGraph or its watcher/daemon/MCP configuration.
 
 CodeGraph's watcher and connection reconciliation are the primary freshness mechanisms. Polaris records a limited conclusion at the time it checks: `CURRENT_AT_CHECK`, `PARTIAL_STALE`, `INDEX_STALE`, `NOT_VERIFIED`, or `UNAVAILABLE`; it never claims commit-exact graph freshness. A `PARTIAL_STALE` response names specific files: read each current file directly (`READ_SOURCE`), or inspect the registered Git diff if it was deleted (`INSPECT_GIT_DIFF`). For `INDEX_STALE` or `NOT_VERIFIED`, treat the graph only as a lead and search the repository plus Git (`SEARCH_SOURCE`). Validation remains graph-free and relies on source, Git, builds, tests, static checks, and Human Checks.
 

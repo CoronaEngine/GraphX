@@ -87,7 +87,7 @@ codegraph init
 polaris code-intelligence add codegraph --repo .
 ```
 
-`codegraph init` 创建 `.codegraph/` marker。只有目标仓库已经有这个 marker 且项目策略允许时，Polaris 才会使用 CodeGraph；没有 marker 时，记录 `UNAVAILABLE` 并直接使用源码和 Git。Polaris 只会读取 `status`、查询 `explore`，以及只在声明的阶段边界至多执行一次有界 `codegraph sync`；它绝不安装、初始化、启动、配置、等待或管理 CodeGraph、watcher、daemon 或 MCP 配置。
+`codegraph init` 创建 `.codegraph/` marker。只有目标仓库已经有这个 marker 且项目策略允许时，Polaris 才会使用 CodeGraph；没有 marker 时，记录 `UNAVAILABLE` 并直接使用源码和 Git。Polaris 只会读取 `status`、查询 `explore`，以及只在声明的阶段边界至多执行一次有界 `codegraph sync`；它绝不安装、初始化、启动、配置、重新配置、等待或管理 CodeGraph、watcher、daemon 或 MCP 配置。
 
 CodeGraph 的 watcher 和连接时 reconciliation 是正常情况下的实时更新机制。Polaris 只记录检查时的有限结论：`CURRENT_AT_CHECK`、`PARTIAL_STALE`、`INDEX_STALE`、`NOT_VERIFIED` 或 `UNAVAILABLE`，不会宣称与 Git commit 精确一致。`PARTIAL_STALE` 会精确列出待同步文件：当前普通文件必须直接读取并记录 `READ_SOURCE`；已删除文件必须检查注册 subject 的 Git diff 并记录 `INSPECT_GIT_DIFF`。`INDEX_STALE` 或 `NOT_VERIFIED` 时，图只能作为导航线索，Agent 必须通过仓库搜索和 Git 证据记录 `SEARCH_SOURCE`。Provider 不可用、status 不可读或 sync 失败都不阻断阶段；Validation 不调用 CodeGraph，仍以源码、Git、构建、测试、静态检查和 Human Check 为准。
 
