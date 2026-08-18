@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
 import io
 import json
 import shutil
@@ -1694,6 +1695,51 @@ class CodeGraphTests(unittest.TestCase):
         self.assertEqual(result["freshness"]["status"], "CURRENT_AT_CHECK")
         self.assertIn("SYNC_ACKNOWLEDGED", result["freshness"]["basis"])
 
+    def test_explore_and_observed_sync_are_bounded_to_one_repo(self) -> None:
+        adapter = self.adapter_module()
+        (self.repo / ".codegraph").mkdir()
+        calls: list[tuple[list[str], Path]] = []
+
+        def runner(
+            command: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            cwd = kwargs["cwd"]
+            self.assertIsInstance(cwd, Path)
+            calls.append((command, cwd))
+            if command[1:3] == ["status", "--json"]:
+                return completed(healthy_status(self.repo))
+            if command[1:] == ["sync", "--quiet"]:
+                return completed("synced\n")
+            return completed("graph response\n")
+
+        pending = json.loads(healthy_status(self.repo))
+        pending["pendingChanges"]["modified"] = 1
+        initial = adapter._status_result(
+            self.repo, pending, "2026-08-19T00:00:00Z", "a" * 64
+        )
+        synchronized = adapter.synchronize_observed_status(
+            self.repo,
+            load_providers(ROOT)["codegraph"],
+            initial,
+            runner=runner,
+        )
+        explored = adapter.run_explore(
+            self.repo,
+            load_providers(ROOT)["codegraph"],
+            "find symbol A",
+            runner=runner,
+        )
+
+        self.assertEqual(synchronized["sync"]["status"], "SUCCESS")
+        self.assertEqual(explored["status"], "SUCCESS")
+        self.assertEqual(
+            explored["response_sha256"],
+            hashlib.sha256(b"graph response\n").hexdigest(),
+        )
+        self.assertTrue(all(cwd == self.repo for _command, cwd in calls))
+        self.assertEqual(sum(command[1] == "sync" for command, _cwd in calls), 1)
+        self.assertEqual(sum(command[1] == "explore" for command, _cwd in calls), 1)
+
     def test_index_wide_stale_reasons_do_not_sync(self) -> None:
         inspect_status, sync_if_needed = self.adapter_functions()
         (self.repo / ".codegraph").mkdir()
@@ -2101,29 +2147,35 @@ their codegraph entries may be stale:
                     result["stale_points"][0]["reason"], "STATUS_UNREADABLE"
                 )
 
-    def test_arbitrary_warning_is_not_a_codegraph_banner(self) -> None:
-        result = self.classify_response("⚠️ maybe stale: src/widget.py\n")
-
-        self.assertEqual(result["classification"], "NONE")
-        self.assertEqual(result["stale_points"], [])
-
-    def test_prefixed_or_quoted_official_banner_is_not_recognized(self) -> None:
+    def test_suspicious_or_wrapped_freshness_warnings_are_not_verified(self) -> None:
         banner = """⚠️ Some files referenced below were edited since the last index sync —
 their codegraph entries may be stale:
   - src/deleted.py (edited 800ms ago, pending sync)
 For accurate content of those specific files, Read them directly.
 """
-        for response in (
+        samples = (
+            "warning: graph may be stale\n",
+            "⚠️ maybe stale: src/widget.py\n",
+            "quoted: ⚠️ CodeGraph auto-sync is DISABLED — the index is frozen.\n",
+            "\ufeff⚠️ CodeGraph auto-sync is DISABLED — the index is frozen.\n",
+            " pending-sync required\n",
             f"context before banner\n{banner}",
             f"> {banner}",
             f"quoted response: {banner}",
             f" {banner}",
             f"\ufeff{banner}",
-        ):
-            with self.subTest(response=response[:20]):
+        )
+        for response in samples:
+            with self.subTest(response=response[:30]):
                 result = self.classify_response(response)
-                self.assertEqual(result["classification"], "NONE")
-                self.assertEqual(result["stale_points"], [])
+                self.assertEqual(result["classification"], "NOT_VERIFIED")
+                self.assertEqual(
+                    result["stale_points"][0]["reason"], "STATUS_UNREADABLE"
+                )
+                self.assertEqual(
+                    result["response_sha256"],
+                    hashlib.sha256(response.encode("utf-8")).hexdigest(),
+                )
 
     def test_merge_freshness_uses_conservative_status_and_ordered_evidence(self) -> None:
         merger = getattr(self.adapter_module(), "merge_freshness", None)
