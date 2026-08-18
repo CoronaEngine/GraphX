@@ -5,11 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import subprocess
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .polaris_core import InputFailure, RuleFailure, file_sha256
+from .task_location_protocol import resolve_repo_reference
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -20,6 +24,25 @@ _INDEX_REASONS = {
     "indexing": "INDEX_INDEXING",
     "failed": "INDEX_FAILED",
 }
+FRESHNESS_ORDER = {
+    "CURRENT_AT_CHECK": 0,
+    "PARTIAL_STALE": 1,
+    "NOT_VERIFIED": 2,
+    "INDEX_STALE": 3,
+    "UNAVAILABLE": 4,
+}
+
+_PARTIAL_BANNER_HEADER = (
+    "⚠️ Some files referenced below were edited since the last index sync —\n"
+    "their codegraph entries may be stale:\n"
+)
+_PARTIAL_BANNER_FOOTER = (
+    "For accurate content of those specific files, Read them directly."
+)
+_PARTIAL_BANNER_ROW = re.compile(
+    r"^  - (?P<path>.+) \(edited [^\n()]+, pending sync\)$"
+)
+_DISABLED_BANNER = "⚠️ CodeGraph auto-sync is DISABLED — the index is frozen."
 
 
 def _checked_at() -> str:
@@ -94,6 +117,150 @@ def _unavailable(checked_at: str, error: str) -> dict[str, Any]:
         needs_sync=False,
         pending_changes=None,
     )
+
+
+def _response_result(
+    classification: str,
+    checked_at: str,
+    *,
+    stale_points: list[dict[str, Any]],
+    error: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "classification": classification,
+        "checked_at": checked_at,
+        "basis": ["RESPONSE_BANNER"],
+        "stale_points": stale_points,
+        "response_sha256": None,
+        "error": error,
+    }
+
+
+def _response_not_verified(checked_at: str, error: BaseException | str) -> dict[str, Any]:
+    return _response_result(
+        "NOT_VERIFIED",
+        checked_at,
+        stale_points=[_index_point("STATUS_UNREADABLE")],
+        error=_error_summary(error),
+    )
+
+
+def _response_file_point(repo: Path, raw_path: str) -> dict[str, Any]:
+    target = resolve_repo_reference(repo, raw_path)
+    if target.exists():
+        if target.is_symlink() or not target.is_file():
+            raise ValueError(f"CodeGraph stale path is not a regular file: {raw_path}")
+        fallback = "READ_SOURCE"
+        observed_sha256: str | None = file_sha256(target)
+    else:
+        fallback = "INSPECT_GIT_DIFF"
+        observed_sha256 = None
+    return {
+        "scope": "FILE",
+        "path": raw_path,
+        "reason": "PENDING_SYNC",
+        "fallback": fallback,
+        "observed_sha256": observed_sha256,
+    }
+
+
+def classify_response(
+    repo: Path,
+    response: str,
+    *,
+    checked_at: str | None = None,
+) -> dict[str, Any]:
+    """Classify only documented CodeGraph freshness banners in an explore response."""
+    checked_at = _checked_at() if checked_at is None else checked_at
+    if not isinstance(response, str):
+        return _response_not_verified(checked_at, "CodeGraph response is not text")
+    response_sha256 = hashlib.sha256(response.encode("utf-8")).hexdigest()
+    normalized = response.replace("\r\n", "\n").replace("\r", "\n")
+    if _DISABLED_BANNER in normalized:
+        result = _response_result(
+            "INDEX_STALE",
+            checked_at,
+            stale_points=[_index_point("AUTO_SYNC_DISABLED")],
+        )
+        result["response_sha256"] = response_sha256
+        return result
+
+    header_index = normalized.find(_PARTIAL_BANNER_HEADER)
+    if header_index < 0:
+        result = _response_result("NONE", checked_at, stale_points=[])
+        result["response_sha256"] = response_sha256
+        return result
+
+    listed = normalized[header_index + len(_PARTIAL_BANNER_HEADER) :]
+    footer_index = listed.find(_PARTIAL_BANNER_FOOTER)
+    if footer_index < 0:
+        result = _response_not_verified(checked_at, "malformed CodeGraph stale banner")
+        result["response_sha256"] = response_sha256
+        return result
+    rows = listed[:footer_index].splitlines()
+    if not rows or any(_PARTIAL_BANNER_ROW.fullmatch(row) is None for row in rows):
+        result = _response_not_verified(checked_at, "malformed CodeGraph stale banner")
+        result["response_sha256"] = response_sha256
+        return result
+    try:
+        stale_points = [
+            _response_file_point(repo, _PARTIAL_BANNER_ROW.fullmatch(row)["path"])
+            for row in rows
+        ]
+    except (InputFailure, RuleFailure, OSError, ValueError) as error:
+        result = _response_not_verified(checked_at, error)
+        result["response_sha256"] = response_sha256
+        return result
+    result = _response_result("PARTIAL_STALE", checked_at, stale_points=stale_points)
+    result["response_sha256"] = response_sha256
+    return result
+
+
+def _unique_items(items: list[Any]) -> list[Any]:
+    result: list[Any] = []
+    for item in items:
+        if item not in result:
+            result.append(item)
+    return result
+
+
+def merge_freshness(
+    status_result: dict[str, Any], response_result: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge an inspected status with one explore-response freshness conclusion."""
+    status = status_result.get("status")
+    classification = response_result.get("classification")
+    if status not in FRESHNESS_ORDER or classification not in {
+        "NONE",
+        "PARTIAL_STALE",
+        "INDEX_STALE",
+        "NOT_VERIFIED",
+    }:
+        raise ValueError("unrecognized CodeGraph freshness result")
+
+    response_status = status if classification == "NONE" else classification
+    merged_status = max((status, response_status), key=FRESHNESS_ORDER.__getitem__)
+    status_basis = status_result.get("basis", [])
+    response_basis = response_result.get("basis", [])
+    include_response_basis = classification != "NONE" or (
+        status not in {"NOT_VERIFIED", "UNAVAILABLE"}
+        and "STATUS_JSON" in status_basis
+    )
+    basis = _unique_items(
+        [*status_basis, *(response_basis if include_response_basis else [])]
+    )
+    return {
+        **status_result,
+        "status": merged_status,
+        "checked_at": response_result.get("checked_at")
+        or status_result.get("checked_at"),
+        "basis": basis,
+        "stale_points": _unique_items(
+            [*status_result.get("stale_points", []), *response_result.get("stale_points", [])]
+        ),
+        "response_sha256": response_result.get("response_sha256"),
+        "error": status_result.get("error") or response_result.get("error"),
+    }
 
 
 def _marker_path(repo: Path, descriptor: dict[str, Any]) -> Path | None:

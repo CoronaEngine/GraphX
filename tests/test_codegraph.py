@@ -13,12 +13,13 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from init_project import initialize as init_project  # noqa: E402
+from init_task import initialize as init_task  # noqa: E402
 from internal.code_intelligence_protocol import (  # noqa: E402
     _project_marker_path,
     load_providers,
     select_provider,
 )
-from internal.polaris_core import RuleFailure  # noqa: E402
+from internal.polaris_core import RuleFailure, file_sha256  # noqa: E402
 
 
 def completed(
@@ -61,6 +62,16 @@ class CodeGraphTests(unittest.TestCase):
         )
         module = importlib.import_module("internal.codegraph_adapter")
         return module.inspect_status, module.sync_if_needed
+
+    def adapter_module(self) -> object:
+        return importlib.import_module("internal.codegraph_adapter")
+
+    def classify_response(
+        self, response: str, *, checked_at: str = "2026-08-18T00:00:00Z"
+    ) -> dict[str, object]:
+        classifier = getattr(self.adapter_module(), "classify_response", None)
+        self.assertTrue(callable(classifier), "CodeGraph response classifier must exist")
+        return classifier(self.repo, response, checked_at=checked_at)
 
     def test_official_descriptor_uses_explore_status_and_sync(self) -> None:
         descriptor = load_providers(ROOT)["codegraph"]
@@ -454,3 +465,211 @@ class CodeGraphTests(unittest.TestCase):
                 )
                 self.assertEqual(result["sync"]["status"], "SKIPPED")
                 self.assertEqual(calls, [])
+
+    def test_response_banner_marks_only_named_files_stale(self) -> None:
+        source = self.repo / "src/widget.py"
+        source.parent.mkdir()
+        source.write_text("def widget():\n    return 1\n", encoding="utf-8")
+        response = """⚠️ Some files referenced below were edited since the last index sync —
+their codegraph entries may be stale:
+  - src/widget.py (edited 800ms ago, pending sync)
+For accurate content of those specific files, Read them directly.
+"""
+
+        result = self.classify_response(response)
+
+        self.assertEqual(result["classification"], "PARTIAL_STALE")
+        self.assertEqual(result["basis"], ["RESPONSE_BANNER"])
+        self.assertEqual(result["stale_points"][0]["path"], "src/widget.py")
+        self.assertEqual(result["stale_points"][0]["fallback"], "READ_SOURCE")
+        self.assertEqual(
+            result["stale_points"][0]["observed_sha256"], file_sha256(source)
+        )
+
+    def test_disabled_banner_freezes_the_whole_index(self) -> None:
+        result = self.classify_response(
+            "⚠️ CodeGraph auto-sync is DISABLED — the index is frozen.\n"
+        )
+
+        self.assertEqual(result["classification"], "INDEX_STALE")
+        self.assertEqual(result["basis"], ["RESPONSE_BANNER"])
+        self.assertEqual(result["stale_points"][0]["reason"], "AUTO_SYNC_DISABLED")
+        self.assertEqual(result["stale_points"][0]["fallback"], "SEARCH_SOURCE")
+
+    def test_response_banner_rejects_unsafe_and_symlink_paths(self) -> None:
+        outside = self.repo.parent / "outside.py"
+        outside.write_text("outside\n", encoding="utf-8")
+        link = self.repo / "src/link.py"
+        link.parent.mkdir()
+        link.symlink_to(outside)
+        prefix = """⚠️ Some files referenced below were edited since the last index sync —
+their codegraph entries may be stale:
+"""
+        suffix = "For accurate content of those specific files, Read them directly.\n"
+        for listed_path in ("../outside.py", outside.as_posix(), "src/link.py"):
+            with self.subTest(listed_path=listed_path):
+                result = self.classify_response(
+                    f"{prefix}  - {listed_path} (edited 800ms ago, pending sync)\n{suffix}"
+                )
+                self.assertEqual(result["classification"], "NOT_VERIFIED")
+                self.assertEqual(
+                    result["stale_points"][0]["reason"], "STATUS_UNREADABLE"
+                )
+
+    def test_response_banner_missing_file_requires_git_diff(self) -> None:
+        response = """⚠️ Some files referenced below were edited since the last index sync —
+their codegraph entries may be stale:
+  - src/deleted.py (edited 800ms ago, pending sync)
+For accurate content of those specific files, Read them directly.
+"""
+
+        result = self.classify_response(response)
+
+        self.assertEqual(result["classification"], "PARTIAL_STALE")
+        self.assertEqual(result["stale_points"][0]["fallback"], "INSPECT_GIT_DIFF")
+        self.assertIsNone(result["stale_points"][0]["observed_sha256"])
+
+    def test_arbitrary_warning_is_not_a_codegraph_banner(self) -> None:
+        result = self.classify_response("⚠️ maybe stale: src/widget.py\n")
+
+        self.assertEqual(result["classification"], "NONE")
+        self.assertEqual(result["stale_points"], [])
+
+    def test_merge_freshness_uses_conservative_status_and_ordered_evidence(self) -> None:
+        merger = getattr(self.adapter_module(), "merge_freshness", None)
+        self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
+        status = {
+            "status": "CURRENT_AT_CHECK",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["STATUS_JSON"],
+            "stale_points": [],
+            "status_response_sha256": "status-sha",
+            "error": None,
+            "needs_sync": False,
+            "pending_changes": {"added": 0, "modified": 0, "removed": 0},
+        }
+        response = self.classify_response(
+            """⚠️ Some files referenced below were edited since the last index sync —
+their codegraph entries may be stale:
+  - src/deleted.py (edited 800ms ago, pending sync)
+For accurate content of those specific files, Read them directly.
+"""
+        )
+
+        result = merger(status, response)
+
+        self.assertEqual(result["status"], "PARTIAL_STALE")
+        self.assertEqual(result["basis"], ["STATUS_JSON", "RESPONSE_BANNER"])
+        self.assertEqual(result["stale_points"], response["stale_points"])
+        self.assertEqual(result["status_response_sha256"], "status-sha")
+
+    def test_none_response_does_not_upgrade_unverified_status(self) -> None:
+        merger = getattr(self.adapter_module(), "merge_freshness", None)
+        self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
+        status = {
+            "status": "NOT_VERIFIED",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["STATUS_JSON"],
+            "stale_points": [{"reason": "STATUS_UNREADABLE"}],
+        }
+
+        result = merger(status, self.classify_response("normal response\n"))
+
+        self.assertEqual(result["status"], "NOT_VERIFIED")
+        self.assertEqual(result["basis"], ["STATUS_JSON"])
+
+    def test_none_response_records_banner_check_after_successful_stale_status(self) -> None:
+        merger = getattr(self.adapter_module(), "merge_freshness", None)
+        self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
+        status = {
+            "status": "INDEX_STALE",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["STATUS_JSON"],
+            "stale_points": [{"reason": "INDEX_FAILED"}],
+        }
+
+        result = merger(status, self.classify_response("normal response\n"))
+
+        self.assertEqual(result["status"], "INDEX_STALE")
+        self.assertEqual(result["basis"], ["STATUS_JSON", "RESPONSE_BANNER"])
+
+    def test_malformed_recognized_banner_downgrades_status(self) -> None:
+        merger = getattr(self.adapter_module(), "merge_freshness", None)
+        self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
+        status = {
+            "status": "CURRENT_AT_CHECK",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["STATUS_JSON"],
+            "stale_points": [],
+        }
+        response = self.classify_response(
+            "⚠️ Some files referenced below were edited since the last index sync —\n"
+            "their codegraph entries may be stale:\n"
+        )
+
+        result = merger(status, response)
+
+        self.assertEqual(response["classification"], "NOT_VERIFIED")
+        self.assertEqual(result["status"], "NOT_VERIFIED")
+
+    def test_runtime_classify_response_confines_input_and_emits_json(self) -> None:
+        (self.repo / "README.md").write_text("test repository\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Polaris Test",
+                "-c",
+                "user.email=polaris@example.test",
+                "commit",
+                "-qm",
+                "initialize test repository",
+            ],
+            cwd=self.repo,
+            check=True,
+        )
+        init_task(self.repo, "TASK-0001", "R1")
+        runtime = self.repo / ".polaris/tasks/TASK-0001/runtime/code-intelligence"
+        runtime.mkdir()
+        response_path = runtime / "response.txt"
+        response_path.write_text(
+            """⚠️ Some files referenced below were edited since the last index sync —
+their codegraph entries may be stale:
+  - src/deleted.py (edited 800ms ago, pending sync)
+For accurate content of those specific files, Read them directly.
+""",
+            encoding="utf-8",
+        )
+        command = [
+            sys.executable,
+            SCRIPTS / "code_intelligence_runtime.py",
+            "classify-response",
+            "TASK-0001",
+            "--input",
+            response_path,
+            "--repo",
+            self.repo,
+            "--json",
+        ]
+
+        completed_process = subprocess.run(
+            command, cwd=ROOT, capture_output=True, text=True, check=False
+        )
+
+        self.assertEqual(completed_process.returncode, 0, completed_process.stderr)
+        payload = json.loads(completed_process.stdout)
+        self.assertEqual(payload["status"], "PASS")
+        self.assertEqual(payload["classification"], "PARTIAL_STALE")
+
+        outside = self.repo / "response.txt"
+        outside.write_text("normal response\n", encoding="utf-8")
+        outside_command = [*command]
+        outside_command[outside_command.index(response_path)] = outside
+        rejected = subprocess.run(
+            outside_command, cwd=ROOT, capture_output=True, text=True, check=False
+        )
+        self.assertEqual(rejected.returncode, 2)
+        rejected_payload = json.loads(rejected.stdout)
+        self.assertEqual(rejected_payload["status"], "ERROR")
+        self.assertIn("runtime", rejected_payload["message"])
