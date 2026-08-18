@@ -19,7 +19,7 @@ from .polaris_core import (
 from .review_protocol import validate_handoff, validate_review, validate_review_response
 from .plan_decision_protocol import validate_plan_decisions
 from .working_set_protocol import validate_working_set
-from .validation_protocol import validate_acceptance_coverage
+from .validation_protocol import validate_acceptance_coverage, validate_acceptance_ids
 
 
 def artifact_file(directory: Path, state: dict[str, Any], name: str) -> Path:
@@ -90,6 +90,7 @@ def check_gate(
                     raise RuleFailure(
                         f"Acceptance {criterion['id']} has unresolved {field}"
                     )
+        validate_acceptance_ids(work_item)
         if work_item["known_unknowns"]:
             raise RuleFailure("Work Item has unresolved known_unknowns")
         dispatch = work_item.get("review_dispatch")

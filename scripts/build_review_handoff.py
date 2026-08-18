@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from internal.polaris_core import (
+    acquire_lock,
     InputFailure,
     RuleFailure,
     current_work_item_path,
@@ -18,6 +19,8 @@ from internal.polaris_core import (
     full_commit,
     protocol_root,
     read_json,
+    rebuild_state_value,
+    release_lock,
     require_protocol_compatible,
     run_main,
     task_dir,
@@ -30,7 +33,7 @@ from internal.artifact_protocol import normalized_reference
 from internal.code_intelligence_protocol import record_reference
 from internal.task_location_protocol import logical_repo_path, resolve_repo_reference
 from internal.review_protocol import MAX_REVIEW_ATTEMPTS
-from internal.task_layout import evidence_dir, review_handoff_path, state_path
+from internal.task_layout import events_path, evidence_dir, review_handoff_path, state_path
 from internal.transition_gates import check_gate
 from internal.working_set_protocol import validate_working_set
 
@@ -85,7 +88,7 @@ def _code_intelligence_entry(
     return _entry(repo, role, directory / reference["path"])
 
 
-def build(
+def _build_locked(
     repo: Path,
     task_id: str,
     implementer_session_id: str,
@@ -287,6 +290,42 @@ def build(
             "open a new host session or isolated reviewer worker, then load only this handoff"
         ),
     }
+
+
+def build(
+    repo: Path,
+    task_id: str,
+    implementer_session_id: str,
+    isolation_mode: str | None,
+    implementation_path: Path | None = None,
+    knowledge_path: Path | None = None,
+    subject_base: str | None = None,
+    subject_head: str | None = None,
+    review_response_path: Path | None = None,
+) -> dict[str, Any]:
+    """Build while excluding task transitions and rejecting stale projections."""
+    directory = task_dir(repo, task_id)
+    lock_path = directory / ".transition.lock"
+    descriptor = acquire_lock(lock_path)
+    try:
+        stored_state = read_json(state_path(directory))
+        if rebuild_state_value(events_path(directory)) != stored_state:
+            raise RuleFailure(
+                "state.json differs from events.jsonl; rebuild before building Review handoff"
+            )
+        return _build_locked(
+            repo,
+            task_id,
+            implementer_session_id,
+            isolation_mode,
+            implementation_path,
+            knowledge_path,
+            subject_base,
+            subject_head,
+            review_response_path,
+        )
+    finally:
+        release_lock(lock_path, descriptor)
 
 
 def main() -> int:

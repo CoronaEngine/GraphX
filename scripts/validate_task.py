@@ -29,7 +29,7 @@ from internal.code_intelligence_protocol import record_reference
 from internal.review_protocol import validate_handoff, validate_review, validate_review_response
 from internal.plan_decision_protocol import validate_plan_decisions
 from internal.working_set_protocol import validate_working_set
-from internal.validation_protocol import validate_acceptance_coverage
+from internal.validation_protocol import validate_acceptance_coverage, validate_acceptance_ids
 from internal.task_layout import events_path, explorations_dir
 from internal.task_layout import state_path as task_state_path
 
@@ -106,6 +106,7 @@ def validate_projection(
         raise RuleFailure("current Work Item identity or revision does not match state")
     if work_item["rigor"] != state["rigor"]:
         raise RuleFailure("Work Item rigor does not match task state")
+    validate_acceptance_ids(work_item)
     if any(work_item["risk_flags"].values()) and state["rigor"] != "R2":
         raise RuleFailure("a true risk flag requires rigor R2")
     full_commit(repo, work_item["base_commit"])

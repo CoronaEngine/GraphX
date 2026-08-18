@@ -3583,6 +3583,7 @@ class PolarisCoreTests(unittest.TestCase):
                 None,
                 None,
             )
+
         write_json_atomic(path, value)
         with self.assertRaises(RuleFailure):
             transition(
@@ -3615,6 +3616,35 @@ class PolarisCoreTests(unittest.TestCase):
             )["to"],
             "QUALIFIED",
         )
+
+    def test_duplicate_acceptance_ids_are_rejected(self) -> None:
+        """不同内容不得复用同一个 Acceptance ID，否则 Validation 无法精确覆盖。"""
+        self.freeze_work_item()
+        work_item_path = self.task / "revisions" / "work-item-r001.json"
+        work_item = read_json(work_item_path)
+        work_item["acceptance"].append(
+            {
+                "id": "AC-01",
+                "statement": "A distinct criterion with a reused ID",
+                "evidence": "a different check",
+            }
+        )
+        write_json_atomic(work_item_path, work_item)
+        with self.assertRaisesRegex(RuleFailure, "duplicate acceptance IDs"):
+            validate(self.repo, "TASK-0001")
+        with self.assertRaisesRegex(RuleFailure, "duplicate acceptance IDs"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "QUALIFY",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
 
     def test_r0_keeps_isolated_review_in_same_session(self) -> None:
         """R0 继续使用同会话隔离审查，不创建独立 Review 任务。"""
@@ -4433,6 +4463,20 @@ class PolarisCoreTests(unittest.TestCase):
                 None,
             )
         evidence.write_text("original evidence\n", encoding="utf-8")
+        lock_path = self.task / ".transition.lock"
+        lock_path.write_text("held", encoding="utf-8")
+        with self.assertRaises(InputFailure):
+            build_review_handoff(
+                self.repo,
+                "TASK-0001",
+                "impl-session",
+                "fresh_session",
+                implementation_path,
+                knowledge_path,
+                base,
+                head,
+            )
+        lock_path.unlink()
         rebuilt = build_review_handoff(
             self.repo,
             "TASK-0001",
@@ -4444,6 +4488,38 @@ class PolarisCoreTests(unittest.TestCase):
             head,
         )
         self.assertEqual(Path(rebuilt["path"]), handoff_path)
+        stale_state = read_json(self.task / "state.json")
+        transition(
+            self.repo,
+            "TASK-0001",
+            "START_REVIEW",
+            [
+                "implementation=" + implementation_path.relative_to(self.task).as_posix(),
+                "knowledge_delta=" + knowledge_path.relative_to(self.task).as_posix(),
+                "review_handoff=" + handoff_path.relative_to(self.task).as_posix(),
+            ],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        registered_hash = file_sha256(handoff_path)
+        write_json_atomic(self.task / "state.json", stale_state)
+        evidence.write_text("changed after registration\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuleFailure, "differs from events"):
+            build_review_handoff(
+                self.repo,
+                "TASK-0001",
+                "impl-session",
+                "fresh_session",
+                implementation_path,
+                knowledge_path,
+                base,
+                head,
+            )
+        self.assertEqual(file_sha256(handoff_path), registered_hash)
 
     def test_start_implementation_self_transition_requires_new_handoff(self) -> None:
         """IMPLEMENTING 自转换只能在返工清除旧 handoff 后注册下一 attempt。"""
