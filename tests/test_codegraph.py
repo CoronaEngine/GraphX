@@ -21,6 +21,7 @@ from internal.code_intelligence_protocol import (  # noqa: E402
     select_provider,
     validate_record_value,
 )
+from internal.host_adapters import discover_skills, load_host_adapters, render_skill  # noqa: E402
 from internal.polaris_core import (  # noqa: E402
     InputFailure,
     RuleFailure,
@@ -836,6 +837,56 @@ class CodeGraphTests(unittest.TestCase):
             {"explore": "codegraph_explore", "status": "codegraph_status"},
         )
         self.assertEqual(descriptor["cli"]["sync_args"], ["sync", "--quiet"])
+
+    def test_all_agent_surfaces_share_codegraph_fallback_rules(self) -> None:
+        """Stage instructions keep CodeGraph stale-data fallbacks identical per host."""
+        required_fragments = (
+            ".codegraph/",
+            "codegraph_explore",
+            "codegraph explore",
+            "codegraph sync",
+            "PARTIAL_STALE",
+            "INDEX_STALE",
+            "directly read",
+            "never run `codegraph init`",
+        )
+        retired_operations = (
+            "symbol" + "_search",
+            "call" + "_graph",
+            "review" + "_context",
+            "refresh" + "_files",
+            "refresh" + "_workspace",
+        )
+        stage_skills = (
+            "code-intelligence",
+            "architecture-planning",
+            "implementation",
+            "adversarial-review",
+            "documentation-sync",
+        )
+        available_skills = set(discover_skills(ROOT))
+        for adapter in load_host_adapters(ROOT):
+            for skill_name in stage_skills:
+                source = (ROOT / "skills" / skill_name / "SKILL.md").read_text(
+                    encoding="utf-8"
+                )
+                rendered = render_skill(
+                    source, skill_name, adapter, available_skills
+                )
+                for fragment in required_fragments:
+                    self.assertIn(fragment, rendered, f"{adapter['host_id']}:{skill_name}")
+                self.assertIn("v2", rendered, f"{adapter['host_id']}:{skill_name}")
+                for retired in retired_operations:
+                    self.assertNotIn(retired, rendered, f"{adapter['host_id']}:{skill_name}")
+
+        validation = (ROOT / "skills" / "validation" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Do not invoke Code Intelligence", validation)
+
+        agents = (ROOT / "templates" / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("stop CodeGraph calls for this session", agents)
+        self.assertIn("installer-managed marker block", agents)
 
     def test_provider_requires_marker_and_accepts_mcp_or_cli(self) -> None:
         self.assertIsNone(

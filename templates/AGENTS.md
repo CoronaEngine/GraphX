@@ -12,3 +12,11 @@
 - Let only the main `engineering-task` context apply workflow transitions; Implementer and Reviewer workers only write their declared artifacts.
 - For R1/R2 Review, stop implementation and use the registered handoff in a fresh Review task or isolated reviewer agent.
 - Recover a task from repository state; do not require previous chat history.
+
+## Optional CodeGraph rules
+
+- Use CodeGraph only when the repository root already contains `.codegraph/`. When it is absent, stop CodeGraph calls for this session and use repository source and Git; a user may choose to initialize CodeGraph, but agents must never run `codegraph init`.
+- Prefer MCP `codegraph_explore`; when MCP is unavailable, use `codegraph explore` as the CLI fallback. A bounded `codegraph sync` may run only through the Polaris stage boundary procedure and never gates a task.
+- Save and classify every graph response in task runtime. For `PARTIAL_STALE`, directly read every listed stale file and record its current SHA-256. For `INDEX_STALE` or `NOT_VERIFIED`, treat graph output only as a lead, use source search and Git evidence, and stop repeated graph calls for that stage.
+- Never install, start, authenticate, reconfigure, or manage CodeGraph, its watcher, daemon, lock, or MCP settings. CodeGraph cannot expand frozen scope or replace source, Git, builds, tests, Review, Validation, or Human gates.
+- Preserve any installer-managed marker block exactly as owned by that installer; Polaris does not add, edit, or remove installer marker fences.
