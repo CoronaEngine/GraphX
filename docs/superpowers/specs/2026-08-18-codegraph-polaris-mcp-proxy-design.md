@@ -1,4 +1,4 @@
-# CodeGraph CLI Freshness Wrapper Design
+# Polaris-only CodeGraph MCP Freshness Proxy Design
 
 ## Status
 
@@ -33,11 +33,17 @@ The required behavior is deliberately fail-safe:
 
 ## Guarantee Boundary
 
-The wrapper guarantees that every graph response delivered by a Polaris stage
-has an adjacent Polaris freshness envelope, and that every freshness signal
-Polaris observes is classified conservatively. It does not prove that
+The proxy guarantees that every proxy graph response delivered by a Polaris
+stage has an adjacent Polaris freshness envelope, and that every freshness
+signal Polaris observes is classified conservatively. It does not prove that
 CodeGraph's parser or relationship inference is semantically correct, and it
 does not claim permanent or commit-exact freshness after delivery.
+
+The original `codegraph_explore` MCP tool and unrestricted shell access remain
+available. Consequently, Polaris cannot prevent an Agent from bypassing the
+proxy. It can require the proxy in canonical stage instructions and
+mechanically reject Code Intelligence evidence that lacks proxy provenance,
+but it cannot prove that an Agent never observed an out-of-band raw response.
 
 The core invariant is:
 
@@ -49,58 +55,72 @@ The core invariant is:
 
 ## Selected Approach
 
-Add a Polaris-owned CLI freshness wrapper and make it the only CodeGraph query
-entry point used by Polaris stages. The wrapper uses CodeGraph CLI commands for
-status, optional one-shot sync, and explore, all with the same explicit
-repository working directory. It writes the raw response only to the ignored
-task runtime and emits a freshness envelope before any graph content.
+Add a project-scoped Polaris MCP server exposing one
+`polaris_codegraph_explore` tool. Polaris stage Skills use this proxy for
+freshness-aware graph queries. The existing `codegraph_explore` MCP tool stays
+installed and callable for non-Polaris work, and Polaris does not remove,
+wrap, deny, or restrict shell commands.
 
-Direct `codegraph_explore` MCP calls remain available outside Polaris, but
-Polaris stage Skills must not use them. If the wrapper cannot run, the stage
-falls back to source and Git rather than calling the Provider directly.
+The proxy uses CodeGraph CLI commands internally for status, optional
+one-shot sync, and explore, all with the same explicit repository working
+directory. This avoids an MCP-to-MCP dependency while preserving output
+equivalence with `codegraph_explore`. It writes the raw response only to the
+ignored task runtime and returns a structured freshness envelope together
+with any graph content.
 
-This approach is preferred over instruction-only changes because the warning
-must be mechanically adjacent to the graph response. It is preferred over a
-new MCP proxy because the existing CLI exposes equivalent `status`, `sync`,
-and `explore` operations without adding a daemon or transport subsystem.
+If the proxy cannot run, the Polaris stage falls back to source and Git. It
+must not silently substitute the raw Provider tool for Polaris evidence.
+Agents remain free to use the original tool or shell outside that evidence
+path, but any such output is unverified navigation context and cannot produce
+a `CURRENT` Polaris record.
 
-## CLI Surface
+This approach is preferred over instruction-only changes because freshness
+must be mechanically adjacent to the graph response. It preserves the raw
+Provider and shell surfaces as requested while giving Polaris records one
+auditable, fail-safe path.
 
-Create `scripts/code_intelligence_query.py` with one bounded operation:
+## MCP Surface
+
+Create `scripts/code_intelligence_mcp.py`, a standard-library stdio MCP server
+launched from the vendored Polaris project runtime. It exposes one bounded
+tool:
 
 ```text
-python3 scripts/code_intelligence_query.py TASK-0001 \
-  --repo . \
-  --stage PLANNING \
-  --query-id CIQ-001 \
-  --purpose "discover frozen-task relationships" \
-  --sync-if-needed \
-  --query "symbols and paths relevant to the frozen task"
+polaris_codegraph_explore({
+  "task_id": "TASK-0001",
+  "stage": "PLANNING",
+  "query_id": "CIQ-001",
+  "purpose": "discover frozen-task relationships",
+  "query": "symbols and paths relevant to the frozen task",
+  "sync_if_needed": true
+})
 ```
 
 Required inputs:
 
 - task ID, used to confine runtime evidence;
-- repository path;
 - Polaris stage and finite query purpose;
 - the next sequential `CIQ-*` ID for this stage record;
 - one non-empty query string.
 
-`--sync-if-needed` permits the existing one-shot sync behavior. Omitting it is
+The repository is fixed by the project-scoped server launch configuration and
+is intentionally not a tool argument.
+
+`sync_if_needed: true` permits the existing one-shot sync behavior. `false` is
 read-only and does not wait for CodeGraph auto-sync. Neither mode sleeps,
 polls, retries, initializes CodeGraph, or manages its daemon or watcher.
 
-The command exits successfully when graph output is available, even when its
-delivery state is `STALE` or `UNKNOWN`. Provider execution failure exits
-successfully only after emitting an `UNKNOWN` envelope with no graph response
-and a required source fallback. Invalid Polaris inputs remain command errors.
+The MCP result is successful when graph output is available, even when its
+delivery state is `STALE` or `UNKNOWN`. Provider execution failure returns an
+`UNKNOWN` result with no graph response and a required source fallback.
+Invalid Polaris inputs return an MCP tool error.
 
 ## Query Flow
 
 1. Validate protocol compatibility, project configuration, `.codegraph/`, task
    identity, stage, purpose, and runtime confinement.
 2. Run a CLI pre-query status check in `cwd=repo`.
-3. If `--sync-if-needed` is set and the pre-query status has pending changes,
+3. If `sync_if_needed` is true and the pre-query status has pending changes,
    run at most one bounded sync and at most one post-sync status check.
 4. If the effective pre-query state permits a query, run one bounded
    `codegraph explore` in the same `cwd=repo`. Known pending changes and
@@ -115,7 +135,7 @@ and a required source fallback. Invalid Polaris inputs remain command errors.
 9. Emit the envelope first, followed by raw graph output only when available.
 10. Include the compact evidence bundle path in the envelope for the immutable
     stage record. The explicit query ID determines its unique runtime filename;
-    the wrapper rejects an existing destination rather than overwriting it.
+    the proxy rejects an existing destination rather than overwriting it.
 
 There is no query retry. A stale response is delivered once with restrictions;
 an unknown response is either delivered as navigation-only evidence or
@@ -172,9 +192,26 @@ Only a response with no supported or suspicious freshness signal is neutral.
 `UNAVAILABLE` remains the no-query state for disabled Code Intelligence,
 missing `.codegraph/`, or missing CLI capability.
 
+## Proxy Activation
+
+The proxy is project-scoped and Polaris-owned. Host adapters render a local
+MCP registration that launches the vendored server with one fixed repository
+root. They do not add a global server, change the user's raw CodeGraph MCP
+registration, remove any CodeGraph tool, or alter shell permissions.
+
+The server process receives the repository root at launch and does not accept
+an arbitrary project path from the tool call. It rejects a missing, moved, or
+symlinked project root. Removing or disabling the project-local Polaris MCP
+registration disables the proxy without affecting CodeGraph itself.
+
+The adapter contract must represent the project-scoped MCP registration for
+each supported host rather than embedding host-specific configuration writes
+in the Code Intelligence adapter. Vendoring and project validation verify that
+the registration launches only the repository's vendored Polaris runtime.
+
 ## Envelope
 
-Every successful wrapper invocation begins stdout with a finite block:
+Every successful proxy tool result begins with a finite text content block:
 
 ```text
 [POLARIS_CODEGRAPH_FRESHNESS]
@@ -191,11 +228,10 @@ evidence_bundle: runtime/code-intelligence/CIQ-001.json
 [/POLARIS_CODEGRAPH_FRESHNESS]
 ```
 
-The raw CodeGraph response, when retained, follows this block. The wrapper
-must never print graph output before the envelope. Human-readable diagnostic
-text is captured into the finite envelope error field. The wrapper flushes the
-complete stdout envelope before writing graph bytes or any stderr diagnostic,
-so a combined host transcript cannot expose raw graph content first.
+The raw CodeGraph response, when retained, is a later content block in the same
+MCP tool result. The proxy must never return graph content before the envelope.
+Human-readable diagnostics are captured in the finite envelope error field;
+subprocess stdout and stderr are never forwarded ahead of the envelope.
 
 ## Evidence and Record Protocol
 
@@ -229,11 +265,13 @@ change because no workflow state or transition changes.
 
 ## Stage Behavior
 
-- Planning, Implementation, and Review call only the wrapper for graph
-  queries. They may request one-shot sync but cannot call raw MCP explore.
-- Implementation may query after edits only through a fresh wrapper
-  invocation; it does not reuse the entry envelope.
-- Documentation Sync uses the same wrapper/status machinery for its final
+- Planning, Implementation, and Review use the proxy for freshness-aware
+  Polaris graph evidence. The raw `codegraph_explore` remains callable, but
+  its output is out-of-band, always unverified for Polaris, and cannot back a
+  `CURRENT` stage record.
+- Implementation may query after edits only through a fresh proxy invocation
+  for Polaris evidence; it does not reuse the entry envelope.
+- Documentation Sync uses the same proxy/status machinery for its final
   bounded sync evidence when supported source changed.
 - Validation remains graph-free.
 - On `STALE` or `UNKNOWN`, stage conclusions concerning returned files or
@@ -265,7 +303,8 @@ Deterministic unit and integration tests must cover:
 1. pending pre-query status cannot produce `CURRENT`;
 2. pending post-query status downgrades an otherwise clean response;
 3. zero-pending pre/post status plus a clean response produces `CURRENT`;
-4. failed or malformed status produces `UNKNOWN` and never calls raw MCP;
+4. failed or malformed status produces `UNKNOWN` and does not run Provider
+   explore inside the proxy;
 5. stale and disabled-auto-sync banners produce `STALE`;
 6. prefixed, malformed, or changed banner shapes fail conservatively;
 7. CLI status and explore always share the requested `cwd`;
@@ -275,13 +314,14 @@ Deterministic unit and integration tests must cover:
     evidence;
 11. historical v1/v2 records remain byte-identical and readable;
 12. Planning, Implementation, Documentation Sync, Review, vendored agents,
-    and host renderings prohibit raw CodeGraph MCP use;
+    and host renderings require proxy provenance for Polaris evidence while
+    preserving the raw CodeGraph MCP tool and unrestricted shell access;
 13. Validation remains graph-free;
 14. the full Polaris suite passes without requiring CodeGraph;
 15. an optional real-CLI smoke test uses only a disposable temporary repo.
 
 Skill evaluation must include pressure cases where an Agent is asked to skip
-the wrapper, trust a clean-looking graph despite pending changes, reuse an old
+the proxy, trust a clean-looking graph despite pending changes, reuse an old
 Implementation envelope, or treat `UNKNOWN` as current. The post-change Agent
 must refuse each shortcut and perform the required fallback.
 
@@ -292,13 +332,17 @@ must refuse each shortcut and perform the required fallback.
 - Making graph freshness a workflow or acceptance gate.
 - Waiting for automatic sync to finish.
 - Installing, initializing, configuring, or managing CodeGraph.
-- Building a second watcher, daemon, index, or MCP proxy.
+- Building a second watcher, daemon, or index.
+- Removing, disabling, or restricting the original CodeGraph MCP tool.
+- Restricting shell access or rejecting ordinary shell use outside Polaris
+  Code Intelligence evidence.
 - Guaranteeing that a response remains current after it has been delivered.
 
 ## Acceptance Criteria
 
-1. No Polaris stage can receive CodeGraph graph output without a preceding
-   freshness envelope from the wrapper.
+1. No CodeGraph output can be accepted as Polaris Code Intelligence evidence
+   without a proxy evidence bundle whose MCP result placed the freshness
+   envelope before the graph content.
 2. Any observed pending change, stale banner, unhealthy index, project
    mismatch, or failed verification prevents a `CURRENT` delivery.
 3. `UNKNOWN` is mechanically restricted exactly like `STALE`.
@@ -307,3 +351,5 @@ must refuse each shortcut and perform the required fallback.
 5. Stale graph output remains available as navigation-only evidence with
    mandatory current-source or Git fallback.
 6. Existing historical records and workflow transitions remain valid.
+7. The original `codegraph_explore` tool and unrestricted shell access remain
+   available and unchanged.
