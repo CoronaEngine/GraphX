@@ -7,7 +7,7 @@ from typing import Any
 
 from .code_intelligence_protocol import (
     _record_name,
-    validate_legacy_record_value,
+    validate_historical_legacy_record_value,
     validate_record_value,
 )
 from .polaris_core import (
@@ -200,6 +200,10 @@ def _retired_code_intelligence_records(
 ) -> list[dict[str, str]]:
     """Inventory immutable v1 records at their canonical task-local locations."""
     records_root = directory / "code-intelligence"
+    if records_root.is_symlink():
+        raise RuleFailure(
+            f"Code Intelligence record directory must not be a symlink: {records_root}"
+        )
     if not records_root.exists():
         return []
     require_regular_tree(records_root, "Code Intelligence record directory")
@@ -213,17 +217,21 @@ def _retired_code_intelligence_records(
         if not isinstance(value, dict):
             raise RuleFailure(f"Code Intelligence record path is non-canonical: {path}")
         if value.get("record_version") == 1:
-            value = validate_legacy_record_value(repo, task_id, value, protocol_root)
+            value = validate_historical_legacy_record_value(
+                repo, task_id, path, value, protocol_root
+            )
         elif value.get("record_version") == 2:
             value = validate_record_value(repo, task_id, value, protocol_root)
         else:
             raise RuleFailure(f"Code Intelligence record path is non-canonical: {path}")
-        expected = code_intelligence_record_path(
-            directory, value["work_item_revision"], _record_name(value)
-        )
-        if path != expected:
-            raise RuleFailure(f"Code Intelligence record path is non-canonical: {path}")
         if value["record_version"] != 1:
+            expected = code_intelligence_record_path(
+                directory, value["work_item_revision"], _record_name(value)
+            )
+            if path != expected:
+                raise RuleFailure(
+                    f"Code Intelligence record path is non-canonical: {path}"
+                )
             continue
         retired.append(
             {

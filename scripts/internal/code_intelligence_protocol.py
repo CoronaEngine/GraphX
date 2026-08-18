@@ -304,13 +304,13 @@ def _record_name(value: dict[str, Any]) -> str:
     )
 
 
-def validate_legacy_record_value(
+def _validate_legacy_record_value(
     repo: Path,
     task_id: str,
     value: dict[str, Any],
-    root: Path | None = None,
+    root: Path,
+    require_current_revision: bool,
 ) -> dict[str, Any]:
-    root = protocol_root(repo) if root is None else root
     schema = read_json(root / "schemas" / "code-intelligence-record-v1.schema.json")
     errors = validate_schema(value, schema)
     if errors:
@@ -318,10 +318,13 @@ def validate_legacy_record_value(
             "Code Intelligence record failed schema validation:\n- "
             + "\n- ".join(errors)
         )
-    directory = task_dir(repo, task_id)
-    state = read_json(state_path(directory))
-    if value["task_id"] != task_id or value["work_item_revision"] != state["current_revision"]:
+    if value["task_id"] != task_id:
         raise RuleFailure("Code Intelligence record targets the wrong task revision")
+    if require_current_revision:
+        directory = task_dir(repo, task_id)
+        state = read_json(state_path(directory))
+        if value["work_item_revision"] != state["current_revision"]:
+            raise RuleFailure("Code Intelligence record targets the wrong task revision")
     _record_name(value)
     target = value["target"]
     base = full_commit(repo, target["base_commit"])
@@ -402,6 +405,36 @@ def validate_legacy_record_value(
         or refresh_status in {"SUCCESS", "FAILED"}
     ):
         raise RuleFailure("unavailable Code Intelligence record contains an attempted operation")
+    return value
+
+
+def validate_legacy_record_value(
+    repo: Path,
+    task_id: str,
+    value: dict[str, Any],
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Validate legacy evidence only when it names the task's current revision."""
+    root = protocol_root(repo) if root is None else root
+    return _validate_legacy_record_value(repo, task_id, value, root, True)
+
+
+def validate_historical_legacy_record_value(
+    repo: Path,
+    task_id: str,
+    path: Path,
+    value: dict[str, Any],
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Validate an immutable v1 record at its canonical historical location."""
+    root = protocol_root(repo) if root is None else root
+    value = _validate_legacy_record_value(repo, task_id, value, root, False)
+    directory = task_dir(repo, task_id)
+    expected = code_intelligence_record_path(
+        directory, value["work_item_revision"], _record_name(value)
+    )
+    if path != expected:
+        raise RuleFailure("Code Intelligence record reference uses a non-canonical path")
     return value
 
 

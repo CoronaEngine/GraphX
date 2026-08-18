@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
 from migrate_project import migrate as migrate_project  # noqa: E402
+from new_revision import create as new_revision  # noqa: E402
 from internal.code_intelligence_protocol import (  # noqa: E402
     _project_marker_path,
     load_providers,
@@ -250,6 +252,92 @@ class CodeGraphTests(unittest.TestCase):
         vendor(ROOT, self.repo, False)
 
         with self.assertRaisesRegex(RuleFailure, "non-canonical"):
+            migrate_project(self.repo)
+
+    def test_migration_inventories_v1_records_from_prior_revisions(self) -> None:
+        """A frozen r001 v1 record remains inventoryable after TASK-0001 reaches r002."""
+        self.initialize_task()
+        new_revision(self.repo, "TASK-0001")
+        state_path = self.repo / ".polaris/tasks/TASK-0001/state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["current_revision"] = 2
+        write_json_atomic(state_path, state)
+        events_path = self.repo / ".polaris/tasks/TASK-0001/events.jsonl"
+        events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+        events[0]["current_revision"] = 2
+        write_text_atomic(
+            events_path,
+            "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
+        )
+        self.set_protocol_version("0.1.18")
+        legacy_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/code-intelligence/r001/planning.json"
+        )
+        legacy = {
+            "record_version": 1,
+            "task_id": "TASK-0001",
+            "work_item_revision": 1,
+            "stage": "PLANNING",
+            "artifact_attempt": None,
+            "reviewer_slot": None,
+            "provider": None,
+            "target": {
+                "base_commit": subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=self.repo,
+                    capture_output=True,
+                    check=True,
+                    encoding="utf-8",
+                    text=True,
+                ).stdout.strip(),
+                "head_commit": None,
+                "diff_hash": None,
+            },
+            "status": "UNAVAILABLE",
+            "queries": [],
+            "refresh": None,
+            "recorded_at": "1970-01-01T00:00:00Z",
+        }
+        write_json_atomic(legacy_path, legacy)
+        legacy_bytes = legacy_path.read_bytes()
+        with self.assertRaisesRegex(
+            RuleFailure, "targets the wrong task revision"
+        ):
+            validate_record_value(self.repo, "TASK-0001", legacy, ROOT)
+        vendor(ROOT, self.repo, False)
+
+        try:
+            migrate_project(self.repo)
+        except RuleFailure as exc:
+            self.fail(f"migration rejected immutable historical evidence: {exc}")
+
+        migration = json.loads(
+            (
+                self.repo
+                / ".polaris/migrations/MIG-0.1.18-to-0.1.19.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            migration["retired_code_intelligence_records"],
+            [{
+                "task_id": "TASK-0001",
+                "path": "code-intelligence/r001/planning.json",
+                "sha256": file_sha256(legacy_path),
+            }],
+        )
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+
+    def test_migration_rejects_a_dangling_code_intelligence_symlink(self) -> None:
+        """A dangling record-root symlink is rejected rather than treated as absent."""
+        self.initialize_task()
+        self.set_protocol_version("0.1.18")
+        records_root = self.repo / ".polaris/tasks/TASK-0001/code-intelligence"
+        shutil.rmtree(records_root)
+        records_root.symlink_to(self.repo / "missing-code-intelligence")
+        vendor(ROOT, self.repo, False)
+
+        with self.assertRaisesRegex(RuleFailure, "must not be a symlink"):
             migrate_project(self.repo)
 
     def test_partial_stale_record_requires_matching_source_fallback(self) -> None:
