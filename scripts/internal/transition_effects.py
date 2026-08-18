@@ -72,6 +72,19 @@ def prepare_next_state(
 ) -> tuple[dict[str, Any], dict[str, dict[str, str]], dict[str, str] | None]:
     next_state = copy.deepcopy(state)
     submitted_artifacts = parse_artifacts(artifact_values, directory)
+    if event_name == "START_IMPLEMENTATION":
+        if "implementation_handoff" not in submitted_artifacts:
+            raise RuleFailure(
+                "START_IMPLEMENTATION requires a new implementation_handoff artifact"
+            )
+        if (
+            state["status"] == "IMPLEMENTING"
+            and state["artifacts"].get("implementation_handoff") is not None
+        ):
+            raise RuleFailure(
+                "START_IMPLEMENTATION self-transition requires rework to clear the active "
+                "handoff before registering a new implementation_handoff"
+            )
     next_state["artifacts"].update(submitted_artifacts)
 
     if revision is not None:

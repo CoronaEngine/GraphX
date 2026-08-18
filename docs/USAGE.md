@@ -605,7 +605,7 @@ polaris migrate --repo .
 
 1. `workflow/migrations.json` 是支持路径的唯一、append-only 注册表；历史步骤必须保留，以便校验已提交的迁移记录。一次命令只允许从当前项目版本迁移到 vendored 版本的一个显式相邻步骤，不推断、不跨级。
 2. 注册步骤同时绑定源/目标 `polaris_version` 与 `workflow_version`。Migration protocol v2 支持仅更新版本，也支持显式替换冻结 workflow 并映射任务状态。
-3. `0.1.19 → 0.1.20` 使用 `replace_version_and_workflow` 与 `append_mapped_workflow_event`：冻结 workflow 更新到 `0.1.3`，旧 `IMPLEMENTED` / `DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`。迁移事件记录源/目标状态及旧版本；旧 `events.jsonl` 行不可修改。
+3. `0.1.19 → 0.1.20` 使用 `replace_version_and_workflow` 与 `append_mapped_workflow_event`：冻结 workflow 更新到 `0.1.3`，旧 `IMPLEMENTED` / `DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`；旧 R0/R1 `VERIFIED` 也映射回 `VALIDATING`，以便通过 `PASS_AND_CLOSE` 重新提交关闭产物，R2 `VERIFIED` 保持不变。迁移事件记录源/目标状态及旧版本；旧 `events.jsonl` 行不可修改。
 4. `.polaris/migrations/MIG-<from>-to-<to>.json` 先写为 `IN_PROGRESS`，全部投影更新后改为 `COMPLETED`。迁移锁会记录迁移/任务身份、主机名和 PID；若进程在中间终止，同一主机重新执行命令会接管已死亡的同迁移锁、验证并复用已经追加的事件，不会重复迁移。活跃进程、其他迁移或来源不明的锁不会被自动删除。
 5. 迁移完成后脚本自动运行项目校验；`validate_project.py` 会拒绝未完成记录、缺失/伪造的任务迁移事件或版本不一致。
 

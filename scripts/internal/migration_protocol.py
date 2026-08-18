@@ -54,9 +54,11 @@ LEGACY_STATUS_MAP = {
 }
 
 
-def _map_legacy_stage(status: str, artifacts: dict[str, Any]) -> str:
+def _map_legacy_stage(status: str, artifacts: dict[str, Any], rigor: str) -> str:
     if status == "IMPLEMENTING":
         return "IMPLEMENTING" if "implementation_handoff" in artifacts else "PLANNED"
+    if status == "VERIFIED" and rigor != "R2":
+        return "VALIDATING"
     mapped = LEGACY_STATUS_MAP.get(status)
     if mapped is None:
         raise RuleFailure(f"cannot map legacy workflow state: {status}")
@@ -68,15 +70,18 @@ def map_migrated_status(state: dict[str, Any]) -> tuple[str, str | None]:
     artifacts = state.get("artifacts")
     if not isinstance(artifacts, dict):
         raise RuleFailure("legacy task artifacts must be an object")
+    rigor = state.get("rigor")
+    if rigor not in {"R0", "R1", "R2"}:
+        raise RuleFailure("legacy task rigor must be R0, R1, or R2")
     status = state.get("status")
     if status == "BLOCKED":
         blocked_from = state.get("blocked_from")
         if not isinstance(blocked_from, str):
             raise RuleFailure("legacy BLOCKED task has no blocked_from state")
-        return "BLOCKED", _map_legacy_stage(blocked_from, artifacts)
+        return "BLOCKED", _map_legacy_stage(blocked_from, artifacts, rigor)
     if not isinstance(status, str):
         raise RuleFailure("legacy task status must be a string")
-    return _map_legacy_stage(status, artifacts), None
+    return _map_legacy_stage(status, artifacts, rigor), None
 
 
 def load_migration_protocol(protocol_root: Path) -> dict[str, Any]:

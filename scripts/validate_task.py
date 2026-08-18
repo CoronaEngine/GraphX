@@ -29,6 +29,7 @@ from internal.code_intelligence_protocol import record_reference
 from internal.review_protocol import validate_handoff, validate_review, validate_review_response
 from internal.plan_decision_protocol import validate_plan_decisions
 from internal.working_set_protocol import validate_working_set
+from internal.validation_protocol import validate_acceptance_coverage
 from internal.task_layout import events_path, explorations_dir
 from internal.task_layout import state_path as task_state_path
 
@@ -248,14 +249,7 @@ def validate_projection(
         )
         if validation["verdict"] != "PASS":
             raise RuleFailure("VERIFIED requires a PASS Validation")
-        expected = {item["id"] for item in work_item["acceptance"]}
-        actual = [
-            item["acceptance_id"]
-            for item in validation["acceptance_results"]
-            if item["result"] == "PASS"
-        ]
-        if len(actual) != len(expected) or set(actual) != expected:
-            raise RuleFailure("Validation does not PASS every acceptance criterion exactly once")
+        validate_acceptance_coverage(work_item, validation)
         if (
             validation["task_id"] != task_id
             or validation["work_item_revision"] != state["current_revision"]

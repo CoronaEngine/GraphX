@@ -19,6 +19,7 @@ from .polaris_core import (
 from .review_protocol import validate_handoff, validate_review, validate_review_response
 from .plan_decision_protocol import validate_plan_decisions
 from .working_set_protocol import validate_working_set
+from .validation_protocol import validate_acceptance_coverage
 
 
 def artifact_file(directory: Path, state: dict[str, Any], name: str) -> Path:
@@ -242,14 +243,7 @@ def check_gate(
         validation = load_validation(root, directory, state)
         if validation["verdict"] != "PASS":
             raise RuleFailure("Validation verdict must be PASS")
-        expected = {item["id"] for item in work_item["acceptance"]}
-        actual = {
-            item["acceptance_id"]
-            for item in validation["acceptance_results"]
-            if item["result"] == "PASS"
-        }
-        if expected != actual:
-            raise RuleFailure("Validation must PASS every acceptance criterion")
+        validate_acceptance_coverage(work_item, validation)
         if validation["subject_diff_hash"] != state["subject"]["diff_hash"]:
             raise RuleFailure("Validation targets the wrong subject")
         if gate == "validation_passed_and_closure_ready":

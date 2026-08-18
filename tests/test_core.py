@@ -873,6 +873,69 @@ class PolarisCoreTests(unittest.TestCase):
         )
         write_json_atomic(result_path, result)
 
+        passing_result = copy.deepcopy(validation["acceptance_results"][0])
+        unknown_result = copy.deepcopy(passing_result)
+        unknown_result["acceptance_id"] = "AC-02"
+        failing_result = copy.deepcopy(passing_result)
+        failing_result["result"] = "FAIL"
+        failing_result["exit_code"] = 1
+        for label, invalid_results in (
+            ("duplicate", [passing_result, copy.deepcopy(passing_result)]),
+            ("unknown", [unknown_result]),
+            ("failure", [failing_result]),
+        ):
+            with self.subTest(invalid_validation=label):
+                validation["acceptance_results"] = invalid_results
+                write_json_atomic(validation_path, validation)
+                with self.assertRaisesRegex(RuleFailure, "exactly once.*PASS"):
+                    transition(
+                        self.repo,
+                        "TASK-0001",
+                        "PASS_AND_CLOSE",
+                        [
+                            "validation=validations/r001/validation-001.json",
+                            "result=results/r001/result-001.json",
+                        ],
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+        validation["acceptance_results"] = [passing_result]
+        validation["acceptance_results"].append(
+            {
+                "acceptance_id": "AC-01",
+                "command_or_check": "contradictory check",
+                "cwd": ".",
+                "environment_summary": "test",
+                "started_at": "2026-08-18T00:00:01Z",
+                "exit_code": 1,
+                "result": "FAIL",
+                "output_path_or_hash": "inline:failure",
+            }
+        )
+        write_json_atomic(validation_path, validation)
+        with self.assertRaisesRegex(RuleFailure, "exactly once.*PASS"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PASS_AND_CLOSE",
+                [
+                    "validation=validations/r001/validation-001.json",
+                    "result=results/r001/result-001.json",
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        validation["acceptance_results"].pop()
+        write_json_atomic(validation_path, validation)
+
         implementation_path = (
             self.task / "implementations" / "r001" / "attempt-001.json"
         )
@@ -980,6 +1043,34 @@ class PolarisCoreTests(unittest.TestCase):
                 None,
                 None,
             )
+        validation["acceptance_results"].append(
+            {
+                "acceptance_id": "AC-01",
+                "command_or_check": "contradictory check",
+                "cwd": ".",
+                "environment_summary": "test",
+                "started_at": "2026-08-18T00:00:01Z",
+                "exit_code": 1,
+                "result": "FAIL",
+                "output_path_or_hash": "inline:failure",
+            }
+        )
+        write_json_atomic(validation_path, validation)
+        with self.assertRaisesRegex(RuleFailure, "exactly once.*PASS"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PASS_VALIDATION",
+                ["validation=validations/r001/validation-001.json"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        validation["acceptance_results"].pop()
+        write_json_atomic(validation_path, validation)
         verified = transition(
             self.repo,
             "TASK-0001",
@@ -2046,7 +2137,6 @@ class PolarisCoreTests(unittest.TestCase):
             "REVIEWING": "REVIEWING",
             "REVIEWED": "VALIDATING",
             "VALIDATING": "VALIDATING",
-            "VERIFIED": "VERIFIED",
             "CLOSED": "CLOSED",
             "CANCELLED": "CANCELLED",
         }
@@ -2054,13 +2144,23 @@ class PolarisCoreTests(unittest.TestCase):
             with self.subTest(legacy=legacy):
                 self.assertEqual(
                     map_migrated_status(
-                        {"status": legacy, "blocked_from": None, "artifacts": {}}
+                        {
+                            "status": legacy,
+                            "blocked_from": None,
+                            "artifacts": {},
+                            "rigor": "R1",
+                        }
                     ),
                     (expected, None),
                 )
         self.assertEqual(
             map_migrated_status(
-                {"status": "IMPLEMENTING", "blocked_from": None, "artifacts": {}}
+                {
+                    "status": "IMPLEMENTING",
+                    "blocked_from": None,
+                    "artifacts": {},
+                    "rigor": "R1",
+                }
             ),
             ("PLANNED", None),
         )
@@ -2070,6 +2170,7 @@ class PolarisCoreTests(unittest.TestCase):
                     "status": "IMPLEMENTING",
                     "blocked_from": None,
                     "artifacts": {"implementation_handoff": {"path": "handoff.json"}},
+                    "rigor": "R1",
                 }
             ),
             ("IMPLEMENTING", None),
@@ -2080,9 +2181,43 @@ class PolarisCoreTests(unittest.TestCase):
                     "status": "BLOCKED",
                     "blocked_from": "DOCS_SYNCED",
                     "artifacts": {},
+                    "rigor": "R1",
                 }
             ),
             ("BLOCKED", "IMPLEMENTING"),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "VERIFIED",
+                    "blocked_from": None,
+                    "artifacts": {},
+                    "rigor": "R1",
+                }
+            ),
+            ("VALIDATING", None),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "VERIFIED",
+                    "blocked_from": None,
+                    "artifacts": {},
+                    "rigor": "R2",
+                }
+            ),
+            ("VERIFIED", None),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "BLOCKED",
+                    "blocked_from": "VERIFIED",
+                    "artifacts": {},
+                    "rigor": "R0",
+                }
+            ),
+            ("BLOCKED", "VALIDATING"),
         )
 
     def test_migration_replaces_frozen_workflow_and_maps_tasks(self) -> None:
@@ -2140,6 +2275,91 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(record["tasks"][0]["source_status"], "DOCS_SYNCED")
         self.assertEqual(record["tasks"][0]["target_status"], "IMPLEMENTING")
+
+    def test_migrated_r1_verified_task_can_close(self) -> None:
+        """旧 R1 VERIFIED 回到 VALIDATING 后可用原 Validation 原子关闭。"""
+        handoff, state = self.enter_reviewing_without_progress()
+        validating = self.accept_current_review(handoff, state)
+        subject = validating["subject"]
+        validation_path = self.task / "validations" / "r001" / "validation-001.json"
+        validation = read_json(template_path(ROOT, "validation"))
+        validation.update(
+            {
+                "subject_base_commit": subject["base_commit"],
+                "subject_head_commit": subject["head_commit"],
+                "subject_diff_hash": subject["diff_hash"],
+                "validated_at": "2026-08-18T00:00:00Z",
+                "verdict": "PASS",
+                "acceptance_results": [
+                    {
+                        "acceptance_id": "AC-01",
+                        "command_or_check": "state validation",
+                        "cwd": ".",
+                        "environment_summary": "legacy fixture",
+                        "started_at": "2026-08-18T00:00:00Z",
+                        "exit_code": 0,
+                        "result": "PASS",
+                        "output_path_or_hash": "inline:test",
+                    }
+                ],
+            }
+        )
+        write_json_atomic(validation_path, validation)
+        validation_reference = {
+            "path": "validations/r001/validation-001.json",
+            "sha256": file_sha256(validation_path),
+        }
+        state_path = self.task / "state.json"
+        legacy_state = read_json(state_path)
+        legacy_state["status"] = "VERIFIED"
+        legacy_state["artifacts"]["validation"] = validation_reference
+        write_json_atomic(state_path, legacy_state)
+        event_path = self.task / "events.jsonl"
+        events = read_jsonl(event_path)
+        events[-1]["to"] = "VERIFIED"
+        events[-1]["artifacts"] = legacy_state["artifacts"]
+        write_text_atomic(
+            event_path,
+            "".join(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for event in events
+            ),
+        )
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
+        vendor(ROOT, self.repo, False)
+
+        migrate_project(self.repo)
+
+        migrated = read_json(state_path)
+        self.assertEqual(migrated["status"], "VALIDATING")
+        result_path = self.task / "results" / "r001" / "result-001.json"
+        result = read_json(template_path(ROOT, "result"))
+        result.update(
+            {
+                "subject_base_commit": subject["base_commit"],
+                "subject_head_commit": subject["head_commit"],
+                "subject_diff_hash": subject["diff_hash"],
+                "summary": "Closed after workflow migration",
+            }
+        )
+        write_json_atomic(result_path, result)
+        closed = transition(
+            self.repo,
+            "TASK-0001",
+            "PASS_AND_CLOSE",
+            [
+                "validation=validations/r001/validation-001.json",
+                "result=results/r001/result-001.json",
+            ],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(closed["to"], "CLOSED")
 
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
@@ -3475,36 +3695,17 @@ class PolarisCoreTests(unittest.TestCase):
             {"changed_paths": ["subject.txt"], "evidence": "No documentation impact"}
         )
         write_json_atomic(knowledge_path, knowledge)
-        handoff_result = build_review_handoff(
-            self.repo,
-            "TASK-0001",
-            "impl-bound-session",
-            "fresh_session",
-            path,
-            knowledge_path,
-            base,
-            head,
-        )
-        review_handoff_path = Path(handoff_result["path"])
         with self.assertRaises(RuleFailure):
-            transition(
+            build_review_handoff(
                 self.repo,
                 "TASK-0001",
-                "START_REVIEW",
-                [
-                    "implementation=implementations/r001/attempt-001.json",
-                    "knowledge_delta=knowledge/r001/knowledge-delta-001.json",
-                    "review_handoff="
-                    + review_handoff_path.relative_to(self.task).as_posix(),
-                ],
-                None,
+                "impl-bound-session",
+                "fresh_session",
+                path,
+                knowledge_path,
                 base,
                 head,
-                None,
-                None,
-                None,
             )
-        review_handoff_path.unlink()
         implementation["implementation_handoff_sha256"] = reference["sha256"]
         write_json_atomic(path, implementation)
         handoff_result = build_review_handoff(
@@ -3841,6 +4042,14 @@ class PolarisCoreTests(unittest.TestCase):
             self.assertIn(detail, entry_text)
         self.assertIn("Dispatch mode: same_session_fallback", entry_text)
         self.assertIn("immediate status responses may be delayed", entry_text)
+        implementation_text = (
+            ROOT / "skills" / "implementation" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("When an initialized live snapshot exists", entry_text)
+        self.assertIn(
+            "When live telemetry exists, append reproducible evidence",
+            implementation_text,
+        )
 
     def test_r1_dispatches_one_visible_fresh_local_task(self) -> None:
         """R1 按宿主创建隔离 worker，禁止 fork 和默认 worktree。"""
@@ -4223,6 +4432,38 @@ class PolarisCoreTests(unittest.TestCase):
                 None,
                 None,
             )
+        evidence.write_text("original evidence\n", encoding="utf-8")
+        rebuilt = build_review_handoff(
+            self.repo,
+            "TASK-0001",
+            "impl-session",
+            "fresh_session",
+            implementation_path,
+            knowledge_path,
+            base,
+            head,
+        )
+        self.assertEqual(Path(rebuilt["path"]), handoff_path)
+
+    def test_start_implementation_self_transition_requires_new_handoff(self) -> None:
+        """IMPLEMENTING 自转换只能在返工清除旧 handoff 后注册下一 attempt。"""
+        self.enter_implementing()
+        state = read_json(self.task / "state.json")
+        with self.assertRaisesRegex(RuleFailure, "new implementation_handoff"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "START_IMPLEMENTATION",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        unchanged = read_json(self.task / "state.json")
+        self.assertEqual(unchanged["sequence"], state["sequence"])
 
     def test_review_handoff_survives_physical_root_relocation(self) -> None:
         """Reviewer 冻结包使用逻辑任务路径，整体搬迁不改变其内容或校验结果。"""

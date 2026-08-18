@@ -31,6 +31,7 @@ from internal.code_intelligence_protocol import record_reference
 from internal.task_location_protocol import logical_repo_path, resolve_repo_reference
 from internal.review_protocol import MAX_REVIEW_ATTEMPTS
 from internal.task_layout import evidence_dir, review_handoff_path, state_path
+from internal.transition_gates import check_gate
 from internal.working_set_protocol import validate_working_set
 
 
@@ -149,6 +150,9 @@ def build(
             "path": relative_response.as_posix(),
             "sha256": file_sha256(resolved_response),
         }
+    workflow = read_json(repo / ".polaris" / "workflow.json")
+    check_gate(repo, root, directory, state, "implementation_ready", None, workflow)
+    check_gate(repo, root, directory, state, "docs_ready", None, workflow)
     implementation_reference = normalized_reference(
         directory, state["artifacts"].get("implementation")
     )
@@ -270,7 +274,7 @@ def build(
         "package": package,
     }
     path = review_handoff_path(directory, revision, attempt)
-    if path.exists():
+    if path.exists() and stored_state["artifacts"].get("review_handoff") is not None:
         raise InputFailure(f"review handoff is immutable and already exists: {path}")
     write_json_atomic(path, handoff)
     validate_json_file(path, root / "schemas" / "review-handoff.schema.json")

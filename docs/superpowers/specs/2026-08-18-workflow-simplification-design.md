@@ -183,7 +183,8 @@ Code Intelligence 继续保持可选、在 artifact 边界上 Provider-neutral�
 | `REVIEWING` | `REVIEWING` |
 | `REVIEWED` | `VALIDATING` |
 | `VALIDATING` | `VALIDATING` |
-| `VERIFIED` | `VERIFIED` |
+| R0/R1 `VERIFIED` | `VALIDATING`，允许通过 `PASS_AND_CLOSE` 重新提交现有 Validation 与 Result |
+| R2 `VERIFIED` | `VERIFIED` |
 | `BLOCKED` | `BLOCKED`，并按相同规则映射 `blocked_from` |
 | `CLOSED` | `CLOSED` |
 | `CANCELLED` | `CANCELLED` |
