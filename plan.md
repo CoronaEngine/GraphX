@@ -436,7 +436,7 @@ BLOCKED -- RESOLVED --> blocked_from
 任意非终态 -- HUMAN_CANCEL --> CANCELLED
 ```
 
-`BLOCKED` 保存 `blocked_from`、`blocker_type`、原因和所需 Decision Owner。R2 等待人工审批使用 `blocker_type=human_approval`，不增加单独的等待状态。条件解除后默认只返回 `blocked_from`；生成新 revision 时由 `NEW_REVISION` 特殊转换直接进入 `QUALIFIED`。
+`BLOCKED` 保存 `blocked_from`、`blocker_type`、原因和所需 Decision Owner。R2 等待人工审批使用 `blocker_type=human_approval`，不增加单独的等待状态。条件解除后默认只返回 `blocked_from`；但 Review 达到同一 revision 的最大 attempt 后使用 `blocker_type=review_dispute`，禁止 `RESOLVE_BLOCK` 继续当前 revision，只允许 Human 选择 `NEW_REVISION` 或 `CANCEL`。生成新 revision 时由 `NEW_REVISION` 特殊转换直接进入 `QUALIFIED`。
 
 v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞进入 `BLOCKED`，人工放弃进入 `CANCELLED`，脚本或环境异常以退出码 `2` 报告且不改变业务状态。
 

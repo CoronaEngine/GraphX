@@ -90,6 +90,8 @@ BLOCKED -- RESOLVE_BLOCK --> blocked_from
 任意非终态 -- CANCEL --> CANCELLED
 ```
 
+`review_dispute` 是 `RESOLVE_BLOCK` 的例外：同一 revision 的 Review 达到最大 attempt 后，任务保持 Human-owned `BLOCKED`，只能通过 `NEW_REVISION` 或 `CANCEL` 离开，不能开启第 4 次 attempt。
+
 ## 转换设计
 
 ### 开始 Implementation

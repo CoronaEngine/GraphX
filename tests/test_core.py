@@ -4954,23 +4954,30 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(state["blocker"]["type"], "review_dispute")
         self.assertEqual(state["blocked_from"], "IMPLEMENTING")
         self.assertEqual(validate(self.repo, "TASK-0001")["state"], "BLOCKED")
-        self.assertEqual(recover(self.repo, "TASK-0001")["state"]["status"], "BLOCKED")
-
-        transition(
-            self.repo,
-            "TASK-0001",
-            "RESOLVE_BLOCK",
-            [],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "IMPLEMENTING")
         recovered = recover(self.repo, "TASK-0001")
-        self.assertIn("START_IMPLEMENTATION", recovered["recommended_next_action"])
+        self.assertEqual(recovered["state"]["status"], "BLOCKED")
+        self.assertIn("NEW_REVISION", recovered["recommended_next_action"])
+        self.assertIn("CANCEL", recovered["recommended_next_action"])
+
+        state_before = (self.task / "state.json").read_bytes()
+        events_before = (self.task / "events.jsonl").read_bytes()
+        with self.assertRaisesRegex(RuleFailure, "NEW_REVISION or CANCEL"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "RESOLVE_BLOCK",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        self.assertEqual((self.task / "state.json").read_bytes(), state_before)
+        self.assertEqual((self.task / "events.jsonl").read_bytes(), events_before)
+        state = read_json(self.task / "state.json")
+        self.assertEqual(state["status"], "BLOCKED")
 
     def test_recovery_working_set_and_exploration_promotion(self) -> None:
         """Fresh-session Recovery 只输出四类最小信息，并检索匹配模块的失败探索。"""

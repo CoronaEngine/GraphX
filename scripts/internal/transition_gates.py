@@ -315,5 +315,10 @@ def check_gate(
     elif gate == "blocker_resolved":
         if state.get("blocked_from") is None:
             raise RuleFailure("BLOCKED state has no blocked_from state")
+        if state.get("blocker", {}).get("type") == "review_dispute":
+            raise RuleFailure(
+                "review_dispute cannot be resolved in the same revision; "
+                "use NEW_REVISION or CANCEL"
+            )
     elif gate == "human_cancelled":
         artifact_file(directory, state, "cancel_decision")

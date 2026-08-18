@@ -25,6 +25,11 @@ NEXT_ACTIONS = {
 
 def recommended_action(state: dict[str, Any]) -> str:
     if (
+        state["status"] == "BLOCKED"
+        and state.get("blocker", {}).get("type") == "review_dispute"
+    ):
+        return "have the Human Decision Owner choose NEW_REVISION or CANCEL"
+    if (
         state["status"] == "IMPLEMENTING"
         and "implementation_handoff" not in state["artifacts"]
     ):
