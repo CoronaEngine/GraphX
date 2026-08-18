@@ -584,6 +584,21 @@ def _validate_v2_record_value(
             path = resolve_repo_reference(repo, symbol["path"])
             if not path.is_file():
                 raise RuleFailure(f"Code Intelligence symbol path is not a file: {symbol['path']}")
+    status_check = value["status_check"]
+    if status_check is not None:
+        status_check_status = status_check["status"]
+        if status_check_status == "SUCCESS":
+            if status_check["response_sha256"] is None or status_check["error"] is not None:
+                raise RuleFailure("successful Code Intelligence status check requires a response hash and no error")
+            if provider is None or "status" not in provider["available_operations"]:
+                raise RuleFailure("successful Code Intelligence status check requires status capability")
+        elif status_check_status == "FAILED":
+            if not status_check["error"]:
+                raise RuleFailure("failed Code Intelligence status check lacks error")
+            if provider is None or "status" not in provider["available_operations"]:
+                raise RuleFailure("failed Code Intelligence status check requires status capability")
+        elif status_check["response_sha256"] is not None:
+            raise RuleFailure("non-successful Code Intelligence status check cannot have a response hash")
     sync = value["sync"]
     if sync is not None:
         if sync["status"] != "UNAVAILABLE" and (
@@ -595,6 +610,19 @@ def _validate_v2_record_value(
                 raise RuleFailure("successful Code Intelligence sync requires a response hash and SYNC_ACKNOWLEDGED basis")
         if sync["status"] == "FAILED" and not sync["error"]:
             raise RuleFailure("failed Code Intelligence sync lacks error")
+    freshness = value["freshness"]
+    status_check_success = status_check is not None and status_check["status"] == "SUCCESS"
+    if freshness["status"] != "UNAVAILABLE" and "NONE" in freshness["basis"]:
+        raise RuleFailure("freshness basis NONE is reserved for UNAVAILABLE")
+    if "STATUS_JSON" in freshness["basis"] and not status_check_success:
+        raise RuleFailure("STATUS_JSON basis requires a successful status check")
+    if freshness["status"] == "CURRENT_AT_CHECK":
+        if not status_check_success:
+            raise RuleFailure("CURRENT_AT_CHECK requires a successful status check")
+        if sync is not None and sync["status"] == "SUCCESS" and status_check["phase"] != "POST_SYNC":
+            raise RuleFailure("successful sync currentness requires a POST_SYNC status check")
+    if value["status"] == "UNAVAILABLE" and status_check_success:
+        raise RuleFailure("unavailable Code Intelligence record cannot claim a successful status check")
     _validate_source_fallbacks(repo, value, base, head)
     _validate_v2_freshness(repo, value, base, head)
     observed_statuses = {item["status"] for item in value["queries"]}

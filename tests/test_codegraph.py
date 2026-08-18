@@ -209,6 +209,14 @@ class CodeGraphTests(unittest.TestCase):
             "stale_points": [index_point],
         }
         value["source_fallbacks"] = [search]
+        value["provider"] = {
+            "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+            "available_operations": ["status"],
+        }
+        value["status_check"] = {
+            "status": "SUCCESS", "phase": "STAGE_ENTRY",
+            "response_sha256": "0" * 64, "error": None,
+        }
         with self.assertRaisesRegex(RuleFailure, "CURRENT_AT_CHECK"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
         value["freshness"]["status"] = "PARTIAL_STALE"
@@ -268,6 +276,17 @@ class CodeGraphTests(unittest.TestCase):
             "summary": "result", "symbols": [], "response_sha256": "0" * 64, "error": None,
         }]
         with self.assertRaisesRegex(RuleFailure, "UNAVAILABLE record contains"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value = self.v2_record()
+        value["provider"] = {
+            "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+            "available_operations": ["status"],
+        }
+        value["status_check"] = {
+            "status": "SUCCESS", "phase": "STAGE_ENTRY",
+            "response_sha256": "0" * 64, "error": None,
+        }
+        with self.assertRaisesRegex(RuleFailure, "unavailable Code Intelligence record"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
         value = self.v2_record()
         value["provider"] = {
@@ -351,6 +370,10 @@ class CodeGraphTests(unittest.TestCase):
                 "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
                 "available_operations": ["status"],
             },
+            "status_check": {
+                "status": "SUCCESS", "phase": "POST_SYNC",
+                "response_sha256": "1" * 64, "error": None,
+            },
             "sync": {"status": "SUCCESS", "response_sha256": "0" * 64, "error": None},
             "freshness": {
                 "status": "CURRENT_AT_CHECK",
@@ -363,7 +386,7 @@ class CodeGraphTests(unittest.TestCase):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
         value["provider"] = {
             "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
-            "available_operations": ["sync"],
+            "available_operations": ["sync", "status"],
         }
         self.assertEqual(
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
@@ -386,25 +409,64 @@ class CodeGraphTests(unittest.TestCase):
         value["freshness"]["basis"] = ["CONNECT_RECONCILIATION"]
         with self.assertRaisesRegex(RuleFailure, "CURRENT_AT_CHECK requires"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
-        value["freshness"]["basis"] = ["STATUS_JSON"]
+
+    def test_current_freshness_requires_hashed_status_check_evidence(self) -> None:
+        self.initialize_task()
+        value = self.v2_record()
+        value.update({
+            "status": "SKIPPED",
+            "freshness": {
+                "status": "CURRENT_AT_CHECK",
+                "checked_at": "2026-08-18T00:00:00Z",
+                "basis": ["STATUS_JSON"],
+                "stale_points": [],
+            },
+        })
+        with self.assertRaisesRegex(RuleFailure, "successful status check"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["status_check"] = {
+            "status": "SUCCESS", "phase": "STAGE_ENTRY",
+            "response_sha256": "0" * 64, "error": None,
+        }
+        with self.assertRaisesRegex(RuleFailure, "status capability"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["provider"] = {
+            "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+            "available_operations": ["status"],
+        }
         self.assertEqual(
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
         )
+
+    def test_sync_currentness_requires_successful_post_sync_status_check(self) -> None:
+        self.initialize_task()
+        value = self.v2_record()
         value.update({
             "status": "USED",
             "provider": {
                 "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
-                "available_operations": ["explore"],
+                "available_operations": ["sync", "status"],
             },
-            "queries": [{
-                "id": "CIQ-001", "operation": "explore", "purpose": "confirm connection",
-                "status": "SUCCESS", "summary": "connected", "symbols": [],
-                "response_sha256": "0" * 64, "error": None,
-            }],
+            "sync": {"status": "SUCCESS", "response_sha256": "0" * 64, "error": None},
+            "freshness": {
+                "status": "CURRENT_AT_CHECK",
+                "checked_at": "2026-08-18T00:00:00Z",
+                "basis": ["SYNC_ACKNOWLEDGED"],
+                "stale_points": [],
+            },
         })
-        value["freshness"]["basis"] = ["CONNECT_RECONCILIATION"]
-        with self.assertRaisesRegex(RuleFailure, "CURRENT_AT_CHECK requires"):
+        with self.assertRaisesRegex(RuleFailure, "successful status check"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["status_check"] = {
+            "status": "SUCCESS", "phase": "STAGE_ENTRY",
+            "response_sha256": "1" * 64, "error": None,
+        }
+        with self.assertRaisesRegex(RuleFailure, "POST_SYNC status check"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["status_check"]["phase"] = "POST_SYNC"
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
 
     def test_official_descriptor_uses_explore_status_and_sync(self) -> None:
         descriptor = load_providers(ROOT)["codegraph"]

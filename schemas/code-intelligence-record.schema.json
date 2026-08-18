@@ -13,6 +13,7 @@
         "target",
         "status",
         "queries",
+        "status_check",
         "sync",
         "freshness",
         "source_fallbacks",
@@ -210,6 +211,50 @@
                             "null"
                         ]
                     }
+                }
+            }
+        },
+        "status_check": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "required": [
+                "status",
+                "phase",
+                "response_sha256",
+                "error"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "SUCCESS",
+                        "FAILED",
+                        "SKIPPED",
+                        "UNAVAILABLE"
+                    ]
+                },
+                "phase": {
+                    "type": "string",
+                    "enum": [
+                        "STAGE_ENTRY",
+                        "POST_SYNC"
+                    ]
+                },
+                "response_sha256": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "error": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
                 }
             }
         },

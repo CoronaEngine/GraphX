@@ -1578,6 +1578,7 @@ class PolarisCoreTests(unittest.TestCase):
         value.pop("sync")
         value.pop("freshness")
         value.pop("source_fallbacks")
+        value.pop("status_check")
         value["refresh"] = None
         value["target"]["base_commit"] = base
         self.assertEqual(

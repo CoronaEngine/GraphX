@@ -13,6 +13,7 @@
     },
     "status": "UNAVAILABLE",
     "queries": [],
+    "status_check": null,
     "sync": null,
     "freshness": {
         "status": "UNAVAILABLE",
