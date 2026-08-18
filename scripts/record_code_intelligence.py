@@ -12,6 +12,7 @@ from internal.code_intelligence_protocol import (
     select_provider,
 )
 from internal.polaris_core import (
+    InputFailure,
     read_json,
     require_protocol_compatible,
     run_main,

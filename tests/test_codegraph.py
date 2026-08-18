@@ -13,9 +13,11 @@ sys.path.insert(0, str(SCRIPTS))
 
 from init_project import initialize as init_project  # noqa: E402
 from internal.code_intelligence_protocol import (  # noqa: E402
+    _project_marker_path,
     load_providers,
     select_provider,
 )
+from internal.polaris_core import RuleFailure  # noqa: E402
 
 
 class CodeGraphTests(unittest.TestCase):
@@ -53,6 +55,38 @@ class CodeGraphTests(unittest.TestCase):
             self.repo, [], ROOT, available_executables=["codegraph"]
         )
         self.assertTrue(cli["cli_available"])
+
+    def test_project_marker_rejects_unsafe_paths_and_symlinks(self) -> None:
+        for marker in ("/absolute", ".codegraph/cache"):
+            with self.subTest(marker=marker):
+                with self.assertRaisesRegex(RuleFailure, "unsafe"):
+                    _project_marker_path(self.repo, marker)
+
+        target = self.repo / "marker-target"
+        target.mkdir()
+        (self.repo / ".codegraph").symlink_to(target, target_is_directory=True)
+        with self.assertRaisesRegex(RuleFailure, "must not be a symlink"):
+            _project_marker_path(self.repo, ".codegraph")
+
+    def test_record_cli_requires_task_id_and_input(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                SCRIPTS / "record_code_intelligence.py",
+                "--repo",
+                self.repo,
+                "--json",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["message"], "recording requires task_id and --input")
 
     def test_old_product_tool_names_are_absent_from_descriptor(self) -> None:
         text = (ROOT / "providers/code-intelligence/codegraph.json").read_text(
