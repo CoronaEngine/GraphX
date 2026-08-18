@@ -423,7 +423,7 @@ def inspect_status(
         return _not_verified(checked_at, error)
     marker = _marker_path(repo, descriptor)
     if marker is None:
-        return _not_verified(checked_at, "CodeGraph descriptor has an unsafe project marker")
+        return _unavailable(checked_at, "CodeGraph descriptor has an unsafe project marker")
     if not marker.is_dir() or marker.is_symlink():
         return _unavailable(checked_at, "CodeGraph project marker is unavailable")
     try:

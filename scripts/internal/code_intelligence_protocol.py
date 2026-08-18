@@ -600,6 +600,13 @@ def _validate_v2_record_value(
                 raise RuleFailure("failed Code Intelligence status check lacks error")
             if provider is None or "status" not in provider["available_operations"]:
                 raise RuleFailure("failed Code Intelligence status check requires status capability")
+        elif status_check_status == "UNAVAILABLE":
+            if (
+                status_check["phase"] != "STAGE_ENTRY"
+                or status_check["response_sha256"] is not None
+                or status_check["error"] is not None
+            ):
+                raise RuleFailure("unavailable Code Intelligence status check cannot contain response or error evidence")
         elif status_check["response_sha256"] is not None:
             raise RuleFailure("non-successful Code Intelligence status check cannot have a response hash")
     sync = value["sync"]
@@ -648,8 +655,10 @@ def _validate_v2_record_value(
             raise RuleFailure("POST_SYNC status check requires an attempted sync")
         if sync["status"] == "FAILED" and sync["response_sha256"] is None:
             raise RuleFailure("POST_SYNC status check requires a hashed sync attempt")
-    if value["status"] == "UNAVAILABLE" and status_check_success:
-        raise RuleFailure("unavailable Code Intelligence record cannot claim a successful status check")
+    if value["status"] == "UNAVAILABLE" and (
+        status_check is not None and status_check["status"] != "UNAVAILABLE"
+    ):
+        raise RuleFailure("unavailable Code Intelligence record cannot claim a status check")
     _validate_source_fallbacks(repo, value, base, head)
     _validate_v2_freshness(repo, value, base, head)
     observed_statuses = {item["status"] for item in value["queries"]}

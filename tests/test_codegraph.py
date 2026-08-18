@@ -296,6 +296,29 @@ class CodeGraphTests(unittest.TestCase):
         with self.assertRaises(RuleFailure):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
 
+        for status_check in (
+            {"status": "FAILED", "phase": "STAGE_ENTRY", "response_sha256": None, "error": "status failed"},
+            {"status": "SKIPPED", "phase": "STAGE_ENTRY", "response_sha256": None, "error": None},
+        ):
+            with self.subTest(status_check=status_check["status"]):
+                value = self.v2_record()
+                value["provider"] = {
+                    "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                    "available_operations": ["status"],
+                }
+                value["status_check"] = status_check
+                with self.assertRaisesRegex(RuleFailure, "unavailable Code Intelligence record"):
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+        value = self.v2_record()
+        value["status_check"] = {
+            "status": "UNAVAILABLE", "phase": "STAGE_ENTRY",
+            "response_sha256": None, "error": None,
+        }
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
+
         for sync in (
             {"status": "SKIPPED", "response_sha256": None, "error": None},
             {"status": "SUCCESS", "response_sha256": "0" * 64, "error": None},
@@ -340,22 +363,12 @@ class CodeGraphTests(unittest.TestCase):
             unsafe_descriptor,
             runner=lambda *args, **kwargs: self.fail("runner must not be called"),
         )
-        self.assertEqual(unsafe["freshness"]["status"], "NOT_VERIFIED")
+        self.assertEqual(unsafe["freshness"]["status"], "UNAVAILABLE")
         self.assertEqual(unsafe["sync"], {
             "status": "UNAVAILABLE", "response_sha256": None, "error": None,
         })
         value = self.v2_record()
         value.update({
-            "status": "FAILED",
-            "provider": {
-                "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
-                "available_operations": ["status"],
-            },
-            "status_check": {
-                "status": "FAILED", "phase": "STAGE_ENTRY",
-                "response_sha256": unsafe["freshness"]["status_response_sha256"],
-                "error": unsafe["freshness"]["error"],
-            },
             "sync": unsafe["sync"],
             "freshness": {
                 key: unsafe["freshness"][key]
@@ -1058,8 +1071,9 @@ class CodeGraphTests(unittest.TestCase):
             runner=lambda *args, **kwargs: self.fail("runner must not be called"),
         )
 
-        self.assertEqual(result["status"], "NOT_VERIFIED")
-        self.assertEqual(result["stale_points"][0]["reason"], "STATUS_UNREADABLE")
+        self.assertEqual(result["status"], "UNAVAILABLE")
+        self.assertEqual(result["basis"], ["NONE"])
+        self.assertEqual(result["stale_points"], [])
 
     def test_failed_sync_marks_the_index_stale_without_retrying(self) -> None:
         _, sync_if_needed = self.adapter_functions()
