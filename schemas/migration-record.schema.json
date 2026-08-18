@@ -17,7 +17,11 @@
     "additionalProperties": false,
     "properties": {
         "record_version": {
-            "const": 1
+            "type": "integer",
+            "enum": [
+                1,
+                2
+            ]
         },
         "migration_id": {
             "type": "string",
@@ -78,6 +82,14 @@
                     "migration_sequence": {
                         "type": "integer",
                         "minimum": 1
+                    },
+                    "source_status": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "target_status": {
+                        "type": "string",
+                        "minLength": 1
                     }
                 }
             }

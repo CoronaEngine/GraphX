@@ -43,6 +43,7 @@ from internal.install_manifest import (  # noqa: E402
     TEXT_HASH_MODE,
     managed_file_sha256,
 )
+from internal.migration_protocol import map_migrated_status  # noqa: E402
 from build_working_set import build as build_working_set  # noqa: E402
 from build_implementation_handoff import build as build_implementation_handoff  # noqa: E402
 from build_review_handoff import build as build_review_handoff  # noqa: E402
@@ -242,6 +243,33 @@ class PolarisCoreTests(unittest.TestCase):
         events = read_jsonl(event_path)
         for event in events:
             event["polaris_version"] = version
+        write_text_atomic(
+            event_path,
+            "".join(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for event in events
+            ),
+        )
+
+    def set_workflow_version(self, version: str) -> None:
+        """Rewrite the project, frozen workflow, and task projection workflow version."""
+        project_path = self.repo / ".polaris" / "project.json"
+        project = read_json(project_path)
+        project["workflow_version"] = version
+        write_json_atomic(project_path, project)
+        workflow_path = self.repo / ".polaris" / "workflow.json"
+        workflow = read_json(workflow_path)
+        workflow["schema_version"] = version
+        workflow["workflow_version"] = version
+        write_json_atomic(workflow_path, workflow)
+        state_path = self.task / "state.json"
+        state = read_json(state_path)
+        state["workflow_version"] = version
+        write_json_atomic(state_path, state)
+        event_path = self.task / "events.jsonl"
+        events = read_jsonl(event_path)
+        for event in events:
+            event["workflow_version"] = version
         write_text_atomic(
             event_path,
             "".join(
@@ -1893,25 +1921,27 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.18")
-        self.assertEqual(result["to"], "0.1.19")
+        self.assertEqual(result["from"], "0.1.19")
+        self.assertEqual(result["to"], "0.1.20")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.18")
+        self.assertEqual(events[0]["polaris_version"], "0.1.19")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.19")
+        self.assertEqual(events[1]["polaris_version"], "0.1.20")
+        self.assertEqual(events[1]["workflow_version"], "0.1.3")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.18-to-0.1.19.json"
+            / "MIG-0.1.19-to-0.1.20.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -1921,19 +1951,126 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
 
+    def test_workflow_migration_maps_every_legacy_state(self) -> None:
+        """0.1.2 状态按治理含义映射，BLOCKED 的恢复目标同步转换。"""
+        cases = {
+            "DRAFT": "DRAFT",
+            "QUALIFIED": "QUALIFIED",
+            "PLANNED": "PLANNED",
+            "IMPLEMENTED": "IMPLEMENTING",
+            "DOCS_SYNCED": "IMPLEMENTING",
+            "REVIEWING": "REVIEWING",
+            "REVIEWED": "VALIDATING",
+            "VALIDATING": "VALIDATING",
+            "VERIFIED": "VERIFIED",
+            "CLOSED": "CLOSED",
+            "CANCELLED": "CANCELLED",
+        }
+        for legacy, expected in cases.items():
+            with self.subTest(legacy=legacy):
+                self.assertEqual(
+                    map_migrated_status(
+                        {"status": legacy, "blocked_from": None, "artifacts": {}}
+                    ),
+                    (expected, None),
+                )
+        self.assertEqual(
+            map_migrated_status(
+                {"status": "IMPLEMENTING", "blocked_from": None, "artifacts": {}}
+            ),
+            ("PLANNED", None),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "IMPLEMENTING",
+                    "blocked_from": None,
+                    "artifacts": {"implementation_handoff": {"path": "handoff.json"}},
+                }
+            ),
+            ("IMPLEMENTING", None),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "BLOCKED",
+                    "blocked_from": "DOCS_SYNCED",
+                    "artifacts": {},
+                }
+            ),
+            ("BLOCKED", "IMPLEMENTING"),
+        )
+
+    def test_migration_replaces_frozen_workflow_and_maps_tasks(self) -> None:
+        """0.1.19 迁移替换冻结 workflow，并用单个事件映射旧状态。"""
+        self.enter_implementing()
+        self.set_protocol_version("0.1.19")
+        project_path = self.repo / ".polaris" / "project.json"
+        project = read_json(project_path)
+        project["workflow_version"] = "0.1.2"
+        write_json_atomic(project_path, project)
+        workflow_path = self.repo / ".polaris" / "workflow.json"
+        workflow = read_json(workflow_path)
+        workflow["schema_version"] = "0.1.2"
+        workflow["workflow_version"] = "0.1.2"
+        write_json_atomic(workflow_path, workflow)
+        state_path = self.task / "state.json"
+        state = read_json(state_path)
+        state["status"] = "DOCS_SYNCED"
+        state["workflow_version"] = "0.1.2"
+        write_json_atomic(state_path, state)
+        event_path = self.task / "events.jsonl"
+        events = read_jsonl(event_path)
+        for event in events:
+            event["workflow_version"] = "0.1.2"
+        events[-1]["to"] = "DOCS_SYNCED"
+        write_text_atomic(
+            event_path,
+            "".join(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for event in events
+            ),
+        )
+        vendor(ROOT, self.repo, False)
+
+        result = migrate_project(self.repo)
+
+        self.assertEqual(result["from"], "0.1.19")
+        self.assertEqual(result["to"], "0.1.20")
+        project = read_json(project_path)
+        self.assertEqual(project["polaris_version"], "0.1.20")
+        self.assertEqual(project["workflow_version"], "0.1.3")
+        self.assertEqual(read_json(workflow_path)["workflow_version"], "0.1.3")
+        state = read_json(state_path)
+        self.assertEqual(state["status"], "IMPLEMENTING")
+        event = read_jsonl(event_path)[-1]
+        self.assertEqual(event["from"], "DOCS_SYNCED")
+        self.assertEqual(event["to"], "IMPLEMENTING")
+        self.assertEqual(event["previous_polaris_version"], "0.1.19")
+        self.assertEqual(event["previous_workflow_version"], "0.1.2")
+        record = read_json(
+            self.repo
+            / ".polaris"
+            / "migrations"
+            / "MIG-0.1.19-to-0.1.20.json"
+        )
+        self.assertEqual(record["tasks"][0]["source_status"], "DOCS_SYNCED")
+        self.assertEqual(record["tasks"][0]["target_status"], "IMPLEMENTING")
+
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
-            "record_version": 1,
-            "migration_id": "0.1.18-to-0.1.19",
-            "from_polaris_version": "0.1.18",
-            "to_polaris_version": "0.1.19",
+            "record_version": 2,
+            "migration_id": "0.1.19-to-0.1.20",
+            "from_polaris_version": "0.1.19",
+            "to_polaris_version": "0.1.20",
             "from_workflow_version": "0.1.2",
-            "to_workflow_version": "0.1.2",
+            "to_workflow_version": "0.1.3",
             "status": "IN_PROGRESS",
             "started_at": started_at,
             "completed_at": None,
@@ -1942,6 +2079,8 @@ class PolarisCoreTests(unittest.TestCase):
                     "task_id": "TASK-0001",
                     "source_sequence": 0,
                     "migration_sequence": 1,
+                    "source_status": "DRAFT",
+                    "target_status": "DRAFT",
                 }
             ],
         }
@@ -1949,7 +2088,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.18-to-0.1.19.json",
+            / "MIG-0.1.19-to-0.1.20.json",
             record,
         )
         append_jsonl(
@@ -1962,15 +2101,17 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.19",
-                "workflow_version": "0.1.2",
+                "polaris_version": "0.1.20",
+                "workflow_version": "0.1.3",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
                 "blocked_from": state["blocked_from"],
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.18-to-0.1.19",
+                "migration_id": "0.1.19-to-0.1.20",
+                "previous_polaris_version": "0.1.19",
+                "previous_workflow_version": "0.1.2",
             },
         )
 
@@ -1982,7 +2123,8 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         vendor(ROOT, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
@@ -1990,7 +2132,7 @@ class PolarisCoreTests(unittest.TestCase):
             {
                 "lock_version": 1,
                 "kind": "polaris_migration",
-                "migration_id": "0.1.18-to-0.1.19",
+                "migration_id": "0.1.19-to-0.1.20",
                 "task_id": "TASK-0001",
                 "hostname": socket.gethostname(),
                 "pid": 2147483647,
