@@ -133,6 +133,20 @@ def repository_file_snapshot(repo: Path) -> dict[str, bytes]:
 
 
 @contextmanager
+def protocol_source_at(version: str) -> Iterator[Path]:
+    """Materialize a historical protocol target for adjacent migration tests."""
+    with tempfile.TemporaryDirectory(prefix="polaris-protocol-source-") as temp:
+        source = Path(temp) / "source"
+        shutil.copytree(
+            ROOT,
+            source,
+            ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+        )
+        (source / "VERSION").write_text(version + "\n", encoding="utf-8")
+        yield source
+
+
+@contextmanager
 def simulated_symlinks(*paths: Path) -> Iterator[None]:
     """Report selected paths as symlinks without requiring filesystem support."""
     original_is_symlink = Path.is_symlink
@@ -2188,7 +2202,8 @@ class PolarisCoreTests(unittest.TestCase):
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
         self.set_protocol_version("0.1.19")
         self.set_workflow_version("0.1.2")
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.20") as source:
+            vendor(source, self.repo, False)
 
         result = migrate_project(self.repo)
 
@@ -2340,7 +2355,8 @@ class PolarisCoreTests(unittest.TestCase):
                 for event in events
             ),
         )
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.20") as source:
+            vendor(source, self.repo, False)
 
         result = migrate_project(self.repo)
 
@@ -2417,7 +2433,8 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.set_protocol_version("0.1.19")
         self.set_workflow_version("0.1.2")
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.20") as source:
+            vendor(source, self.repo, False)
 
         migrate_project(self.repo)
 
@@ -2455,7 +2472,8 @@ class PolarisCoreTests(unittest.TestCase):
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
         self.set_protocol_version("0.1.19")
         self.set_workflow_version("0.1.2")
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.20") as source:
+            vendor(source, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
@@ -2519,7 +2537,8 @@ class PolarisCoreTests(unittest.TestCase):
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
         self.set_protocol_version("0.1.19")
         self.set_workflow_version("0.1.2")
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.20") as source:
+            vendor(source, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
             lock_path,
@@ -2559,8 +2578,9 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_rejects_an_undeclared_version_jump(self) -> None:
         """没有注册的跨版本路径机械拒绝，且不创建部分迁移记录。"""
-        self.set_protocol_version("0.1.10")
-        vendor(ROOT, self.repo, False)
+        self.set_protocol_version("0.1.20")
+        with protocol_source_at("0.1.22") as source:
+            vendor(source, self.repo, False)
 
         with self.assertRaisesRegex(RuleFailure, "no explicit adjacent migration"):
             migrate_project(self.repo)
@@ -2568,8 +2588,23 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertFalse((self.repo / ".polaris" / "migrations").exists())
         self.assertEqual(
             read_json(self.repo / ".polaris" / "project.json")["polaris_version"],
-            "0.1.10",
+            "0.1.20",
         )
+
+    def test_version_only_migration_rejects_a_workflow_version_change(self) -> None:
+        """0.1.20→0.1.21 路由不能暗中改变已冻结的 Workflow 0.1.3。"""
+        self.set_protocol_version("0.1.20")
+        with protocol_source_at("0.1.21") as source:
+            migrations_path = source / "workflow" / "migrations.json"
+            migrations = read_json(migrations_path)
+            migrations["steps"][-1]["to_workflow_version"] = "0.1.4"
+            write_json_atomic(migrations_path, migrations)
+            vendor(source, self.repo, False)
+
+        with self.assertRaisesRegex(
+            RuleFailure, "workflow migration requires replacement"
+        ):
+            migrate_project(self.repo)
 
     def test_code_intelligence_auto_detects_available_operations_and_can_be_disabled(self) -> None:
         """已初始化的可选代码情报按 MCP 工具能力发现；缺失或禁用时不产生硬依赖。"""

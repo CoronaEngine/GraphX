@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -39,6 +39,7 @@ from internal.polaris_core import (  # noqa: E402
     write_json_atomic,
     write_text_atomic,
 )
+from internal.recovery_protocol import refresh_project_index  # noqa: E402
 from vendor_project import vendor  # noqa: E402
 
 
@@ -46,6 +47,20 @@ def completed(
     stdout: str, returncode: int = 0, stderr: str = ""
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
+
+
+@contextmanager
+def protocol_source_at(version: str):
+    """Materialize a historical protocol target for adjacent migration tests."""
+    with tempfile.TemporaryDirectory(prefix="polaris-codegraph-protocol-") as temp:
+        source = Path(temp) / "source"
+        shutil.copytree(
+            ROOT,
+            source,
+            ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+        )
+        (source / "VERSION").write_text(version + "\n", encoding="utf-8")
+        yield source
 
 
 def healthy_status(project: Path) -> str:
@@ -161,7 +176,7 @@ class CodeGraphTests(unittest.TestCase):
             self.assertIn(official, path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
         for path in [ROOT / "README.md", ROOT / "README.zh-CN.md"]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.20", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.21", text, path.relative_to(ROOT).as_posix())
             self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
 
     def test_authority_surfaces_publish_workflow_013(self) -> None:
@@ -172,7 +187,7 @@ class CodeGraphTests(unittest.TestCase):
             ROOT / "plan.md",
         ]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.20", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.21", text, path.relative_to(ROOT).as_posix())
             self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
 
     def test_readmes_keep_codegraph_operational_boundaries(self) -> None:
@@ -1214,6 +1229,98 @@ For accurate content of those specific files, Read them directly.
             "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
         )
 
+    def prepare_v2_migration_records(self) -> list[tuple[Path, bytes]]:
+        """Create immutable v2 records in the current and prior revision slots."""
+        self.initialize_task()
+        new_revision(self.repo, "TASK-0001")
+        task = self.repo / ".polaris/tasks/TASK-0001"
+        state_path = task / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["current_revision"] = 2
+        write_json_atomic(state_path, state)
+        event_path = task / "events.jsonl"
+        events = [
+            json.loads(line)
+            for line in event_path.read_text(encoding="utf-8").splitlines()
+        ]
+        events[0]["current_revision"] = 2
+        write_text_atomic(
+            event_path,
+            "".join(
+                json.dumps(event, separators=(",", ":")) + "\n"
+                for event in events
+            ),
+        )
+        frozen: list[tuple[Path, bytes]] = []
+        for revision in (1, 2):
+            value = self.v2_record()
+            value["work_item_revision"] = revision
+            path = (
+                task
+                / "code-intelligence"
+                / f"r{revision:03d}"
+                / "planning.json"
+            )
+            write_json_atomic(path, value)
+            frozen.append((path, path.read_bytes()))
+        self.set_protocol_version("0.1.20")
+        self.set_workflow_version("0.1.3")
+        refresh_project_index(self.repo)
+        return frozen
+
+    def test_migration_inventories_frozen_v2_records_without_rewriting_them(
+        self,
+    ) -> None:
+        """0.1.21 inventories current/prior v2 evidence and preserves Workflow 0.1.3."""
+        frozen = self.prepare_v2_migration_records()
+        vendor(ROOT, self.repo, False)
+
+        result = migrate_project(self.repo)
+
+        self.assertEqual(result["from"], "0.1.20")
+        self.assertEqual(result["to"], "0.1.21")
+        project = json.loads(
+            (self.repo / ".polaris/project.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(project["workflow_version"], "0.1.3")
+        migration = json.loads(
+            (
+                self.repo
+                / ".polaris/migrations/MIG-0.1.20-to-0.1.21.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            migration["retired_code_intelligence_records"],
+            [
+                {
+                    "task_id": "TASK-0001",
+                    "path": f"code-intelligence/r{revision:03d}/planning.json",
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
+                for revision, (_path, content) in enumerate(frozen, start=1)
+            ],
+        )
+        for path, content in frozen:
+            self.assertEqual(path.read_bytes(), content)
+
+    def test_migration_resume_rejects_mutated_frozen_v2_inventory(self) -> None:
+        """中断迁移重跑前会重算 v2 清单，拒绝已经变化的历史证据。"""
+        frozen = self.prepare_v2_migration_records()
+        vendor(ROOT, self.repo, False)
+        with mock.patch(
+            "internal.migration_protocol.append_jsonl",
+            side_effect=OSError("injected migration interruption"),
+        ):
+            with self.assertRaisesRegex(OSError, "injected migration interruption"):
+                migrate_project(self.repo)
+
+        path, _content = frozen[0]
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["recorded_at"] = "2026-08-19T00:00:00Z"
+        write_json_atomic(path, value)
+        with self.assertRaisesRegex(RuleFailure, "inventory changed"):
+            migrate_project(self.repo)
+
     def test_legacy_v1_records_remain_readable_but_cannot_be_written(self) -> None:
         self.initialize_task()
         protocol = importlib.import_module("internal.code_intelligence_protocol")
@@ -1293,7 +1400,8 @@ For accurate content of those specific files, Read them directly.
         }
         write_json_atomic(legacy_path, legacy)
         legacy_bytes = legacy_path.read_bytes()
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.20") as source:
+            vendor(source, self.repo, False)
 
         result = migrate_project(self.repo)
 
@@ -1337,7 +1445,8 @@ For accurate content of those specific files, Read them directly.
             / ".polaris/tasks/TASK-0001/code-intelligence/r001/not-a-stage.json"
         )
         write_json_atomic(noncanonical, self.v2_record())
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.20") as source:
+            vendor(source, self.repo, False)
 
         with self.assertRaisesRegex(RuleFailure, "non-canonical"):
             migrate_project(self.repo)
@@ -1394,7 +1503,8 @@ For accurate content of those specific files, Read them directly.
             RuleFailure, "targets the wrong task revision"
         ):
             validate_record_value(self.repo, "TASK-0001", legacy, ROOT)
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.20") as source:
+            vendor(source, self.repo, False)
 
         try:
             migrate_project(self.repo)
@@ -1425,7 +1535,8 @@ For accurate content of those specific files, Read them directly.
         records_root = self.repo / ".polaris/tasks/TASK-0001/code-intelligence"
         shutil.rmtree(records_root)
         records_root.symlink_to(self.repo / "missing-code-intelligence")
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.20") as source:
+            vendor(source, self.repo, False)
 
         with self.assertRaisesRegex(RuleFailure, "must not be a symlink"):
             migrate_project(self.repo)

@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> Current protocol version: `0.1.20` (in development); workflow version: `0.1.3`
+> Current protocol version: `0.1.21` (in development); workflow version: `0.1.3`
 
 Polaris is a repo-native engineering workflow for coding agent hosts. It stores requirements, plans, implementation results, independent reviews, validation evidence, and task state in Git, then uses deterministic gates to prevent requirement drift, stale evidence, and agents declaring their own work complete.
 
@@ -92,6 +92,8 @@ polaris code-intelligence add codegraph --repo .
 Run these commands from the target repository as appropriate. `codegraph init` creates the `.codegraph/` marker; without it Polaris uses source and Git directly and creates no stage record. Polaris writes a Code Intelligence record only when it actually performs a Provider status, sync, or explore operation. Polaris can only read CodeGraph status, explore indexed relationships, and perform one bounded `codegraph sync` at a declared stage boundary. It never installs, initializes, starts, configures, reconfigures, waits for, or manages CodeGraph or its watcher/daemon/MCP configuration.
 
 CodeGraph's watcher and connection reconciliation are the primary freshness mechanisms. Polaris records a limited conclusion at the time it checks: `CURRENT_AT_CHECK`, `PARTIAL_STALE`, `INDEX_STALE`, `NOT_VERIFIED`, or `UNAVAILABLE`; it never claims commit-exact graph freshness. A `PARTIAL_STALE` response names specific files: read each current file directly (`READ_SOURCE`), or inspect the registered Git diff if it was deleted (`INSPECT_GIT_DIFF`). For `INDEX_STALE` or `NOT_VERIFIED`, treat the graph only as a lead and search the repository plus Git (`SEARCH_SOURCE`). Validation remains graph-free and relies on source, Git, builds, tests, static checks, and Human Checks.
+
+Protocol `0.1.21` adds the project-scoped Polaris CodeGraph proxy, host adapter v3 registration, and auditable Code Intelligence record v3 while leaving Workflow at `0.1.3`. Record v1 and v2 are immutable historical evidence only; new evidence is projected from a retained proxy bundle into v3.
 
 ## v0.1 scope
 
