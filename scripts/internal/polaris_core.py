@@ -22,6 +22,7 @@ SUPPORTED_SCHEMA_KEYWORDS = {
     "const",
     "enum",
     "items",
+    "maxItems",
     "minItems",
     "minLength",
     "minimum",
@@ -337,6 +338,10 @@ def validate_schema(value: Any, schema: dict[str, Any], location: str = "$") -> 
         if "minItems" in schema and len(value) < schema["minItems"]:
             errors.append(
                 f"{location}: item count is below minItems {schema['minItems']}"
+            )
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            errors.append(
+                f"{location}: item count exceeds maxItems {schema['maxItems']}"
             )
         if schema.get("uniqueItems") is True:
             duplicate = next(

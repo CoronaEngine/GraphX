@@ -39,6 +39,7 @@ LEGACY_WORKSPACE_REFRESH = "refresh_" + "workspace"
 LEGACY_REFRESH_ACKNOWLEDGED = "refresh_" + "acknowledged"
 LEGACY_SPOT_CHECKED = "spot_" + "checked"
 LEGACY_NOT_VERIFIED = "not_" + "verified"
+MAX_SEARCH_SOURCE_RESULTS = 100
 
 
 def _validate_pattern(value: str) -> None:
@@ -407,8 +408,11 @@ def _validate_source_fallbacks(
         action = fallback["action"]
         path = fallback["path"]
         digest = fallback["observed_sha256"]
+        result_paths = fallback["result_paths"]
         if not fallback["purpose"]:
             raise RuleFailure("source fallback requires a non-empty purpose")
+        if action != "SEARCH_SOURCE" and result_paths:
+            raise RuleFailure("non-SEARCH_SOURCE fallback must use empty result_paths")
         if action == "READ_SOURCE":
             if not isinstance(path, str) or digest is None:
                 raise RuleFailure("READ_SOURCE fallback requires a current SHA")
@@ -433,6 +437,25 @@ def _validate_source_fallbacks(
                 raise RuleFailure("SEARCH_SOURCE fallback cannot name a path or SHA")
             if any(item is not None for item in (fallback["base_commit"], fallback["head_commit"], fallback["diff_hash"])):
                 raise RuleFailure("SEARCH_SOURCE fallback cannot claim a Git diff target")
+            if len(result_paths) > MAX_SEARCH_SOURCE_RESULTS:
+                raise RuleFailure(
+                    f"SEARCH_SOURCE fallback may record at most {MAX_SEARCH_SOURCE_RESULTS} result paths"
+                )
+            seen_paths: set[str] = set()
+            for result in result_paths:
+                result_path = result["path"]
+                if result_path in seen_paths:
+                    raise RuleFailure("duplicate SEARCH_SOURCE result path")
+                seen_paths.add(result_path)
+                resolved = resolve_repo_reference(repo, result_path)
+                if not resolved.is_file():
+                    raise RuleFailure(
+                        f"SEARCH_SOURCE result is not a current regular file: {result_path}"
+                    )
+                if file_sha256(resolved) != result["observed_sha256"]:
+                    raise RuleFailure(
+                        f"SEARCH_SOURCE result hash is stale: {result_path}"
+                    )
 
 
 def _validate_v2_freshness(
@@ -530,6 +553,8 @@ def _validate_v2_record_value(
         ):
             raise RuleFailure("Code Intelligence record names an invalid provider capability set")
     freshness = value["freshness"]
+    if freshness["status"] == "UNAVAILABLE" and freshness["response_sha256"] is not None:
+        raise RuleFailure("UNAVAILABLE freshness response hash must be null")
     if value["status"] == "UNAVAILABLE" and (
         freshness["status"] != "UNAVAILABLE"
         or "RESPONSE_BANNER" in freshness["basis"]
@@ -558,13 +583,25 @@ def _validate_v2_record_value(
             path = resolve_repo_reference(repo, symbol["path"])
             if not path.is_file():
                 raise RuleFailure(f"Code Intelligence symbol path is not a file: {symbol['path']}")
-    if "RESPONSE_BANNER" in freshness["basis"] and not any(
-        query["status"] == "SUCCESS" and query["response_sha256"] is not None
-        for query in value["queries"]
-    ):
-        raise RuleFailure(
-            "RESPONSE_BANNER freshness requires a successful explore query with a response hash"
-        )
+    if "RESPONSE_BANNER" in freshness["basis"]:
+        response_sha256 = freshness["response_sha256"]
+        successful_explore_hashes = {
+            query["response_sha256"]
+            for query in value["queries"]
+            if query["status"] == "SUCCESS" and query["response_sha256"] is not None
+        }
+        if not successful_explore_hashes:
+            raise RuleFailure(
+                "RESPONSE_BANNER freshness requires a successful explore query with a response hash"
+            )
+        if response_sha256 is None:
+            raise RuleFailure("RESPONSE_BANNER freshness response hash is required")
+        if response_sha256 not in successful_explore_hashes:
+            raise RuleFailure(
+                "RESPONSE_BANNER freshness response hash must match a successful explore query"
+            )
+    elif freshness["response_sha256"] is not None:
+        raise RuleFailure("freshness response hash requires RESPONSE_BANNER basis")
     status_check = value["status_check"]
     if status_check is not None:
         status_check_status = status_check["status"]

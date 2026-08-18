@@ -19,6 +19,7 @@
         "status": "UNAVAILABLE",
         "checked_at": "1970-01-01T00:00:00Z",
         "basis": ["NONE"],
+        "response_sha256": null,
         "stale_points": []
     },
     "source_fallbacks": [],

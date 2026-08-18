@@ -829,6 +829,10 @@ class PolarisCoreTests(unittest.TestCase):
             validate_schema("极", {"type": "string", "minLength": 1}), []
         )
         self.assertTrue(validate_schema([], {"type": "array", "minItems": 1}))
+        self.assertTrue(validate_schema([1, 2], {"type": "array", "maxItems": 1}))
+        self.assertEqual(
+            validate_schema([1], {"type": "array", "maxItems": 1}), []
+        )
         self.assertTrue(
             validate_schema(
                 ["AC-01", "AC-01"],

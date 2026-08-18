@@ -243,6 +243,7 @@ class CodeGraphTests(unittest.TestCase):
             "response_sha256": "0" * 64,
             "error": None,
         }]
+        value["freshness"]["response_sha256"] = "0" * 64
 
     def initialize_task(self) -> None:
         init_task(self.repo, "TASK-0001", "R1")
@@ -486,6 +487,7 @@ class CodeGraphTests(unittest.TestCase):
             "status": "PARTIAL_STALE",
             "checked_at": "2026-08-18T00:00:00Z",
             "basis": ["RESPONSE_BANNER"],
+            "response_sha256": None,
             "stale_points": [{
                 "scope": "FILE",
                 "path": "src/widget.py",
@@ -506,6 +508,7 @@ class CodeGraphTests(unittest.TestCase):
             "head_commit": None,
             "diff_hash": None,
             "purpose": "confirm pending CodeGraph content",
+            "result_paths": [],
         }]
         self.assertEqual(
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"],
@@ -530,6 +533,7 @@ class CodeGraphTests(unittest.TestCase):
                 "status": "PARTIAL_STALE",
                 "checked_at": "2026-08-18T00:00:00Z",
                 "basis": ["RESPONSE_BANNER"],
+                "response_sha256": None,
                 "stale_points": [{
                     "scope": "FILE",
                     "path": "src/widget.py",
@@ -546,6 +550,7 @@ class CodeGraphTests(unittest.TestCase):
                 "head_commit": None,
                 "diff_hash": None,
                 "purpose": "confirm pending CodeGraph content",
+                "result_paths": [],
             }],
         })
         with self.assertRaisesRegex(RuleFailure, "explore capability"):
@@ -563,10 +568,142 @@ class CodeGraphTests(unittest.TestCase):
             "status": "SUCCESS", "summary": "stale banner", "symbols": [],
             "response_sha256": "0" * 64, "error": None,
         }]
+        value["freshness"]["response_sha256"] = "0" * 64
         self.assertEqual(
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"],
             2,
         )
+
+    def test_response_banner_freshness_digest_binds_the_classified_response(self) -> None:
+        """A banner conclusion must identify the exact successful explore response."""
+        self.initialize_task()
+        source = self.repo / "src/widget.py"
+        source.parent.mkdir()
+        source.write_text("value = 1\n", encoding="utf-8")
+        digest = file_sha256(source)
+        cases = (
+            (
+                "PARTIAL_STALE",
+                [{
+                    "scope": "FILE", "path": "src/widget.py", "reason": "PENDING_SYNC",
+                    "fallback": "READ_SOURCE", "observed_sha256": digest,
+                }],
+                [{
+                    "action": "READ_SOURCE", "path": "src/widget.py",
+                    "observed_sha256": digest, "base_commit": None, "head_commit": None,
+                    "diff_hash": None, "purpose": "read stale response source", "result_paths": [],
+                }],
+            ),
+            (
+                "INDEX_STALE",
+                [{
+                    "scope": "INDEX", "path": None, "reason": "AUTO_SYNC_DISABLED",
+                    "fallback": "SEARCH_SOURCE", "observed_sha256": None,
+                }],
+                [{
+                    "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
+                    "base_commit": None, "head_commit": None, "diff_hash": None,
+                    "purpose": "search stale CodeGraph index scope", "result_paths": [],
+                }],
+            ),
+            (
+                "NOT_VERIFIED",
+                [{
+                    "scope": "INDEX", "path": None, "reason": "STATUS_UNREADABLE",
+                    "fallback": "SEARCH_SOURCE", "observed_sha256": None,
+                }],
+                [{
+                    "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
+                    "base_commit": None, "head_commit": None, "diff_hash": None,
+                    "purpose": "search after unreadable CodeGraph response", "result_paths": [],
+                }],
+            ),
+        )
+        for status, stale_points, fallbacks in cases:
+            with self.subTest(status=status):
+                value = self.v2_record()
+                value.update({
+                    "status": "USED",
+                    "freshness": {
+                        "status": status,
+                        "checked_at": "2026-08-18T00:00:00Z",
+                        "basis": ["RESPONSE_BANNER"],
+                        "response_sha256": None,
+                        "stale_points": stale_points,
+                    },
+                    "source_fallbacks": fallbacks,
+                })
+                self.add_explore_response_evidence(value)
+                value["freshness"]["response_sha256"] = None
+                with self.assertRaisesRegex(RuleFailure, "freshness response hash"):
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)
+                value["freshness"]["response_sha256"] = "1" * 64
+                with self.assertRaisesRegex(RuleFailure, "must match"):
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)
+                value["freshness"]["response_sha256"] = "0" * 64
+                self.assertEqual(
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"],
+                    2,
+                )
+
+    def test_unavailable_freshness_cannot_retain_a_classified_response_digest(self) -> None:
+        self.initialize_task()
+        value = self.v2_record()
+        value["freshness"]["response_sha256"] = "0" * 64
+        with self.assertRaisesRegex(RuleFailure, "UNAVAILABLE freshness response hash"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+    def test_search_source_fallback_records_only_current_finite_search_results(self) -> None:
+        self.initialize_task()
+        source = self.repo / "src/widget.py"
+        source.parent.mkdir()
+        source.write_text("value = 1\n", encoding="utf-8")
+        entry = {"path": "src/widget.py", "observed_sha256": file_sha256(source)}
+        value = self.v2_record()
+        value["source_fallbacks"] = [{
+            "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
+            "base_commit": None, "head_commit": None, "diff_hash": None,
+            "purpose": "search affected source", "result_paths": [entry],
+        }]
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
+
+        invalid_cases: list[tuple[str, object, str]] = [
+            ("hash", [{"path": "src/widget.py", "observed_sha256": "0" * 64}], "hash is stale"),
+            ("traversal", [{"path": "../widget.py", "observed_sha256": entry["observed_sha256"]}], "invalid repository reference"),
+            ("deleted", [{"path": "src/deleted.py", "observed_sha256": entry["observed_sha256"]}], "not a current regular file"),
+            ("duplicate", [entry, dict(entry)], "duplicate SEARCH_SOURCE result path"),
+            ("over-limit", [entry] * 101, "maxItems 100"),
+        ]
+        outside = self.repo / "outside.py"
+        outside.write_text("outside\n", encoding="utf-8")
+        link = self.repo / "src/link.py"
+        link.symlink_to(outside)
+        invalid_cases.append((
+            "symlink",
+            [{"path": "src/link.py", "observed_sha256": file_sha256(outside)}],
+            "crosses a symlink",
+        ))
+        directory = self.repo / "src/directory.py"
+        directory.mkdir()
+        invalid_cases.append((
+            "directory",
+            [{"path": "src/directory.py", "observed_sha256": entry["observed_sha256"]}],
+            "not a current regular file",
+        ))
+        for name, result_paths, error in invalid_cases:
+            with self.subTest(name=name):
+                value["source_fallbacks"][0]["result_paths"] = result_paths
+                with self.assertRaisesRegex(RuleFailure, error):
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+        value["source_fallbacks"][0]["result_paths"] = [entry]
+        value["source_fallbacks"][0]["action"] = "READ_SOURCE"
+        value["source_fallbacks"][0]["path"] = "src/widget.py"
+        value["source_fallbacks"][0]["observed_sha256"] = entry["observed_sha256"]
+        with self.assertRaisesRegex(RuleFailure, "non-SEARCH_SOURCE fallback"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
 
     def test_unavailable_record_cannot_claim_response_banner_evidence(self) -> None:
         self.initialize_task()
@@ -575,6 +712,7 @@ class CodeGraphTests(unittest.TestCase):
             "status": "UNAVAILABLE",
             "checked_at": "2026-08-18T00:00:00Z",
             "basis": ["RESPONSE_BANNER"],
+            "response_sha256": None,
             "stale_points": [],
         }
         with self.assertRaisesRegex(RuleFailure, "cannot claim observed graph freshness"):
@@ -596,7 +734,7 @@ class CodeGraphTests(unittest.TestCase):
                 [{
                     "action": "READ_SOURCE", "path": "src/widget.py",
                     "observed_sha256": digest, "base_commit": None, "head_commit": None,
-                    "diff_hash": None, "purpose": "read stale response source",
+                    "diff_hash": None, "purpose": "read stale response source", "result_paths": [],
                 }],
             ),
             (
@@ -608,7 +746,7 @@ class CodeGraphTests(unittest.TestCase):
                 [{
                     "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
                     "base_commit": None, "head_commit": None, "diff_hash": None,
-                    "purpose": "search frozen CodeGraph index scope",
+                    "purpose": "search frozen CodeGraph index scope", "result_paths": [],
                 }],
             ),
             (
@@ -620,7 +758,7 @@ class CodeGraphTests(unittest.TestCase):
                 [{
                     "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
                     "base_commit": None, "head_commit": None, "diff_hash": None,
-                    "purpose": "search after unreadable CodeGraph response",
+                    "purpose": "search after unreadable CodeGraph response", "result_paths": [],
                 }],
             ),
         ]
@@ -633,6 +771,7 @@ class CodeGraphTests(unittest.TestCase):
                         "status": status,
                         "checked_at": "2026-08-18T00:00:00Z",
                         "basis": ["RESPONSE_BANNER"],
+                        "response_sha256": None,
                         "stale_points": stale_points,
                     },
                     "source_fallbacks": fallbacks,
@@ -661,12 +800,14 @@ class CodeGraphTests(unittest.TestCase):
             "head_commit": None,
             "diff_hash": None,
             "purpose": "find affected source",
+            "result_paths": [],
         }
         value["status"] = "SKIPPED"
         value["freshness"] = {
             "status": "CURRENT_AT_CHECK",
             "checked_at": "2026-08-18T00:00:00Z",
             "basis": ["STATUS_JSON"],
+            "response_sha256": None,
             "stale_points": [index_point],
         }
         value["source_fallbacks"] = [search]
@@ -701,6 +842,7 @@ class CodeGraphTests(unittest.TestCase):
             "status": "PARTIAL_STALE",
             "checked_at": "2026-08-18T00:00:00Z",
             "basis": ["RESPONSE_BANNER"],
+            "response_sha256": None,
             "stale_points": [{
                 "scope": "FILE", "path": "src/widget.py", "reason": "PENDING_SYNC",
                 "fallback": "READ_SOURCE", "observed_sha256": digest,
@@ -709,7 +851,7 @@ class CodeGraphTests(unittest.TestCase):
         self.add_explore_response_evidence(value)
         value["source_fallbacks"] = [{
             "action": "READ_SOURCE", "path": "src/widget.py", "observed_sha256": "0" * 64,
-            "base_commit": None, "head_commit": None, "diff_hash": None, "purpose": "read source",
+            "base_commit": None, "head_commit": None, "diff_hash": None, "purpose": "read source", "result_paths": [],
         }]
         with self.assertRaisesRegex(RuleFailure, "READ_SOURCE fallback hash is stale"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
@@ -814,6 +956,7 @@ class CodeGraphTests(unittest.TestCase):
             key: unavailable["freshness"][key]
             for key in ("status", "checked_at", "basis", "stale_points")
         }
+        value["freshness"]["response_sha256"] = None
         self.assertEqual(
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
         )
@@ -840,9 +983,10 @@ class CodeGraphTests(unittest.TestCase):
                 "action": "SEARCH_SOURCE", "path": None,
                 "observed_sha256": None, "base_commit": None,
                 "head_commit": None, "diff_hash": None,
-                "purpose": "recover unavailable CodeGraph evidence",
+                "purpose": "recover unavailable CodeGraph evidence", "result_paths": [],
             }],
         })
+        value["freshness"]["response_sha256"] = None
         self.assertEqual(
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
         )
@@ -876,6 +1020,7 @@ class CodeGraphTests(unittest.TestCase):
                 "status": "PARTIAL_STALE",
                 "checked_at": "2026-08-18T00:00:00Z",
                 "basis": ["RESPONSE_BANNER"],
+                "response_sha256": None,
                 "stale_points": [{
                     "scope": "FILE", "path": "src/widget.py", "reason": "PENDING_SYNC",
                     "fallback": "INSPECT_GIT_DIFF", "observed_sha256": None,
@@ -884,7 +1029,7 @@ class CodeGraphTests(unittest.TestCase):
             "source_fallbacks": [{
                 "action": "INSPECT_GIT_DIFF", "path": "src/widget.py",
                 "observed_sha256": None, "base_commit": base, "head_commit": added_head,
-                "diff_hash": subject_diff_hash(self.repo, base, added_head), "purpose": "inspect change",
+                "diff_hash": subject_diff_hash(self.repo, base, added_head), "purpose": "inspect change", "result_paths": [],
             }],
         })
         self.add_explore_response_evidence(value)
@@ -931,6 +1076,7 @@ class CodeGraphTests(unittest.TestCase):
                 "status": "CURRENT_AT_CHECK",
                 "checked_at": "2026-08-18T00:00:00Z",
                 "basis": ["SYNC_ACKNOWLEDGED"],
+                "response_sha256": None,
                 "stale_points": [],
             },
         })
@@ -953,6 +1099,7 @@ class CodeGraphTests(unittest.TestCase):
                 "status": "CURRENT_AT_CHECK",
                 "checked_at": "2026-08-18T00:00:00Z",
                 "basis": ["NONE"],
+                "response_sha256": None,
                 "stale_points": [],
             },
         })
@@ -971,6 +1118,7 @@ class CodeGraphTests(unittest.TestCase):
                 "status": "CURRENT_AT_CHECK",
                 "checked_at": "2026-08-18T00:00:00Z",
                 "basis": ["STATUS_JSON"],
+                "response_sha256": None,
                 "stale_points": [],
             },
         })
@@ -1004,6 +1152,7 @@ class CodeGraphTests(unittest.TestCase):
                 "status": "CURRENT_AT_CHECK",
                 "checked_at": "2026-08-18T00:00:00Z",
                 "basis": ["SYNC_ACKNOWLEDGED"],
+                "response_sha256": None,
                 "stale_points": [],
             },
         })
@@ -1051,13 +1200,14 @@ class CodeGraphTests(unittest.TestCase):
                     },
                     "freshness": {
                         "status": result["status"], "checked_at": result["checked_at"],
-                        "basis": result["basis"], "stale_points": result["stale_points"],
+                        "basis": result["basis"], "response_sha256": None,
+                        "stale_points": result["stale_points"],
                     },
                     "source_fallbacks": [{
                         "action": "SEARCH_SOURCE", "path": None,
                         "observed_sha256": None, "base_commit": None,
                         "head_commit": None, "diff_hash": None,
-                        "purpose": "recover unreadable CodeGraph status",
+                        "purpose": "recover unreadable CodeGraph status", "result_paths": [],
                     }],
                 })
                 self.assertEqual(
@@ -1095,13 +1245,14 @@ class CodeGraphTests(unittest.TestCase):
                 "sync": sync,
                 "freshness": {
                     "status": freshness["status"], "checked_at": freshness["checked_at"],
-                    "basis": freshness["basis"], "stale_points": freshness["stale_points"],
+                    "basis": freshness["basis"], "response_sha256": None,
+                    "stale_points": freshness["stale_points"],
                 },
                 "source_fallbacks": ([{
                     "action": "SEARCH_SOURCE", "path": None,
                     "observed_sha256": None, "base_commit": None,
                     "head_commit": None, "diff_hash": None,
-                    "purpose": "recover stale CodeGraph evidence",
+                    "purpose": "recover stale CodeGraph evidence", "result_paths": [],
                 }] if freshness["stale_points"] else []),
             })
             return value
@@ -1216,7 +1367,7 @@ class CodeGraphTests(unittest.TestCase):
         fallback = {
             "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
             "base_commit": None, "head_commit": None, "diff_hash": None,
-            "purpose": "recover stale CodeGraph index",
+            "purpose": "recover stale CodeGraph index", "result_paths": [],
         }
         for status, reason in (("INDEX_STALE", "INDEX_FAILED"),):
             with self.subTest(status=status):
@@ -1237,6 +1388,7 @@ class CodeGraphTests(unittest.TestCase):
                     "freshness": {
                         "status": status, "checked_at": "2026-08-18T00:00:00Z",
                         "basis": ["STATUS_JSON", "SYNC_ACKNOWLEDGED"],
+                        "response_sha256": None,
                         "stale_points": [{
                             "scope": "INDEX", "path": None, "reason": reason,
                             "fallback": "SEARCH_SOURCE", "observed_sha256": None,
@@ -1276,7 +1428,7 @@ class CodeGraphTests(unittest.TestCase):
             },
             "freshness": {
                 "status": "INDEX_STALE", "checked_at": "2026-08-18T00:00:00Z",
-                "basis": ["STATUS_JSON"], "stale_points": [{
+                "basis": ["STATUS_JSON"], "response_sha256": None, "stale_points": [{
                     "scope": "INDEX", "path": None, "reason": "INDEX_FAILED",
                     "fallback": "SEARCH_SOURCE", "observed_sha256": None,
                 }],
@@ -1324,6 +1476,15 @@ class CodeGraphTests(unittest.TestCase):
             "NOT_VERIFIED",
             "source search",
         )
+        audit_binding_fragments = (
+            "freshness.response_sha256",
+            "successful explore response",
+            "result_paths",
+            "at most 100",
+            "POSIX",
+            "current confined regular file",
+            "empty `result_paths`",
+        )
         retired_operations = (
             "symbol" + "_search",
             "call" + "_graph",
@@ -1351,6 +1512,8 @@ class CodeGraphTests(unittest.TestCase):
                     self.assertIn(fragment, rendered, f"{adapter['host_id']}:{skill_name}")
                 for fragment in partial_stale_branches:
                     self.assertIn(fragment, rendered, f"{adapter['host_id']}:{skill_name}")
+                for fragment in audit_binding_fragments:
+                    self.assertIn(fragment, rendered, f"{adapter['host_id']}:{skill_name}")
                 self.assertIn("v2", rendered, f"{adapter['host_id']}:{skill_name}")
                 self.assertNotIn("directly read every listed stale file", rendered)
                 for retired in retired_operations:
@@ -1365,6 +1528,8 @@ class CodeGraphTests(unittest.TestCase):
         self.assertIn("stop CodeGraph calls for this session", agents)
         self.assertIn("installer-managed marker block", agents)
         for fragment in partial_stale_branches:
+            self.assertIn(fragment, agents)
+        for fragment in audit_binding_fragments:
             self.assertIn(fragment, agents)
         self.assertNotIn("directly read every listed stale file", agents)
 

@@ -300,6 +300,7 @@
                 "status",
                 "checked_at",
                 "basis",
+                "response_sha256",
                 "stale_points"
             ],
             "additionalProperties": false,
@@ -317,6 +318,13 @@
                 "checked_at": {
                     "type": "string",
                     "minLength": 1
+                },
+                "response_sha256": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "pattern": "^[0-9a-f]{64}$"
                 },
                 "basis": {
                     "type": "array",
@@ -405,7 +413,8 @@
                     "base_commit",
                     "head_commit",
                     "diff_hash",
-                    "purpose"
+                    "purpose",
+                    "result_paths"
                 ],
                 "additionalProperties": false,
                 "properties": {
@@ -453,6 +462,28 @@
                     },
                     "purpose": {
                         "type": "string"
+                    },
+                    "result_paths": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": {
+                            "type": "object",
+                            "required": [
+                                "path",
+                                "observed_sha256"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "observed_sha256": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{64}$"
+                                }
+                            }
+                        }
                     }
                 }
             }
