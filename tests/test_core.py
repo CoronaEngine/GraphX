@@ -2741,6 +2741,8 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_vendored_target_is_self_contained(self) -> None:
         """目标仓库 vendoring 后同时包含 Codex、Claude Code 与机械协议。"""
+        self.assertFalse((self.repo / ".codex" / "config.toml").exists())
+        self.assertFalse((self.repo / ".mcp.json").exists())
         vendor(ROOT, self.repo, False)
         for adapter in load_host_adapters(ROOT):
             skill_root = self.repo / str(adapter["skill_target"])
@@ -2771,6 +2773,46 @@ class PolarisCoreTests(unittest.TestCase):
         )
         result = validate_project(self.repo)
         self.assertEqual(result["active_tasks"], 1)
+
+    def test_vendor_preserves_and_validates_project_mcp_configuration(self) -> None:
+        """vendoring 注册项目代理，把宿主配置列为保留文件并校验启动边界。"""
+        from internal.project_mcp_registration import validate_project_mcp
+
+        codex_path = self.repo / ".codex" / "config.toml"
+        codex_path.parent.mkdir()
+        codex_path.write_text(
+            'model = "gpt-5"\n[mcp_servers.other]\ncommand = "other"\n',
+            encoding="utf-8",
+        )
+        claude_path = self.repo / ".mcp.json"
+        write_json_atomic(
+            claude_path,
+            {
+                "permissions": {"allow": ["Read"]},
+                "mcpServers": {"other": {"command": "other", "args": []}},
+            },
+        )
+
+        vendor(ROOT, self.repo, False)
+
+        adapters = load_host_adapters(self.repo / "tools" / "polaris")
+        for adapter in adapters:
+            validate_project_mcp(self.repo, adapter)
+        self.assertIn('model = "gpt-5"', codex_path.read_text(encoding="utf-8"))
+        claude = read_json(claude_path)
+        self.assertEqual(claude["permissions"], {"allow": ["Read"]})
+        self.assertIn("other", claude["mcpServers"])
+        manifest = read_json(
+            self.repo / "tools" / "polaris" / "install-manifest.json"
+        )
+        self.assertIn(".codex/config.toml", manifest["preserved_files"])
+        self.assertIn(".mcp.json", manifest["preserved_files"])
+        self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
+
+        claude["mcpServers"]["polaris-codegraph"]["args"][-1] = "../other"
+        write_json_atomic(claude_path, claude)
+        with self.assertRaisesRegex(RuleFailure, "Polaris entry is invalid"):
+            validate_project(self.repo)
 
     def test_doctor_reports_a_healthy_vendored_project_without_writing(self) -> None:
         """Doctor 聚合健康检查并通过报告 Schema，且诊断前后项目文件完全不变。"""
@@ -3016,8 +3058,12 @@ class PolarisCoreTests(unittest.TestCase):
         vendor(ROOT, self.repo, False)
         manifest_path = self.repo / "tools" / "polaris" / "install-manifest.json"
         skill_path = self.repo / ".agents" / "skills" / "engineering-task" / "SKILL.md"
+        codex_path = self.repo / ".codex" / "config.toml"
+        claude_mcp_path = self.repo / ".mcp.json"
         original_manifest = manifest_path.read_bytes()
         original_skill = skill_path.read_bytes()
+        original_codex = codex_path.read_bytes()
+        original_claude_mcp = claude_mcp_path.read_bytes()
         with tempfile.TemporaryDirectory(prefix="polaris-vendor-source-") as temp:
             source = Path(temp) / "source"
             shutil.copytree(
@@ -3048,6 +3094,8 @@ class PolarisCoreTests(unittest.TestCase):
 
         self.assertEqual(manifest_path.read_bytes(), original_manifest)
         self.assertEqual(skill_path.read_bytes(), original_skill)
+        self.assertEqual(codex_path.read_bytes(), original_codex)
+        self.assertEqual(claude_mcp_path.read_bytes(), original_claude_mcp)
         self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
         self.assertEqual(
             list(
@@ -3232,6 +3280,36 @@ class PolarisCoreTests(unittest.TestCase):
 
         adapters = {item["host_id"]: item for item in load_host_adapters(ROOT)}
         self.assertEqual(set(adapters), {"codex", "claude-code"})
+        self.assertIn("project_mcp", adapters["codex"])
+        self.assertIn("project_mcp", adapters["claude-code"])
+        self.assertEqual(
+            adapters["codex"]["project_mcp"],
+            {
+                "server_id": "polaris-codegraph",
+                "format": "codex-toml",
+                "target": ".codex/config.toml",
+                "command": "python3",
+                "args": [
+                    "tools/polaris/scripts/code_intelligence_mcp.py",
+                    "--repo",
+                    ".",
+                ],
+            },
+        )
+        self.assertEqual(
+            adapters["claude-code"]["project_mcp"],
+            {
+                "server_id": "polaris-codegraph",
+                "format": "claude-json",
+                "target": ".mcp.json",
+                "command": "python3",
+                "args": [
+                    "tools/polaris/scripts/code_intelligence_mcp.py",
+                    "--repo",
+                    ".",
+                ],
+            },
+        )
         self.assertFalse((ROOT / "hosts" / "codex" / "skills").exists())
         codex = render_skill(source, "engineering-task", adapters["codex"])
         claude = render_skill(source, "engineering-task", adapters["claude-code"])
@@ -3266,7 +3344,7 @@ class PolarisCoreTests(unittest.TestCase):
 
         def adapter(host_id: str) -> dict[str, object]:
             return {
-                "adapter_version": 2,
+                "adapter_version": 3,
                 "host_id": host_id,
                 "display_name": host_id,
                 "skill_target": f".{host_id}/skills",
@@ -3282,6 +3360,17 @@ class PolarisCoreTests(unittest.TestCase):
                 "entry_frontmatter": [],
                 "skill_overlay_root": None,
                 "skill_appendix_root": None,
+                "project_mcp": {
+                    "server_id": "polaris-codegraph",
+                    "format": "claude-json",
+                    "target": f".{host_id}/mcp.json",
+                    "command": "python3",
+                    "args": [
+                        "tools/polaris/scripts/code_intelligence_mcp.py",
+                        "--repo",
+                        ".",
+                    ],
+                },
                 "files": [
                     {
                         "source": "bridge.md",
@@ -3293,7 +3382,7 @@ class PolarisCoreTests(unittest.TestCase):
 
         cases = {
             "unknown version": lambda first, _second: first.update(
-                {"adapter_version": 3}
+                {"adapter_version": 4}
             ),
             "blank prefix": lambda first, _second: first.update(
                 {"invocation_prefix": ""}
@@ -3302,6 +3391,27 @@ class PolarisCoreTests(unittest.TestCase):
                 {"skill_target": "../escape"}
             ),
             "overlapping target": lambda first, second: second["files"][0].update(
+                {"target": first["skill_target"]}
+            ),
+            "unknown MCP format": lambda first, _second: first["project_mcp"].update(
+                {"format": "yaml"}
+            ),
+            "wrong MCP server": lambda first, _second: first["project_mcp"].update(
+                {"server_id": "other"}
+            ),
+            "unsafe MCP target": lambda first, _second: first["project_mcp"].update(
+                {"target": "../config.json"}
+            ),
+            "wrong MCP launcher": lambda first, _second: first["project_mcp"].update(
+                {"args": ["scripts/code_intelligence_mcp.py", "--repo", "."]}
+            ),
+            "missing fixed repo": lambda first, _second: first["project_mcp"].update(
+                {"args": ["tools/polaris/scripts/code_intelligence_mcp.py"]}
+            ),
+            "duplicate MCP target": lambda first, second: second["project_mcp"].update(
+                {"target": first["project_mcp"]["target"]}
+            ),
+            "MCP overlaps skill": lambda first, _second: first["project_mcp"].update(
                 {"target": first["skill_target"]}
             ),
         }
@@ -3328,6 +3438,118 @@ class PolarisCoreTests(unittest.TestCase):
                     write_json_atomic(host_root / "adapter.json", value)
                 with self.assertRaises(RuleFailure):
                     load_host_adapters(root)
+
+    def test_project_mcp_registration_preserves_unrelated_host_configuration(
+        self,
+    ) -> None:
+        """项目 MCP 合并只管理 Polaris 条目，并且重复执行保持稳定。"""
+        from internal.project_mcp_registration import merge_project_mcp
+
+        adapters = {item["host_id"]: item for item in load_host_adapters(ROOT)}
+        codex_source = 'model = "gpt-5"\n[mcp_servers.other]\ncommand = "other"\n'
+        codex_expected = codex_source + """
+# POLARIS_MCP_START polaris-codegraph
+[mcp_servers.polaris-codegraph]
+command = "python3"
+args = ["tools/polaris/scripts/code_intelligence_mcp.py", "--repo", "."]
+cwd = "."
+enabled = true
+required = false
+enabled_tools = ["polaris_codegraph_explore"]
+# POLARIS_MCP_END polaris-codegraph
+"""
+        codex = merge_project_mcp(
+            self.repo, adapters["codex"], source_text=codex_source
+        )
+        self.assertEqual(codex, codex_expected)
+        self.assertEqual(
+            merge_project_mcp(self.repo, adapters["codex"], source_text=codex),
+            codex_expected,
+        )
+        stale_managed_block = codex.replace("enabled = true", "enabled = false")
+        self.assertEqual(
+            merge_project_mcp(
+                self.repo,
+                adapters["codex"],
+                source_text=stale_managed_block,
+            ),
+            codex_expected,
+        )
+
+        claude_source = json.dumps(
+            {
+                "permissions": {"allow": ["Read"]},
+                "mcpServers": {"other": {"command": "other", "args": []}},
+            }
+        )
+        claude = merge_project_mcp(
+            self.repo, adapters["claude-code"], source_text=claude_source
+        )
+        claude_value = json.loads(claude)
+        self.assertEqual(claude_value["permissions"], {"allow": ["Read"]})
+        self.assertEqual(
+            claude_value["mcpServers"]["other"],
+            {"command": "other", "args": []},
+        )
+        self.assertEqual(
+            claude_value["mcpServers"]["polaris-codegraph"],
+            {
+                "type": "stdio",
+                "command": "python3",
+                "args": [
+                    "tools/polaris/scripts/code_intelligence_mcp.py",
+                    "--repo",
+                    ".",
+                ],
+                "env": {},
+            },
+        )
+        self.assertEqual(
+            merge_project_mcp(self.repo, adapters["claude-code"], source_text=claude),
+            claude,
+        )
+
+    def test_project_mcp_registration_rejects_unsafe_or_conflicting_configuration(
+        self,
+    ) -> None:
+        """项目 MCP 拒绝损坏配置、非受管同名项与 symlink 目标。"""
+        from internal.project_mcp_registration import merge_project_mcp
+
+        adapters = {item["host_id"]: item for item in load_host_adapters(ROOT)}
+        cases = (
+            (
+                adapters["codex"],
+                '[mcp_servers.other\ncommand = "broken"\n',
+                "TOML",
+            ),
+            (
+                adapters["codex"],
+                '[mcp_servers.polaris-codegraph]\ncommand = "other"\n',
+                "conflicting unmanaged",
+            ),
+            (adapters["claude-code"], "{broken", "JSON"),
+            (
+                adapters["claude-code"],
+                json.dumps(
+                    {"mcpServers": {"polaris-codegraph": {"command": "other"}}}
+                ),
+                "conflicting",
+            ),
+        )
+        for adapter, source, message in cases:
+            with self.subTest(format=adapter["project_mcp"]["format"]):
+                with self.assertRaisesRegex(RuleFailure, message):
+                    merge_project_mcp(self.repo, adapter, source_text=source)
+
+        target = self.repo / ".mcp.json"
+        outside = self.repo / "outside-mcp.json"
+        outside.write_text("{}\n", encoding="utf-8")
+        try:
+            target.symlink_to(outside)
+        except (NotImplementedError, OSError) as exc:
+            self.skipTest(f"file symlink creation is unavailable: {exc}")
+        with self.assertRaisesRegex(RuleFailure, "symlink"):
+            merge_project_mcp(self.repo, adapters["claude-code"])
 
     def test_host_adapter_hardening_rejects_entry_overlay_and_capability_errors(self) -> None:
         """入口必须存在，overlay 不得覆写 Skill，worker 能力依赖必须自洽。"""
@@ -3471,7 +3693,7 @@ class PolarisCoreTests(unittest.TestCase):
             write_json_atomic(
                 synthetic_root / "adapter.json",
                 {
-                    "adapter_version": 2,
+                    "adapter_version": 3,
                     "host_id": "synthetic",
                     "display_name": "Synthetic Host",
                     "skill_target": ".synthetic/skills",
@@ -3487,6 +3709,17 @@ class PolarisCoreTests(unittest.TestCase):
                     "entry_frontmatter": [],
                     "skill_overlay_root": None,
                     "skill_appendix_root": None,
+                    "project_mcp": {
+                        "server_id": "polaris-codegraph",
+                        "format": "claude-json",
+                        "target": ".synthetic/mcp.json",
+                        "command": "python3",
+                        "args": [
+                            "tools/polaris/scripts/code_intelligence_mcp.py",
+                            "--repo",
+                            ".",
+                        ],
+                    },
                     "files": [],
                 },
             )
@@ -3510,6 +3743,16 @@ class PolarisCoreTests(unittest.TestCase):
         (unrelated_skill / "SKILL.md").write_text("# Keep me\n", encoding="utf-8")
         unrelated_agent.write_text("# Keep me\n", encoding="utf-8")
         (self.repo / "CLAUDE.md").write_text("# Project-owned Claude rules\n", encoding="utf-8")
+        codex_config = self.repo / ".codex" / "config.toml"
+        codex_config.parent.mkdir()
+        codex_config.write_text('model = "gpt-5"\n', encoding="utf-8")
+        write_json_atomic(
+            self.repo / ".mcp.json",
+            {
+                "permissions": {"allow": ["Read"]},
+                "mcpServers": {"other": {"command": "other", "args": []}},
+            },
+        )
         vendor(ROOT, self.repo, False)
         vendor(ROOT, self.repo, True)
         self.assertEqual(
@@ -3520,6 +3763,11 @@ class PolarisCoreTests(unittest.TestCase):
             (self.repo / "CLAUDE.md").read_text(encoding="utf-8"),
             "# Project-owned Claude rules\n",
         )
+        self.assertIn('model = "gpt-5"', codex_config.read_text(encoding="utf-8"))
+        claude_mcp = read_json(self.repo / ".mcp.json")
+        self.assertEqual(claude_mcp["permissions"], {"allow": ["Read"]})
+        self.assertIn("other", claude_mcp["mcpServers"])
+        self.assertIn("polaris-codegraph", claude_mcp["mcpServers"])
 
     def test_validate_project_requires_complete_claude_adapter(self) -> None:
         """vendored 项目缺少 Claude Skill 或 worker 定义时机械拒绝。"""

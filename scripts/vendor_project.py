@@ -28,6 +28,7 @@ from internal.install_manifest import (
     validate_install_manifest,
     write_install_manifest,
 )
+from internal.project_mcp_registration import merge_project_mcp, project_mcp_target
 from internal.polaris_core import (
     InputFailure,
     RuleFailure,
@@ -69,6 +70,7 @@ def _polaris_destinations(
             for item in adapter["files"]
             if item["overwrite"]
         )
+        destinations.append(project_mcp_target(target, adapter))
     return destinations
 
 
@@ -280,6 +282,10 @@ def _stage_install(
             else:
                 preserved_paths.append(destination)
 
+        registration = project_mcp_target(stage, adapter)
+        write_text_atomic(registration, merge_project_mcp(target, adapter))
+        preserved_paths.append(registration)
+
     tools_target = confined_target(
         stage, stage / "tools" / "polaris", "staged vendored protocol target"
     )
@@ -407,8 +413,13 @@ def vendor(
     previous_manifest = (
         read_install_manifest(target, source) if manifest_path.is_file() else None
     )
+    registration_targets = {
+        project_mcp_target(target, adapter) for adapter in adapters
+    }
     if not force and any(
-        path.exists() for path in _polaris_destinations(target, adapters, skills)
+        path.exists()
+        for path in _polaris_destinations(target, adapters, skills)
+        if path not in registration_targets
     ):
         raise InputFailure("vendored Polaris files already exist; use --force to update")
     if force and previous_manifest is not None and not discard_managed_changes:

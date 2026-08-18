@@ -172,6 +172,23 @@ def load_host_adapters(root: Path) -> list[dict[str, Any]]:
             adapter["skill_target"], "skill_target"
         )
         current_targets = [(skill_target, f"{host_id} skill_target")]
+        project_mcp = adapter["project_mcp"]
+        project_mcp_target = _relative_path(
+            project_mcp["target"], "project_mcp.target"
+        )
+        if project_mcp["server_id"] != "polaris-codegraph":
+            raise RuleFailure(f"host adapter has an invalid MCP server ID: {path}")
+        if project_mcp["format"] not in {"codex-toml", "claude-json"}:
+            raise RuleFailure(f"host adapter has an invalid MCP format: {path}")
+        if project_mcp["command"] != "python3":
+            raise RuleFailure(f"host adapter has an invalid MCP command: {path}")
+        if project_mcp["args"] != [
+            "tools/polaris/scripts/code_intelligence_mcp.py",
+            "--repo",
+            ".",
+        ]:
+            raise RuleFailure(f"host adapter has invalid MCP arguments: {path}")
+        current_targets.append((project_mcp_target, f"{host_id} project_mcp"))
         overlay = adapter["skill_overlay_root"]
         if overlay is not None:
             _validate_overlay(path.parent, overlay, root, available_skills)

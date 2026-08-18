@@ -14,6 +14,7 @@ from internal.host_adapters import (
     load_host_adapters,
 )
 from internal.install_manifest import validate_install_manifest
+from internal.project_mcp_registration import project_mcp_target, validate_project_mcp
 from internal.code_intelligence_protocol import validate_static_configuration
 from internal.migration_protocol import validate_completed_migrations
 from internal.polaris_core import RuleFailure, protocol_root, read_json, run_main, validate_json_file
@@ -126,6 +127,14 @@ def validate(repo: Path) -> dict[str, object]:
                         f"{adapter['display_name']} adapter file is not {ownership}: "
                         f"{relative}"
                     )
+            registration = project_mcp_target(repo, adapter)
+            relative = registration.relative_to(repo).as_posix()
+            if relative not in preserved_paths:
+                raise RuleFailure(
+                    f"{adapter['display_name']} project MCP configuration is not preserved: "
+                    f"{relative}"
+                )
+            validate_project_mcp(repo, adapter)
 
     listed = set(project["active_tasks"])
     validate_task_locations(repo, listed)

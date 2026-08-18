@@ -1,5 +1,5 @@
 {
-    "adapter_version": 2,
+    "adapter_version": 3,
     "host_id": "claude-code",
     "display_name": "Claude Code",
     "skill_target": ".claude/skills",
@@ -17,6 +17,17 @@
     ],
     "skill_overlay_root": null,
     "skill_appendix_root": "skill-appendices",
+    "project_mcp": {
+        "server_id": "polaris-codegraph",
+        "format": "claude-json",
+        "target": ".mcp.json",
+        "command": "python3",
+        "args": [
+            "tools/polaris/scripts/code_intelligence_mcp.py",
+            "--repo",
+            "."
+        ]
+    },
     "files": [
         {
             "source": "agents/polaris-implementer.md",
