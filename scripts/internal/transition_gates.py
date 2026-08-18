@@ -5,11 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .implementation_protocol import (
-    step_results,
-    validate_handoff as validate_implementation_handoff,
-    validate_progress,
-)
+from .implementation_protocol import validate_handoff as validate_implementation_handoff
 from .code_intelligence_protocol import record_reference
 from .polaris_core import (
     RuleFailure,
@@ -113,10 +109,9 @@ def check_gate(
         validate_plan_decisions(repo, root, directory, state, True)
         working_set_path = artifact_file(directory, state, "working_set")
         validate_working_set(repo, state["task_id"], working_set_path)
-    elif gate == "implementation_approved":
+    elif gate == "implementation_start_ready":
         if state["rigor"] == "R2":
             artifact_file(directory, state, "pre_approval")
-    elif gate == "implementation_handoff_ready":
         validate_implementation_handoff(repo, root, directory, state, True)
     elif gate == "implementation_ready":
         handoff, handoff_reference = validate_implementation_handoff(
@@ -156,13 +151,6 @@ def check_gate(
             != implementation["subject_diff_hash"]
         ):
             raise RuleFailure("Implementation Code Intelligence record targets the wrong subject")
-        progress = validate_progress(repo, state["task_id"])
-        if progress["phase"] != "CHECKPOINTING":
-            raise RuleFailure("FINISH_IMPLEMENTATION requires CHECKPOINTING live progress")
-        if progress["implementer_session_id"] != implementation["implementer_session_id"]:
-            raise RuleFailure("Implementation and live progress have different sessions")
-        if implementation["step_results"] != step_results(progress):
-            raise RuleFailure("Implementation step_results do not match live progress")
         validate_review_response(root, directory, state, implementation)
     elif gate == "docs_ready":
         knowledge_path = artifact_file(directory, state, "knowledge_delta")
@@ -203,6 +191,14 @@ def check_gate(
             knowledge_path,
             state["subject"]["base_commit"],
             state["subject"]["head_commit"],
+        )
+    elif gate == "review_start_ready":
+        check_gate(
+            repo, root, directory, state, "implementation_ready", blocker, workflow
+        )
+        check_gate(repo, root, directory, state, "docs_ready", blocker, workflow)
+        check_gate(
+            repo, root, directory, state, "review_package_ready", blocker, workflow
         )
     elif gate == "review_package_ready":
         artifact_file(directory, state, "knowledge_delta")

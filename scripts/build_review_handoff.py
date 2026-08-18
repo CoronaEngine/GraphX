@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,11 +15,13 @@ from internal.polaris_core import (
     current_work_item_path,
     directory_sha256,
     file_sha256,
+    full_commit,
     protocol_root,
     read_json,
     require_protocol_compatible,
     run_main,
     task_dir,
+    subject_diff_hash,
     utc_now,
     validate_json_file,
     write_json_atomic,
@@ -86,13 +89,51 @@ def build(
     task_id: str,
     implementer_session_id: str,
     isolation_mode: str | None,
+    implementation_path: Path | None = None,
+    knowledge_path: Path | None = None,
+    subject_base: str | None = None,
+    subject_head: str | None = None,
 ) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    state = read_json(state_path(directory))
-    require_protocol_compatible(repo, state)
-    if state["status"] != "DOCS_SYNCED":
-        raise RuleFailure("review handoff can only be built from DOCS_SYNCED")
+    stored_state = read_json(state_path(directory))
+    require_protocol_compatible(repo, stored_state)
+    if stored_state["status"] != "IMPLEMENTING":
+        raise RuleFailure("review handoff can only be built from IMPLEMENTING")
+    supplied = (implementation_path, knowledge_path, subject_base, subject_head)
+    if any(value is not None for value in supplied) and not all(
+        value is not None for value in supplied
+    ):
+        raise InputFailure(
+            "review handoff requires implementation, knowledge, subject base, and subject head"
+        )
+    state = copy.deepcopy(stored_state)
+    if all(value is not None for value in supplied):
+        base = full_commit(repo, str(subject_base))
+        head = full_commit(repo, str(subject_head))
+        for name, supplied_path in (
+            ("implementation", implementation_path),
+            ("knowledge_delta", knowledge_path),
+        ):
+            assert supplied_path is not None
+            resolved = supplied_path.resolve()
+            try:
+                relative = resolved.relative_to(directory.resolve())
+            except ValueError as exc:
+                raise RuleFailure(
+                    f"review handoff artifact must be inside the task directory: {resolved}"
+                ) from exc
+            if not resolved.is_file():
+                raise RuleFailure(f"review handoff artifact does not exist: {resolved}")
+            state["artifacts"][name] = {
+                "path": relative.as_posix(),
+                "sha256": file_sha256(resolved),
+            }
+        state["subject"] = {
+            "base_commit": base,
+            "head_commit": head,
+            "diff_hash": subject_diff_hash(repo, base, head),
+        }
     implementation_reference = normalized_reference(
         directory, state["artifacts"].get("implementation")
     )
@@ -241,6 +282,10 @@ def main() -> int:
             "r0_isolated_same_session",
         ],
     )
+    parser.add_argument("--implementation", type=Path)
+    parser.add_argument("--knowledge-delta", type=Path)
+    parser.add_argument("--subject-base")
+    parser.add_argument("--subject-head")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -250,6 +295,10 @@ def main() -> int:
             args.task_id,
             args.implementer_session_id,
             args.isolation,
+            args.implementation,
+            args.knowledge_delta,
+            args.subject_base,
+            args.subject_head,
         ),
         args.json,
     )

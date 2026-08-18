@@ -232,29 +232,11 @@ class PolarisCoreTests(unittest.TestCase):
         state = read_json(self.task / "state.json")
         existing = state["artifacts"].get("implementation_handoff")
         if existing is None:
-            result = build_implementation_handoff(self.repo, "TASK-0001")
-            handoff_path = Path(result["path"])
-            transition(
-                self.repo,
-                "TASK-0001",
-                "DISPATCH_IMPLEMENTATION",
-                [
-                    "implementation_handoff="
-                    + handoff_path.relative_to(self.task).as_posix()
-                ],
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            state = read_json(self.task / "state.json")
-            existing = state["artifacts"]["implementation_handoff"]
+            raise AssertionError("Implementation handoff was not registered at stage start")
         handoff_path = self.task / existing["path"]
         return read_json(handoff_path), existing
 
-    def enter_implementing(self) -> None:
+    def enter_planned(self) -> None:
         self.freeze_work_item()
         build_working_set(self.repo, "TASK-0001", True)
         transition(
@@ -276,11 +258,19 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
+
+    def enter_implementing(self) -> None:
+        self.enter_planned()
+        handoff = build_implementation_handoff(self.repo, "TASK-0001")
+        handoff_path = Path(handoff["path"])
         transition(
             self.repo,
             "TASK-0001",
             "START_IMPLEMENTATION",
-            [],
+            [
+                "implementation_handoff="
+                + handoff_path.relative_to(self.task).as_posix()
+            ],
             None,
             None,
             None,
@@ -288,6 +278,26 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
+
+    def test_start_implementation_atomically_registers_handoff(self) -> None:
+        """START_IMPLEMENTATION 同时校验并注册不可变 Implementer 输入。"""
+        self.enter_implementing()
+        state = read_json(self.task / "state.json")
+        self.assertEqual(state["status"], "IMPLEMENTING")
+        self.assertIn("implementation_handoff", state["artifacts"])
+        with self.assertRaisesRegex(RuleFailure, "unknown workflow event"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "DISPATCH_IMPLEMENTATION",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
 
     def implementation_value(
         self, base: str, head: str, session_id: str
@@ -340,6 +350,31 @@ class PolarisCoreTests(unittest.TestCase):
         )
         return value
 
+    def implementation_value_without_progress(
+        self, base: str, head: str, session_id: str
+    ) -> dict[str, object]:
+        handoff, reference = self.dispatch_implementation()
+        value = read_json(template_path(ROOT, "implementation"))
+        value.update(
+            {
+                "artifact_attempt": handoff["artifact_attempt"],
+                "implementer_session_id": session_id,
+                "implementation_handoff_path": reference["path"],
+                "implementation_handoff_sha256": reference["sha256"],
+                "subject_base_commit": base,
+                "subject_head_commit": head,
+                "subject_diff_hash": subject_diff_hash(self.repo, base, head),
+                "step_results": [
+                    {
+                        "id": "STEP-001",
+                        "status": "COMPLETED",
+                        "result": "Implemented and checked the accepted change",
+                    }
+                ],
+            }
+        )
+        return value
+
     def knowledge_value(
         self, attempt: int, base: str, head: str
     ) -> dict[str, object]:
@@ -380,6 +415,124 @@ class PolarisCoreTests(unittest.TestCase):
         )
         state = read_json(self.task / "state.json")
         return read_json(handoff_path), state
+
+    def test_start_review_does_not_require_live_progress(self) -> None:
+        """耐久 Review 门禁不依赖 ignored 的本机进度快照。"""
+        self.enter_implementing()
+        base = run_git(self.repo, "rev-parse", "HEAD")
+        (self.repo / "subject.txt").write_text("final subject\n", encoding="utf-8")
+        run_git(self.repo, "add", "subject.txt")
+        run_git(self.repo, "commit", "-q", "-m", "final subject")
+        head = run_git(self.repo, "rev-parse", "HEAD")
+
+        implementation_path = (
+            self.task / "implementations" / "r001" / "attempt-001.json"
+        )
+        write_json_atomic(
+            implementation_path,
+            self.implementation_value_without_progress(base, head, "impl-session"),
+        )
+        knowledge_path = (
+            self.task / "knowledge" / "r001" / "knowledge-delta-001.json"
+        )
+        knowledge = self.knowledge_value(1, base, head)
+        knowledge["entries"][0].update(
+            {
+                "changed_paths": ["subject.txt"],
+                "evidence": "No project documentation impact",
+            }
+        )
+        write_json_atomic(knowledge_path, knowledge)
+
+        handoff_result = build_review_handoff(
+            self.repo,
+            "TASK-0001",
+            "impl-session",
+            "fresh_session",
+            implementation_path,
+            knowledge_path,
+            base,
+            head,
+        )
+        handoff_path = Path(handoff_result["path"])
+        self.assertFalse((self.task / "runtime" / "progress.json").exists())
+        result = transition(
+            self.repo,
+            "TASK-0001",
+            "START_REVIEW",
+            [
+                "implementation=implementations/r001/attempt-001.json",
+                "knowledge_delta=knowledge/r001/knowledge-delta-001.json",
+                "review_handoff=" + handoff_path.relative_to(self.task).as_posix(),
+            ],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(result["to"], "REVIEWING")
+
+    def test_live_progress_can_document_inside_implementing(self) -> None:
+        """可选实时进度在同一个 IMPLEMENTING 节点内覆盖文档阶段。"""
+        self.enter_implementing()
+        title = "Polaris Implement · TASK-0001 · r001 · attempt 1"
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "Pending", "INITIALIZE"
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "DEFINE_STEPS",
+            defined_steps=[
+                {"title": "Complete subject", "acceptance_ids": ["AC-01"]}
+            ],
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "START_STEP",
+            step_id="STEP-001",
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "COMPLETE_STEP",
+            step_id="STEP-001",
+            result="Subject and checks completed",
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "SET_PHASE",
+            phase="CHECKPOINTING",
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "SET_PHASE",
+            phase="DOCUMENTING",
+        )
+        result = update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "SET_PHASE",
+            phase="COMPLETED",
+        )
+        self.assertEqual(result["value"]["phase"], "COMPLETED")
 
     def review_value(
         self,
@@ -3039,10 +3192,10 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(progress["implementation_steps"][0]["status"], "SKIPPED")
 
-    def test_checkpoint_requires_terminal_steps_and_freezes_step_results(self) -> None:
-        """未完成步骤不能进入 checkpoint，最终 artifact 必须精确冻结步骤结果。"""
+    def test_optional_progress_requires_terminal_steps_before_checkpointing(self) -> None:
+        """可选实时进度仍拒绝在步骤未终结时进入 checkpoint。"""
         self.enter_implementing()
-        handoff, reference = self.dispatch_implementation()
+        self.dispatch_implementation()
         title = "Polaris Implement · TASK-0001 · r001 · attempt 1"
         update_implementation_progress(
             self.repo, "TASK-0001", title, "Pending", "INITIALIZE"
@@ -3067,39 +3220,6 @@ class PolarisCoreTests(unittest.TestCase):
         update_implementation_progress(
             self.repo, "TASK-0001", title, "impl-freeze-session", "SET_PHASE",
             phase="CHECKPOINTING",
-        )
-        base = run_git(self.repo, "rev-parse", "HEAD")
-        (self.repo / "freeze.txt").write_text("done\n", encoding="utf-8")
-        run_git(self.repo, "add", "freeze.txt")
-        run_git(self.repo, "commit", "-q", "-m", "freeze implementation")
-        head = run_git(self.repo, "rev-parse", "HEAD")
-        implementation = read_json(template_path(ROOT, "implementation"))
-        implementation.update({
-            "artifact_attempt": handoff["artifact_attempt"],
-            "implementer_session_id": "impl-freeze-session",
-            "implementation_handoff_path": reference["path"],
-            "implementation_handoff_sha256": reference["sha256"],
-            "subject_base_commit": base,
-            "subject_head_commit": head,
-            "subject_diff_hash": subject_diff_hash(self.repo, base, head),
-            "step_results": [{"id": "STEP-001", "status": "COMPLETED", "result": "wrong"}],
-        })
-        path = self.task / handoff["output_path"]
-        write_json_atomic(path, implementation)
-        with self.assertRaises(RuleFailure):
-            transition(
-                self.repo, "TASK-0001", "FINISH_IMPLEMENTATION",
-                ["implementation=implementations/r001/attempt-001.json"],
-                None, base, head, None, None, None,
-            )
-        implementation["step_results"] = [
-            {"id": "STEP-001", "status": "COMPLETED", "result": "Finished work"}
-        ]
-        write_json_atomic(path, implementation)
-        transition(
-            self.repo, "TASK-0001", "FINISH_IMPLEMENTATION",
-            ["implementation=implementations/r001/attempt-001.json"],
-            None, base, head, None, None, None,
         )
         update_implementation_progress(
             self.repo, "TASK-0001", title, "impl-freeze-session", "SET_PHASE",

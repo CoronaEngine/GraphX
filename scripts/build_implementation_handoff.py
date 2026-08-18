@@ -54,8 +54,10 @@ def build(repo: Path, task_id: str) -> dict[str, Any]:
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
     require_protocol_compatible(repo, state)
-    if state["status"] != "IMPLEMENTING":
-        raise RuleFailure("Implementation handoff can only be built from IMPLEMENTING")
+    if state["status"] not in {"PLANNED", "IMPLEMENTING"}:
+        raise RuleFailure(
+            "Implementation handoff can only be built from PLANNED or IMPLEMENTING"
+        )
     revision = state["current_revision"]
     attempt, previous_review, base_commit = expected_attempt(root, directory, state)
     plan = normalized_reference(directory, state["artifacts"].get("plan"))
