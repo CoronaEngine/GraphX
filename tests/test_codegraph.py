@@ -128,7 +128,12 @@ class CodeGraphTests(unittest.TestCase):
             and "__pycache__" not in path.parts
             and path != ROOT / "schemas" / "code-intelligence-record-v1.schema.json"
         ]
-        managed_paths.extend([ROOT / "README.md", ROOT / "docs" / "USAGE.md", ROOT / "plan.md"])
+        managed_paths.extend([
+            ROOT / "README.md",
+            ROOT / "README.zh-CN.md",
+            ROOT / "docs" / "USAGE.md",
+            ROOT / "plan.md",
+        ])
         for path in managed_paths:
             text = path.read_text(encoding="utf-8")
             for retired in retired_names:
@@ -136,10 +141,15 @@ class CodeGraphTests(unittest.TestCase):
         for path in [
             ROOT / "providers" / "code-intelligence" / "codegraph.json",
             ROOT / "README.md",
+            ROOT / "README.zh-CN.md",
             ROOT / "docs" / "USAGE.md",
             ROOT / "plan.md",
         ]:
             self.assertIn(official, path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
+        for path in [ROOT / "README.md", ROOT / "README.zh-CN.md"]:
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("0.1.19", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.2", text, path.relative_to(ROOT).as_posix())
 
     def adapter_functions(self) -> tuple[object, object]:
         adapter_path = SCRIPTS / "internal" / "codegraph_adapter.py"
@@ -175,6 +185,26 @@ class CodeGraphTests(unittest.TestCase):
             text=True,
         ).stdout.strip()
         return value
+
+    @staticmethod
+    def add_explore_response_evidence(value: dict[str, object]) -> None:
+        """Make a fixture auditable as one successful CodeGraph explore response."""
+        value["provider"] = {
+            "id": "codegraph",
+            "descriptor_version": 2,
+            "transport": "mcp",
+            "available_operations": ["explore"],
+        }
+        value["queries"] = [{
+            "id": "CIQ-001",
+            "operation": "explore",
+            "purpose": "inspect CodeGraph response freshness",
+            "status": "SUCCESS",
+            "summary": "CodeGraph response",
+            "symbols": [],
+            "response_sha256": "0" * 64,
+            "error": None,
+        }]
 
     def initialize_task(self) -> None:
         init_task(self.repo, "TASK-0001", "R1")
@@ -426,6 +456,8 @@ class CodeGraphTests(unittest.TestCase):
                 "observed_sha256": digest,
             }],
         }
+        value["status"] = "USED"
+        self.add_explore_response_evidence(value)
         with self.assertRaisesRegex(RuleFailure, "matching source fallback"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
         value["source_fallbacks"] = [{
@@ -441,6 +473,137 @@ class CodeGraphTests(unittest.TestCase):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"],
             2,
         )
+
+    def test_response_banner_evidence_requires_a_hashed_explore_query(self) -> None:
+        """A stale banner is valid only when this record can audit its explore response."""
+        self.initialize_task()
+        source = self.repo / "src/widget.py"
+        source.parent.mkdir()
+        source.write_text("value = 1\n", encoding="utf-8")
+        digest = file_sha256(source)
+        value = self.v2_record()
+        value.update({
+            "status": "USED",
+            "provider": {
+                "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                "available_operations": ["status"],
+            },
+            "freshness": {
+                "status": "PARTIAL_STALE",
+                "checked_at": "2026-08-18T00:00:00Z",
+                "basis": ["RESPONSE_BANNER"],
+                "stale_points": [{
+                    "scope": "FILE",
+                    "path": "src/widget.py",
+                    "reason": "PENDING_SYNC",
+                    "fallback": "READ_SOURCE",
+                    "observed_sha256": digest,
+                }],
+            },
+            "source_fallbacks": [{
+                "action": "READ_SOURCE",
+                "path": "src/widget.py",
+                "observed_sha256": digest,
+                "base_commit": None,
+                "head_commit": None,
+                "diff_hash": None,
+                "purpose": "confirm pending CodeGraph content",
+            }],
+        })
+        with self.assertRaisesRegex(RuleFailure, "explore capability"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+        value["provider"] = {
+            "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+            "available_operations": ["explore"],
+        }
+        with self.assertRaisesRegex(RuleFailure, "successful explore query"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+        value["queries"] = [{
+            "id": "CIQ-001", "operation": "explore", "purpose": "inspect stale response",
+            "status": "SUCCESS", "summary": "stale banner", "symbols": [],
+            "response_sha256": "0" * 64, "error": None,
+        }]
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"],
+            2,
+        )
+
+    def test_unavailable_record_cannot_claim_response_banner_evidence(self) -> None:
+        self.initialize_task()
+        value = self.v2_record()
+        value["freshness"] = {
+            "status": "UNAVAILABLE",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["RESPONSE_BANNER"],
+            "stale_points": [],
+        }
+        with self.assertRaisesRegex(RuleFailure, "cannot claim observed graph freshness"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+    def test_auditable_response_banners_preserve_noncurrent_freshness_states(self) -> None:
+        self.initialize_task()
+        source = self.repo / "src/widget.py"
+        source.parent.mkdir()
+        source.write_text("value = 1\n", encoding="utf-8")
+        digest = file_sha256(source)
+        cases = [
+            (
+                "PARTIAL_STALE",
+                [{
+                    "scope": "FILE", "path": "src/widget.py", "reason": "PENDING_SYNC",
+                    "fallback": "READ_SOURCE", "observed_sha256": digest,
+                }],
+                [{
+                    "action": "READ_SOURCE", "path": "src/widget.py",
+                    "observed_sha256": digest, "base_commit": None, "head_commit": None,
+                    "diff_hash": None, "purpose": "read stale response source",
+                }],
+            ),
+            (
+                "INDEX_STALE",
+                [{
+                    "scope": "INDEX", "path": None, "reason": "AUTO_SYNC_DISABLED",
+                    "fallback": "SEARCH_SOURCE", "observed_sha256": None,
+                }],
+                [{
+                    "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
+                    "base_commit": None, "head_commit": None, "diff_hash": None,
+                    "purpose": "search frozen CodeGraph index scope",
+                }],
+            ),
+            (
+                "NOT_VERIFIED",
+                [{
+                    "scope": "INDEX", "path": None, "reason": "STATUS_UNREADABLE",
+                    "fallback": "SEARCH_SOURCE", "observed_sha256": None,
+                }],
+                [{
+                    "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
+                    "base_commit": None, "head_commit": None, "diff_hash": None,
+                    "purpose": "search after unreadable CodeGraph response",
+                }],
+            ),
+        ]
+        for status, stale_points, fallbacks in cases:
+            with self.subTest(status=status):
+                value = self.v2_record()
+                value.update({
+                    "status": "USED",
+                    "freshness": {
+                        "status": status,
+                        "checked_at": "2026-08-18T00:00:00Z",
+                        "basis": ["RESPONSE_BANNER"],
+                        "stale_points": stale_points,
+                    },
+                    "source_fallbacks": fallbacks,
+                })
+                self.add_explore_response_evidence(value)
+                self.assertEqual(
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"],
+                    2,
+                )
 
     def test_v2_freshness_statuses_require_consistent_stale_points(self) -> None:
         self.initialize_task()
@@ -505,6 +668,7 @@ class CodeGraphTests(unittest.TestCase):
                 "fallback": "READ_SOURCE", "observed_sha256": digest,
             }],
         }
+        self.add_explore_response_evidence(value)
         value["source_fallbacks"] = [{
             "action": "READ_SOURCE", "path": "src/widget.py", "observed_sha256": "0" * 64,
             "base_commit": None, "head_commit": None, "diff_hash": None, "purpose": "read source",
@@ -685,6 +849,7 @@ class CodeGraphTests(unittest.TestCase):
                 "diff_hash": subject_diff_hash(self.repo, base, added_head), "purpose": "inspect change",
             }],
         })
+        self.add_explore_response_evidence(value)
         with self.assertRaisesRegex(RuleFailure, "existing file"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
         source.unlink()

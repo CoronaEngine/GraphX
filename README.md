@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> Current version: `0.1.19` (in development)
+> Current protocol version: `0.1.19` (in development); workflow version: `0.1.2`
 
 Polaris is a repo-native engineering workflow for coding agent hosts. It stores requirements, plans, implementation results, independent reviews, validation evidence, and task state in Git, then uses deterministic gates to prevent requirement drift, stale evidence, and agents declaring their own work complete.
 

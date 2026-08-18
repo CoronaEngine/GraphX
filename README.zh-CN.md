@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-> 当前版本：`0.1.18`（开发中）
+> 当前协议版本：`0.1.19`（开发中）；Workflow 版本：`0.1.2`
 
 Polaris 是运行在 Coding Agent 宿主上的仓库原生工程工作流。它把需求、计划、实现、独立审查、验证和任务状态保存在 Git 仓库中，并通过确定性门禁防止需求漂移、证据过期和 Agent 自行宣布完成。
 
@@ -77,6 +77,20 @@ CLI 还提供 `vendor`、`init-project`、`init-task`、`migrate` 和可选的 `
 python tools/polaris/scripts/transition_task.py TASK-0001 <EVENT> --repo .
 ```
 
+## 可选 CodeGraph 上下文
+
+唯一正式的 Code Intelligence Provider 是 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)。它是可选能力，永远不是 Workflow 门禁。仓库所有者（而不是 Polaris）在目标仓库中自行安装和初始化：
+
+```text
+codegraph install
+codegraph init
+polaris code-intelligence add codegraph --repo .
+```
+
+`codegraph init` 创建 `.codegraph/` marker。只有目标仓库已经有这个 marker 且项目策略允许时，Polaris 才会使用 CodeGraph；没有 marker 时，记录 `UNAVAILABLE` 并直接使用源码和 Git。Polaris 只会读取 `status`、查询 `explore`，以及只在声明的阶段边界至多执行一次有界 `codegraph sync`；它绝不安装、初始化、启动、配置、等待或管理 CodeGraph、watcher、daemon 或 MCP 配置。
+
+CodeGraph 的 watcher 和连接时 reconciliation 是正常情况下的实时更新机制。Polaris 只记录检查时的有限结论：`CURRENT_AT_CHECK`、`PARTIAL_STALE`、`INDEX_STALE`、`NOT_VERIFIED` 或 `UNAVAILABLE`，不会宣称与 Git commit 精确一致。`PARTIAL_STALE` 会精确列出待同步文件：当前普通文件必须直接读取并记录 `READ_SOURCE`；已删除文件必须检查注册 subject 的 Git diff 并记录 `INSPECT_GIT_DIFF`。`INDEX_STALE` 或 `NOT_VERIFIED` 时，图只能作为导航线索，Agent 必须通过仓库搜索和 Git 证据记录 `SEARCH_SOURCE`。Provider 不可用、status 不可读或 sync 失败都不阻断阶段；Validation 不调用 CodeGraph，仍以源码、Git、构建、测试、静态检查和 Human Check 为准。
+
 ## v0.1 边界
 
 Polaris v0.1 包含：
@@ -85,7 +99,7 @@ Polaris v0.1 包含：
 - 仓库内 JSON Authority、Workflow 和恢复索引；
 - 标准库实现的 Validator、handoff、迁移和恢复脚本；
 - 只负责定位和分发脚本的薄 CLI；
-- 可选、非阻断的外部 Code Intelligence Provider。
+- 可选、非阻断的 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph) 上下文。
 
 v0.1 不包含：
 

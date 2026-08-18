@@ -529,6 +529,20 @@ def _validate_v2_record_value(
             or not set(provider["available_operations"]).issubset(OPERATIONS)
         ):
             raise RuleFailure("Code Intelligence record names an invalid provider capability set")
+    freshness = value["freshness"]
+    if value["status"] == "UNAVAILABLE" and (
+        freshness["status"] != "UNAVAILABLE"
+        or "RESPONSE_BANNER" in freshness["basis"]
+    ):
+        raise RuleFailure(
+            "UNAVAILABLE Code Intelligence record cannot claim observed graph freshness"
+        )
+    if "RESPONSE_BANNER" in freshness["basis"] and (
+        provider is None or "explore" not in provider["available_operations"]
+    ):
+        raise RuleFailure(
+            "RESPONSE_BANNER freshness requires an advertised explore capability"
+        )
     query_ids = [item["id"] for item in value["queries"]]
     expected_ids = [f"CIQ-{index:03d}" for index in range(1, len(query_ids) + 1)]
     if query_ids != expected_ids:
@@ -544,6 +558,13 @@ def _validate_v2_record_value(
             path = resolve_repo_reference(repo, symbol["path"])
             if not path.is_file():
                 raise RuleFailure(f"Code Intelligence symbol path is not a file: {symbol['path']}")
+    if "RESPONSE_BANNER" in freshness["basis"] and not any(
+        query["status"] == "SUCCESS" and query["response_sha256"] is not None
+        for query in value["queries"]
+    ):
+        raise RuleFailure(
+            "RESPONSE_BANNER freshness requires a successful explore query with a response hash"
+        )
     status_check = value["status_check"]
     if status_check is not None:
         status_check_status = status_check["status"]
@@ -581,7 +602,6 @@ def _validate_v2_record_value(
             sync["response_sha256"] is not None or sync["error"] is not None
         ):
             raise RuleFailure("unavailable Code Intelligence sync cannot contain response or error evidence")
-    freshness = value["freshness"]
     status_check_success = status_check is not None and status_check["status"] == "SUCCESS"
     status_check_evidence = status_check is not None and status_check["status"] in {
         "SUCCESS", "FAILED"
