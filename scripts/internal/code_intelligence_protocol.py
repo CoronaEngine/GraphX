@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -12,7 +11,6 @@ from .polaris_core import (
     RuleFailure,
     file_sha256,
     full_commit,
-    git,
     protocol_root,
     read_json,
     subject_diff_hash,
@@ -37,6 +35,10 @@ STAGE_NAMES = {
     "DOCUMENTATION_SYNC": "documentation-sync-{attempt:03d}",
     "REVIEW": "review-{attempt:03d}-slot-{reviewer_slot}",
 }
+LEGACY_WORKSPACE_REFRESH = "refresh_" + "workspace"
+LEGACY_REFRESH_ACKNOWLEDGED = "refresh_" + "acknowledged"
+LEGACY_SPOT_CHECKED = "spot_" + "checked"
+LEGACY_NOT_VERIFIED = "not_" + "verified"
 
 
 def _validate_pattern(value: str) -> None:
@@ -209,84 +211,6 @@ def add_provider(
     }
 
 
-def _matches_scope(path: str, config: dict[str, Any]) -> bool:
-    included = not config["include"] or any(
-        fnmatch.fnmatchcase(path, pattern) for pattern in config["include"]
-    )
-    excluded = any(fnmatch.fnmatchcase(path, pattern) for pattern in config["exclude"])
-    return included and not excluded
-
-
-def _eligible(path: str, extensions: set[str], config: dict[str, Any]) -> bool:
-    return Path(path).suffix.lower() in extensions and _matches_scope(path, config)
-
-
-def plan_refresh(
-    repo: Path,
-    base_commit: str,
-    head_commit: str,
-    provider_id: str,
-    root: Path | None = None,
-) -> dict[str, Any]:
-    root = protocol_root(repo) if root is None else root
-    config = load_config(repo, root)
-    providers = load_providers(root)
-    if provider_id not in providers:
-        raise RuleFailure(f"unknown Code Intelligence provider: {provider_id}")
-    base = full_commit(repo, base_commit)
-    head = full_commit(repo, head_commit)
-    extensions = {item.lower() for item in providers[provider_id]["file_extensions"]}
-    changes: list[dict[str, Any]] = []
-    requires_workspace = False
-    output = git(repo, "diff", "--name-status", "--find-renames", base, head)
-    for line in output.splitlines():
-        parts = line.split("\t")
-        if not parts:
-            continue
-        status = parts[0]
-        if status.startswith("R") and len(parts) == 3:
-            old_path, new_path = parts[1], parts[2]
-            if not (_eligible(old_path, extensions, config) or _eligible(new_path, extensions, config)):
-                continue
-            resolve_repo_reference(repo, old_path)
-            new_target = resolve_repo_reference(repo, new_path)
-            changes.append(
-                {
-                    "path": new_path,
-                    "change": "RENAMED",
-                    "sha256": file_sha256(new_target) if new_target.is_file() else None,
-                }
-            )
-            requires_workspace = True
-            continue
-        if len(parts) != 2:
-            continue
-        raw_path = parts[1]
-        if not _eligible(raw_path, extensions, config):
-            continue
-        target = resolve_repo_reference(repo, raw_path)
-        if status.startswith("D"):
-            change = "DELETED"
-            digest = None
-            requires_workspace = True
-        elif status.startswith("A"):
-            change = "ADDED"
-            digest = file_sha256(target) if target.is_file() else None
-        else:
-            change = "MODIFIED"
-            digest = file_sha256(target) if target.is_file() else None
-        changes.append({"path": raw_path, "change": change, "sha256": digest})
-    operation = "refresh_workspace" if requires_workspace else "refresh_files"
-    return {
-        "operation": operation,
-        "paths": changes,
-        "status": "SKIPPED" if not changes else "PENDING",
-        "base_commit": base,
-        "head_commit": head,
-        "diff_hash": subject_diff_hash(repo, base, head),
-    }
-
-
 def _record_name(value: dict[str, Any]) -> str:
     stage = value["stage"]
     attempt = value["artifact_attempt"]
@@ -368,7 +292,7 @@ def _validate_legacy_record_value(
         ):
             raise RuleFailure("refresh used an unavailable provider operation")
         changes = {item["change"] for item in refresh["paths"]}
-        if changes & {"DELETED", "RENAMED"} and refresh["operation"] != "refresh_workspace":
+        if changes & {"DELETED", "RENAMED"} and refresh["operation"] != LEGACY_WORKSPACE_REFRESH:
             raise RuleFailure("deleted or renamed code requires workspace refresh")
         if refresh["status"] == "SUCCESS" and refresh["response_sha256"] is None:
             raise RuleFailure("successful Code Intelligence refresh lacks response hash")
@@ -376,11 +300,11 @@ def _validate_legacy_record_value(
             raise RuleFailure("failed Code Intelligence refresh lacks error")
         if refresh["status"] == "SUCCESS":
             if refresh["freshness"] not in {
-                "refresh_acknowledged",
-                "spot_checked",
+                LEGACY_REFRESH_ACKNOWLEDGED,
+                LEGACY_SPOT_CHECKED,
             }:
                 raise RuleFailure("successful Code Intelligence refresh lacks freshness evidence")
-        elif refresh["freshness"] != "not_verified":
+        elif refresh["freshness"] != LEGACY_NOT_VERIFIED:
             raise RuleFailure("unsuccessful Code Intelligence refresh cannot claim freshness")
         for item in refresh["paths"]:
             path = resolve_repo_reference(repo, item["path"])

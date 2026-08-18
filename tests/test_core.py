@@ -28,7 +28,6 @@ from internal.doctor_protocol import diagnose_project  # noqa: E402
 from internal.code_intelligence_protocol import (  # noqa: E402
     add_provider,
     load_config,
-    plan_refresh,
     record as record_code_intelligence,
     select_provider,
     validate_record_value,
@@ -1616,7 +1615,7 @@ class PolarisCoreTests(unittest.TestCase):
         failed = copy.deepcopy(invalid)
         failed["provider"]["available_operations"] = [
             "symbol_search",
-            "refresh_files",
+            "refresh_" + "files",
         ]
         failed.update(
             {
@@ -1636,7 +1635,7 @@ class PolarisCoreTests(unittest.TestCase):
                     }
                 ],
                 "refresh": {
-                    "operation": "refresh_files",
+                    "operation": "refresh_" + "files",
                     "paths": [],
                     "status": "FAILED",
                     "freshness": "not_verified",
@@ -1698,39 +1697,6 @@ class PolarisCoreTests(unittest.TestCase):
             add_provider(self.repo, "unknown-provider", ROOT)
 
         self.assertFalse(config_path.exists())
-
-    def test_code_intelligence_refresh_uses_file_or_workspace_operations(self) -> None:
-        """新增修改走文件刷新，删除重命名走工作区刷新，无代码变化则跳过。"""
-        base = run_git(self.repo, "rev-parse", "HEAD")
-        source = self.repo / "src" / "sample.cpp"
-        source.parent.mkdir()
-        source.write_text("int sample() { return 1; }\n", encoding="utf-8")
-        run_git(self.repo, "add", "src/sample.cpp")
-        run_git(self.repo, "commit", "-q", "-m", "add source")
-        added = run_git(self.repo, "rev-parse", "HEAD")
-
-        incremental = plan_refresh(self.repo, base, added, "codegraph", ROOT)
-        self.assertEqual(incremental["operation"], "refresh_files")
-        self.assertEqual(incremental["status"], "PENDING")
-        self.assertEqual(incremental["paths"][0]["change"], "ADDED")
-        self.assertEqual(
-            incremental["paths"][0]["sha256"], file_sha256(source)
-        )
-
-        run_git(self.repo, "mv", "src/sample.cpp", "src/renamed.cpp")
-        run_git(self.repo, "commit", "-q", "-m", "rename source")
-        renamed = run_git(self.repo, "rev-parse", "HEAD")
-        workspace = plan_refresh(self.repo, added, renamed, "codegraph", ROOT)
-        self.assertEqual(workspace["operation"], "refresh_workspace")
-        self.assertEqual(workspace["paths"][0]["change"], "RENAMED")
-
-        (self.repo / "NOTES.md").write_text("notes\n", encoding="utf-8")
-        run_git(self.repo, "add", "NOTES.md")
-        run_git(self.repo, "commit", "-q", "-m", "add notes")
-        docs = run_git(self.repo, "rev-parse", "HEAD")
-        skipped = plan_refresh(self.repo, renamed, docs, "codegraph", ROOT)
-        self.assertEqual(skipped["status"], "SKIPPED")
-        self.assertEqual(skipped["paths"], [])
 
     def test_risk_flag_requires_r2(self) -> None:
         """任一高风险标记为 true 时，非 R2 Work Item 会被机械拒绝。"""

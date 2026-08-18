@@ -86,6 +86,9 @@ class CodeGraphTests(unittest.TestCase):
             "codegraph_" + "pr_" + "context",
             "codegraph_" + "index_" + "files",
             "codegraph_" + "reindex_" + "workspace",
+            "refresh_" + "files",
+            "refresh_" + "workspace",
+            "plan_" + "refresh",
         }
         managed_roots = [
             ROOT / "hosts",
