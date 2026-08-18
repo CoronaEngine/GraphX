@@ -2171,6 +2171,55 @@ For accurate content of those specific files, Read them directly.
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
         )
 
+    def test_unavailable_merge_discards_every_response_conclusion(self) -> None:
+        """A provider-neutral unavailable result cannot retain graph response evidence."""
+        self.initialize_task()
+        merger = getattr(self.adapter_module(), "merge_freshness", None)
+        self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
+        unavailable = {
+            "status": "UNAVAILABLE",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["NONE"],
+            "stale_points": [],
+            "status_response_sha256": None,
+            "error": "CodeGraph project marker is unavailable",
+            "needs_sync": False,
+            "pending_changes": None,
+        }
+        responses = (
+            "normal response\n",
+            "⚠️ Some files referenced below were edited since the last index sync —\n"
+            "their codegraph entries may be stale:\n"
+            "  - src/deleted.py (edited 800ms ago, pending sync)\n"
+            "For accurate content of those specific files, Read them directly.\n",
+            "⚠️ CodeGraph auto-sync is DISABLED — the index is frozen.\n",
+            "⚠️ Some files referenced below were edited since the last index sync —\n"
+            "their codegraph entries may be stale:\n",
+        )
+
+        for response_text in responses:
+            with self.subTest(response=response_text[:24]):
+                response = self.classify_response(response_text)
+                merged = merger(unavailable, response)
+                self.assertEqual(merged["status"], "UNAVAILABLE")
+                self.assertEqual(merged["basis"], ["NONE"])
+                self.assertEqual(merged["stale_points"], [])
+                self.assertIsNone(merged["response_sha256"])
+                value = self.v2_record()
+                value["freshness"] = {
+                    "status": merged["status"],
+                    "checked_at": merged["checked_at"],
+                    "basis": merged["basis"],
+                    "response_sha256": merged["response_sha256"],
+                    "stale_points": merged["stale_points"],
+                }
+                self.assertEqual(
+                    validate_record_value(
+                        self.repo, "TASK-0001", value, ROOT
+                    )["record_version"],
+                    2,
+                )
+
     def test_retained_response_evidence_projects_to_v2_with_matching_explore_hash(self) -> None:
         """Retained neutral and banner evidence binds the recorded explore response."""
         self.initialize_task()

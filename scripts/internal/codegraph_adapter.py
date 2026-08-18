@@ -255,6 +255,18 @@ def merge_freshness(
     }:
         raise ValueError("unrecognized CodeGraph freshness result")
 
+    # An unavailable provider cannot yield auditable CodeGraph response evidence.
+    # Keep this result directly projectable to the v2 provider-neutral shape even
+    # if a caller has already classified a response before learning availability.
+    if status == "UNAVAILABLE":
+        return {
+            **status_result,
+            "status": "UNAVAILABLE",
+            "basis": ["NONE"],
+            "stale_points": [],
+            "response_sha256": None,
+        }
+
     response_status = status if classification == "NONE" else classification
     merged_status = max((status, response_status), key=FRESHNESS_ORDER.__getitem__)
     status_basis = status_result.get("basis", [])
