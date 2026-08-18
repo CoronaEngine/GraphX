@@ -172,6 +172,22 @@ class PolarisCoreTests(unittest.TestCase):
     def task(self) -> Path:
         return self.repo / ".polaris" / "tasks" / "TASK-0001"
 
+    def test_workflow_013_contains_only_governance_states(self) -> None:
+        """0.1.3 只持久化具有独立治理边界的状态和转换。"""
+        workflow = read_json(ROOT / "workflow" / "default-workflow.json")
+        self.assertEqual(workflow["workflow_version"], "0.1.3")
+        self.assertNotIn("IMPLEMENTED", workflow["states"])
+        self.assertNotIn("DOCS_SYNCED", workflow["states"])
+        self.assertNotIn("REVIEWED", workflow["states"])
+        events = {item["event"]: item for item in workflow["transitions"]}
+        self.assertNotIn("DISPATCH_IMPLEMENTATION", events)
+        self.assertNotIn("FINISH_IMPLEMENTATION", events)
+        self.assertNotIn("SYNC_DOCS", events)
+        self.assertNotIn("START_VALIDATION", events)
+        self.assertEqual(events["START_REVIEW"]["from"], ["IMPLEMENTING"])
+        self.assertEqual(events["ACCEPT_REVIEW"]["to"], "VALIDATING")
+        self.assertEqual(events["PASS_AND_CLOSE"]["to"], "CLOSED")
+
     def freeze_work_item(self) -> None:
         path = self.task / "revisions" / "work-item-r001.json"
         value = read_json(path)
