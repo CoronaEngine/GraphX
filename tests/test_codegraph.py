@@ -739,6 +739,170 @@ For accurate content of those specific files, Read them directly.
         error_line = next(line for line in envelope.splitlines() if line.startswith("error: "))
         self.assertEqual(len(error_line.removeprefix("error: ")), 240)
 
+    def test_mcp_server_initializes_and_lists_one_proxy_tool(self) -> None:
+        messages = [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"},
+                },
+            },
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        ]
+        completed_process = subprocess.run(
+            [
+                sys.executable,
+                SCRIPTS / "code_intelligence_mcp.py",
+                "--repo",
+                self.repo,
+            ],
+            input="".join(json.dumps(item) + "\n" for item in messages),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(completed_process.returncode, 0, completed_process.stderr)
+        responses = [json.loads(line) for line in completed_process.stdout.splitlines()]
+        self.assertEqual(len(responses), 2)
+        self.assertEqual(responses[0]["result"]["protocolVersion"], "2025-11-25")
+        self.assertEqual(
+            responses[0]["result"]["capabilities"],
+            {"tools": {"listChanged": False}},
+        )
+        tools = responses[1]["result"]["tools"]
+        self.assertEqual([item["name"] for item in tools], ["polaris_codegraph_explore"])
+        self.assertNotIn("repository", tools[0]["inputSchema"]["properties"])
+        self.assertEqual(completed_process.stderr, "")
+
+    def test_mcp_server_returns_envelope_before_graph_and_preserves_bundle(self) -> None:
+        module = importlib.import_module("code_intelligence_mcp")
+        server = module.McpServer(self.repo)
+        initialized = server.handle({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"},
+            },
+        })
+        self.assertIn("result", initialized)
+        self.assertIsNone(server.handle({
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        }))
+        bundle = {
+            "delivery": {"state": "STALE"},
+            "query": {"id": "CIQ-001"},
+        }
+        proxy_result = {
+            "bundle": bundle,
+            "bundle_path": self.repo / "bundle.json",
+            "response": "graph bytes\n",
+            "envelope": "[POLARIS_CODEGRAPH_FRESHNESS]\nstate: STALE\n[/POLARIS_CODEGRAPH_FRESHNESS]\n",
+        }
+        request = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "polaris_codegraph_explore",
+                "arguments": {
+                    "task_id": "TASK-0001",
+                    "stage": "PLANNING",
+                    "query_id": "CIQ-001",
+                    "purpose": "locate symbols",
+                    "query": "symbol A",
+                    "sync_if_needed": False,
+                },
+            },
+        }
+        with mock.patch(
+            "code_intelligence_mcp.execute_proxy_query", return_value=proxy_result
+        ):
+            response = server.handle(request)
+
+        result = response["result"]
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["content"][0]["text"], proxy_result["envelope"])
+        self.assertEqual(result["content"][1]["text"], "graph bytes\n")
+        self.assertEqual(result["structuredContent"], {"bundle": bundle})
+
+        proxy_result["response"] = None
+        with mock.patch(
+            "code_intelligence_mcp.execute_proxy_query", return_value=proxy_result
+        ):
+            no_graph = server.handle({**request, "id": 3})
+        self.assertFalse(no_graph["result"]["isError"])
+        self.assertEqual(len(no_graph["result"]["content"]), 1)
+
+    def test_mcp_server_rejects_lifecycle_tool_and_input_errors(self) -> None:
+        module = importlib.import_module("code_intelligence_mcp")
+        server = module.McpServer(self.repo)
+        before = server.handle({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
+        })
+        self.assertEqual(before["error"]["code"], -32600)
+        server.handle({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"},
+            },
+        })
+        server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        unknown = server.handle({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "codegraph_explore", "arguments": {}},
+        })
+        self.assertEqual(unknown["error"]["code"], -32602)
+        invalid = server.handle({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "polaris_codegraph_explore",
+                "arguments": {
+                    "task_id": "TASK-0001",
+                    "stage": "INVALID",
+                    "query_id": "CIQ-000",
+                    "purpose": "locate symbols",
+                    "query": "symbol A",
+                    "sync_if_needed": False,
+                },
+            },
+        })
+        self.assertTrue(invalid["result"]["isError"])
+        self.assertNotIn("structuredContent", invalid["result"])
+
+    def test_mcp_server_emits_jsonrpc_parse_and_method_errors_one_per_line(self) -> None:
+        transcript = "{bad json\n" + "\n".join([
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "unknown", "params": {}}),
+        ]) + "\n"
+        completed_process = subprocess.run(
+            [sys.executable, SCRIPTS / "code_intelligence_mcp.py", "--repo", self.repo],
+            input=transcript,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        responses = [json.loads(line) for line in completed_process.stdout.splitlines()]
+        self.assertEqual([item["error"]["code"] for item in responses], [-32700, -32602, -32601])
+        self.assertTrue(all("\n" not in line for line in completed_process.stdout.splitlines()))
+
     def set_protocol_version(self, version: str) -> None:
         project_path = self.repo / ".polaris/project.json"
         project = json.loads(project_path.read_text(encoding="utf-8"))
