@@ -4979,6 +4979,43 @@ class PolarisCoreTests(unittest.TestCase):
         state = read_json(self.task / "state.json")
         self.assertEqual(state["status"], "BLOCKED")
 
+        created = new_revision(self.repo, "TASK-0001")
+        self.assertEqual(created["revision"], 2)
+        work_item_path = self.task / "revisions" / "work-item-r002.json"
+        work_item = read_json(work_item_path)
+        work_item["implementation_dispatch"]["authorized"] = True
+        work_item["review_dispatch"]["authorized"] = True
+        work_item["known_unknowns"] = []
+        write_json_atomic(work_item_path, work_item)
+        transition(
+            self.repo,
+            "TASK-0001",
+            "NEW_REVISION",
+            [],
+            2,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+        state = read_json(self.task / "state.json")
+        self.assertEqual(state["status"], "QUALIFIED")
+        self.assertIsNone(state["blocked_from"])
+        self.assertIsNone(state["blocker"])
+        last_event = read_jsonl(self.task / "events.jsonl")[-1]
+        self.assertIsNone(last_event["blocked_from"])
+        self.assertIsNone(last_event["blocker"])
+        self.assertEqual(rebuild_state_value(self.task / "events.jsonl"), state)
+        recovered = recover(self.repo, "TASK-0001")
+        self.assertIsNone(recovered["state"]["blocker"])
+        project_index = read_json(self.repo / ".polaris" / "project-index.json")
+        indexed_task = next(
+            item for item in project_index["tasks"] if item["task_id"] == "TASK-0001"
+        )
+        self.assertIsNone(indexed_task["blocker"])
+
     def test_recovery_working_set_and_exploration_promotion(self) -> None:
         """Fresh-session Recovery 只输出四类最小信息，并检索匹配模块的失败探索。"""
         work_item_path = self.task / "revisions" / "work-item-r001.json"

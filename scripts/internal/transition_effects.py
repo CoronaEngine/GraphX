@@ -93,6 +93,8 @@ def prepare_next_state(
         next_state["current_revision"] = revision
         next_state["artifacts"] = {}
         next_state["subject"] = None
+        next_state["blocked_from"] = None
+        next_state["blocker"] = None
         work_item = current_work_item_path(directory, revision)
         next_state["rigor"] = read_json(work_item)["rigor"]
 
