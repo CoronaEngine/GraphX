@@ -535,6 +535,24 @@ For accurate content of those specific files, Read them directly.
         self.assertEqual(result["classification"], "NONE")
         self.assertEqual(result["stale_points"], [])
 
+    def test_prefixed_or_quoted_official_banner_is_not_recognized(self) -> None:
+        banner = """⚠️ Some files referenced below were edited since the last index sync —
+their codegraph entries may be stale:
+  - src/deleted.py (edited 800ms ago, pending sync)
+For accurate content of those specific files, Read them directly.
+"""
+        for response in (
+            f"context before banner\n{banner}",
+            f"> {banner}",
+            f"quoted response: {banner}",
+            f" {banner}",
+            f"\ufeff{banner}",
+        ):
+            with self.subTest(response=response[:20]):
+                result = self.classify_response(response)
+                self.assertEqual(result["classification"], "NONE")
+                self.assertEqual(result["stale_points"], [])
+
     def test_merge_freshness_uses_conservative_status_and_ordered_evidence(self) -> None:
         merger = getattr(self.adapter_module(), "merge_freshness", None)
         self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
@@ -673,3 +691,53 @@ For accurate content of those specific files, Read them directly.
         rejected_payload = json.loads(rejected.stdout)
         self.assertEqual(rejected_payload["status"], "ERROR")
         self.assertIn("runtime", rejected_payload["message"])
+
+    def test_runtime_rejects_symlinked_runtime_directory_before_reading(self) -> None:
+        (self.repo / "README.md").write_text("test repository\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Polaris Test",
+                "-c",
+                "user.email=polaris@example.test",
+                "commit",
+                "-qm",
+                "initialize test repository",
+            ],
+            cwd=self.repo,
+            check=True,
+        )
+        init_task(self.repo, "TASK-0001", "R1")
+        runtime = self.repo / ".polaris/tasks/TASK-0001/runtime"
+        outside = self.repo / "outside-runtime"
+        external_runtime = outside / "code-intelligence"
+        external_runtime.mkdir(parents=True)
+        response_path = external_runtime / "response.txt"
+        response_path.write_text("normal response\n", encoding="utf-8")
+        runtime.rmdir()
+        runtime.symlink_to(outside, target_is_directory=True)
+
+        completed_process = subprocess.run(
+            [
+                sys.executable,
+                SCRIPTS / "code_intelligence_runtime.py",
+                "classify-response",
+                "TASK-0001",
+                "--input",
+                runtime / "code-intelligence/response.txt",
+                "--repo",
+                self.repo,
+                "--json",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed_process.returncode, 2)
+        payload = json.loads(completed_process.stdout)
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertIn("symlink", payload["message"])

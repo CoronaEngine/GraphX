@@ -14,9 +14,21 @@ from internal.polaris_core import InputFailure, protocol_root, require_protocol_
 from internal.task_layout import code_intelligence_runtime_dir
 
 
+def _runtime_directory(directory: Path) -> Path:
+    """Return the lexical runtime directory only after rejecting symlink hops."""
+    runtime = code_intelligence_runtime_dir(directory)
+    runtime_parent = runtime.parent
+    for path in (runtime_parent, runtime):
+        if path.is_symlink():
+            raise InputFailure("CodeGraph response runtime must not cross a symlink")
+    if not runtime.is_dir():
+        raise InputFailure("CodeGraph response runtime directory is unavailable")
+    return runtime.resolve()
+
+
 def _runtime_input(repo: Path, task_id: str, value: Path) -> Path:
     directory = task_dir(repo, task_id)
-    runtime = code_intelligence_runtime_dir(directory).resolve()
+    runtime = _runtime_directory(directory)
     candidate = value if value.is_absolute() else repo / value
     if candidate.is_symlink():
         raise InputFailure("CodeGraph response input must not be a symlink")

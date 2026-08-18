@@ -170,13 +170,16 @@ def classify_response(
     *,
     checked_at: str | None = None,
 ) -> dict[str, Any]:
-    """Classify only documented CodeGraph freshness banners in an explore response."""
+    """Classify only documented banners beginning at response byte zero.
+
+    Leading whitespace and a UTF-8 BOM are not accepted as an official banner.
+    """
     checked_at = _checked_at() if checked_at is None else checked_at
     if not isinstance(response, str):
         return _response_not_verified(checked_at, "CodeGraph response is not text")
     response_sha256 = hashlib.sha256(response.encode("utf-8")).hexdigest()
     normalized = response.replace("\r\n", "\n").replace("\r", "\n")
-    if _DISABLED_BANNER in normalized:
+    if normalized.startswith(_DISABLED_BANNER):
         result = _response_result(
             "INDEX_STALE",
             checked_at,
@@ -185,13 +188,12 @@ def classify_response(
         result["response_sha256"] = response_sha256
         return result
 
-    header_index = normalized.find(_PARTIAL_BANNER_HEADER)
-    if header_index < 0:
+    if not normalized.startswith(_PARTIAL_BANNER_HEADER):
         result = _response_result("NONE", checked_at, stale_points=[])
         result["response_sha256"] = response_sha256
         return result
 
-    listed = normalized[header_index + len(_PARTIAL_BANNER_HEADER) :]
+    listed = normalized[len(_PARTIAL_BANNER_HEADER) :]
     footer_index = listed.find(_PARTIAL_BANNER_FOOTER)
     if footer_index < 0:
         result = _response_not_verified(checked_at, "malformed CodeGraph stale banner")
