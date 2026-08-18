@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前版本：v0.1.19。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
+> 当前协议版本：v0.1.20；Workflow 版本：v0.1.3。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -195,7 +195,7 @@ polaris code-intelligence add codegraph --repo .
 
 前两个命令绝不会由 Polaris 执行；`codegraph init` 创建 `.codegraph/`，它是 Polaris 允许查询的前提。最后一个命令只创建或更新 `.polaris/code-intelligence.json`，将模式设为 `auto_optional`、将 CodeGraph 放到 Provider 优先级首位，并保留已有 `include` / `exclude` 规则。命令可幂等重跑，未知 Provider 或非法旧配置会在写入前拒绝。
 
-Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工具，因此成功只表示 Provider 已加入 Polaris；返回的 `runtime_status` 为 `checked_by_next_workflow`。下一次 Workflow 只有在仓库已经存在 `.codegraph/` 时才会检查实际能力；缺少 marker、工具、健康 status 或可解析响应时记录 `UNAVAILABLE` 或 `NOT_VERIFIED`，并继续原有的源码搜索、读取、构建、测试和 Review 流程。
+Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工具，因此成功只表示 Provider 已加入 Polaris；返回的 `runtime_status` 为 `checked_by_next_workflow`。下一次 Workflow 只有在仓库已经存在 `.codegraph/` 时才会检查实际能力；缺少 marker 或策略禁用时直接继续源码搜索、读取、构建、测试和 Review，不生成阶段 record。只有实际执行 `status`、`sync` 或 `explore` 后才写 record；操作失败时如实记录 `UNAVAILABLE` 或 `NOT_VERIFIED`，但不阻断阶段。
 
 不执行该命令时仍保留默认自动发现。`.polaris/code-intelligence.json` 也可用于禁用 Provider、调整优先级或限制索引范围。例如：
 
@@ -347,7 +347,7 @@ Polaris 每次暂停、等待用户决定或完成一个阶段时，都会在对
 - `REQUIREMENTS_NEEDED`：需求仍有会影响方案或验收的未知项；
 - `WORK_ITEM_PREVIEW`：Work Item 已整理好，等待用户确认冻结；
 - `PLAN_DECISIONS_NEEDED`：Plan 已形成，但仍有必须由用户选择的方案边界；
-- `WORK_ITEM_QUALIFIED`、`PLAN_READY`、`IMPLEMENTATION_FINISHED`、`DOCS_SYNCED`：阶段检查点；
+- `WORK_ITEM_QUALIFIED`、`PLAN_READY`：需求与规划检查点；
 - `IMPLEMENTATION_HANDOFF_READY`：独立实现输入已冻结并注册；
 - `IMPLEMENTATION_SESSION_STARTED`：宿主已创建或复用独立 Implementer 任务；
 - `IMPLEMENTATION_PROGRESS`：展示最近有效的本机实现进度，不使用估算百分比；
@@ -403,9 +403,9 @@ User action: 请选择“确认并执行”以冻结上述内容并授权自动�
 默认主路径是：
 
 ```text
-DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → IMPLEMENTED
-      → DOCS_SYNCED → REVIEWING → REVIEWED
-      → VALIDATING → VERIFIED → CLOSED
+DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → REVIEWING → VALIDATING
+                                                     ├─ R0/R1 → CLOSED
+                                                     └─ R2 → VERIFIED → CLOSED
 ```
 
 各阶段含义：
@@ -413,14 +413,11 @@ DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → IMPLEMENTED
 1. `DRAFT`：把自然语言需求整理成 Work Item。
 2. `QUALIFIED`：目标、范围、约束、验收证据、风险和决策所有者已冻结。
 3. `PLANNED`：形成结构化 `working-set.json`、变更计划和验收映射。
-4. `IMPLEMENTING`：在冻结范围内修改并运行局部检查。
-5. `IMPLEMENTED`：已有 subject checkpoint commit 和实现证据。
-6. `DOCS_SYNCED`：文档影响已分类，过时知识已处理。
-7. `REVIEWING`：Reviewer 仅依据冻结 handoff 独立审查。
-8. `REVIEWED`：Review 已接受。
-9. `VALIDATING`：逐条机械验证验收标准。
-10. `VERIFIED`：所有验收项 PASS。
-11. `CLOSED`：结果产物齐全，任务关闭。
+4. `IMPLEMENTING`：同一个 Implementer 在冻结范围内完成代码、测试、文档、Implementation 与 Knowledge Delta。
+5. `REVIEWING`：组合门禁已冻结最终 subject 和 Review handoff；Reviewer 仅依据 handoff 独立审查。
+6. `VALIDATING`：Review 已接受，逐条机械验证验收标准。
+7. `VERIFIED`：仅用于 R2；所有验收项 PASS，等待最终 Human approval。
+8. `CLOSED`：R0/R1 由 `PASS_AND_CLOSE` 原子关闭；R2 最终批准后由 `CLOSE` 关闭。
 
 任务状态不得直接编辑。状态转换必须通过：
 
@@ -453,12 +450,14 @@ Polaris 根据风险选择严谨度：
 
 主任务在完成 Planning 和所需预批准后：
 
-1. 执行 `START_IMPLEMENTATION`；
-2. 生成不可变 `implementations/rNNN/handoff-NNN.json`；
-3. 通过 `DISPATCH_IMPLEMENTATION` 注册 handoff；
-4. 在同一本地项目和同一 checkout 创建独立 Implementer 任务；
-5. 等待并验证 Implementation artifact，由主任务执行 `FINISH_IMPLEMENTATION`；
-6. 续接同一个 Implementer 任务完成 Documentation Sync，再由主任务执行 `SYNC_DOCS`。
+1. 生成不可变 `implementations/rNNN/handoff-NNN.json`；
+2. 通过一次 `START_IMPLEMENTATION` 原子校验并注册 handoff；
+3. 在同一本地项目和同一 checkout 创建独立 Implementer 任务；
+4. 等待并验证 Implementation artifact；
+5. 续接同一个 Implementer 任务，在 `IMPLEMENTING` 内完成 Documentation Sync；
+6. 主任务构建 Review handoff，并用一次 `START_REVIEW` 注册 Implementation、Knowledge Delta、handoff 和最终 subject。
+
+首次执行时，`START_IMPLEMENTATION` 完成 `PLANNED → IMPLEMENTING`；Review 或 Validation 返工时，它作为 `IMPLEMENTING → IMPLEMENTING` 自转换注册下一 attempt 的新 handoff，避免恢复已失效的旧实施交接。
 
 自动 Implementer 标题固定为：
 
@@ -476,9 +475,9 @@ Implementer 只接收 task ID 和已注册 handoff，不继承主任务聊天。
 .polaris/tasks/TASK-0001/runtime/progress.json
 ```
 
-它保存当前 phase、有序 `implementation_steps`、最近检查、blocker、用户动作和更新时间，也是这份本机快照的机械权威。每个步骤都有稳定 `STEP-NNN`、标题、状态、关联的 Work Item 验收 ID 和终态结果。当前、已完成和剩余工作由这一个列表推导，不能跳步或回退；发现新工作时只能追加。Implementer 通过明确事件更新它，Polaris 不根据耗时猜测百分比，也不生成内容重复的 Markdown 文件。
+它是可选的本机遥测，保存当前 phase、有序 `implementation_steps`、最近检查、blocker、用户动作和更新时间。每个步骤都有稳定 `STEP-NNN`、标题、状态、关联的 Work Item 验收 ID 和终态结果。当前、已完成和剩余工作由这一个列表推导，不能跳步或回退；发现新工作时只能追加。Implementer 通过明确事件更新它，Polaris 不根据耗时猜测百分比，也不生成内容重复的 Markdown 文件。该文件缺失不会阻断任何耐久转换，最终证据以 Implementation JSON 为准。
 
-这个目录默认加入 `.gitignore`，因此不会污染工作树，也不会随 Git 在另一台电脑继续。换电脑后，耐久状态仍能恢复到最近 checkpoint；新 Implementer 会创建新的本机进度快照。
+这个目录默认加入 `.gitignore`，因此不会污染工作树，也不会随 Git 在另一台电脑继续。换电脑后，耐久状态仍能恢复；宿主需要实时报告时可创建新的本机进度快照。
 
 ### 9.2 其他查看方式
 
@@ -605,8 +604,8 @@ polaris migrate --repo .
 迁移协议具有以下固定规则：
 
 1. `workflow/migrations.json` 是支持路径的唯一、append-only 注册表；历史步骤必须保留，以便校验已提交的迁移记录。一次命令只允许从当前项目版本迁移到 vendored 版本的一个显式相邻步骤，不推断、不跨级。
-2. 注册步骤同时绑定源/目标 `polaris_version` 与 `workflow_version`。v1 迁移策略不改变冻结 workflow；需要改变 workflow 时必须先升级迁移协议和策略实现。
-3. 项目版本由 `replace_version` 策略更新；每个现有任务由 `append_version_event` 策略追加同状态的 `MIGRATE_POLARIS` 事件，旧 `events.jsonl` 行不可修改。
+2. 注册步骤同时绑定源/目标 `polaris_version` 与 `workflow_version`。Migration protocol v2 支持仅更新版本，也支持显式替换冻结 workflow 并映射任务状态。
+3. `0.1.19 → 0.1.20` 使用 `replace_version_and_workflow` 与 `append_mapped_workflow_event`：冻结 workflow 更新到 `0.1.3`，旧 `IMPLEMENTED` / `DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`；旧 R0/R1 `VERIFIED` 也映射回 `VALIDATING`，以便通过 `PASS_AND_CLOSE` 重新提交关闭产物，R2 `VERIFIED` 保持不变。迁移事件记录源/目标状态及旧版本；旧 `events.jsonl` 行不可修改。
 4. `.polaris/migrations/MIG-<from>-to-<to>.json` 先写为 `IN_PROGRESS`，全部投影更新后改为 `COMPLETED`。迁移锁会记录迁移/任务身份、主机名和 PID；若进程在中间终止，同一主机重新执行命令会接管已死亡的同迁移锁、验证并复用已经追加的事件，不会重复迁移。活跃进程、其他迁移或来源不明的锁不会被自动删除。
 5. 迁移完成后脚本自动运行项目校验；`validate_project.py` 会拒绝未完成记录、缺失/伪造的任务迁移事件或版本不一致。
 
@@ -628,7 +627,9 @@ polaris validate-project --repo .
 
 v0.1.18 增加 `polaris code-intelligence add <provider>`，用于把已配置 Provider 显式加入 Polaris 流程；Workflow 版本仍为 v0.1.2。
 
-v0.1.19 将正式 Provider 固定为 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)，引入 watcher/connect reconciliation 下的检查时新鲜度、精确 stale point 和源码回退记录。已提交的 v1 Code Intelligence record 保持不可变，并在迁移中标为 `retired_provider_evidence`；新阶段必须生成 v2 record。Workflow 版本仍为 v0.1.2。
+v0.1.19 将正式 Provider 固定为 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)，引入 watcher/connect reconciliation 下的检查时新鲜度、精确 stale point 和源码回退记录。已提交的 v1 Code Intelligence record 保持不可变，并在迁移中标为 `retired_provider_evidence`。Workflow 版本仍为 v0.1.2。
+
+v0.1.20 / Workflow v0.1.3 删除没有独立治理边界的中间状态和事件；`START_IMPLEMENTATION` 与 `START_REVIEW` 各自原子注册所需产物，Review 接受后直接进入 `VALIDATING`，R0/R1 使用 `PASS_AND_CLOSE`。本机进度改为可选遥测；未执行 Provider 操作时不再生成 Code Intelligence record。
 
 ## 13. 失败探索与卡点
 
@@ -682,7 +683,7 @@ python tools/polaris/scripts/record_exploration.py TASK-0001 --repo . --promote 
 
 ### 为什么已经实现，还不能说完成
 
-`IMPLEMENTED` 只表示实现 checkpoint 已形成。还需 Documentation Sync、Review、Validation 和 Result 门禁，状态机才能写入 `CLOSED`。
+实现产物只是 `IMPLEMENTING` 节点内的一部分。还需 Documentation Sync、独立 Review、Validation 和 Result 门禁；只有转换脚本通过完整候选投影校验后才能写入 `CLOSED`。
 
 ### 自动化脚本如何被其他工具读取
 

@@ -1,6 +1,6 @@
 {
-    "schema_version": "0.1.2",
-    "workflow_version": "0.1.2",
+    "schema_version": "0.1.3",
+    "workflow_version": "0.1.3",
     "initial_state": "DRAFT",
     "terminal_states": [
         "CLOSED",
@@ -11,10 +11,7 @@
         "QUALIFIED",
         "PLANNED",
         "IMPLEMENTING",
-        "IMPLEMENTED",
-        "DOCS_SYNCED",
         "REVIEWING",
-        "REVIEWED",
         "VALIDATING",
         "VERIFIED",
         "BLOCKED",
@@ -42,49 +39,26 @@
         {
             "event": "START_IMPLEMENTATION",
             "from": [
-                "PLANNED"
-            ],
-            "to": "IMPLEMENTING",
-            "gate": "implementation_approved"
-        },
-        {
-            "event": "DISPATCH_IMPLEMENTATION",
-            "from": [
+                "PLANNED",
                 "IMPLEMENTING"
             ],
             "to": "IMPLEMENTING",
-            "gate": "implementation_handoff_ready"
-        },
-        {
-            "event": "FINISH_IMPLEMENTATION",
-            "from": [
-                "IMPLEMENTING"
-            ],
-            "to": "IMPLEMENTED",
-            "gate": "implementation_ready"
-        },
-        {
-            "event": "SYNC_DOCS",
-            "from": [
-                "IMPLEMENTED"
-            ],
-            "to": "DOCS_SYNCED",
-            "gate": "docs_ready"
+            "gate": "implementation_start_ready"
         },
         {
             "event": "START_REVIEW",
             "from": [
-                "DOCS_SYNCED"
+                "IMPLEMENTING"
             ],
             "to": "REVIEWING",
-            "gate": "review_package_ready"
+            "gate": "review_start_ready"
         },
         {
             "event": "ACCEPT_REVIEW",
             "from": [
                 "REVIEWING"
             ],
-            "to": "REVIEWED",
+            "to": "VALIDATING",
             "gate": "review_accepted"
         },
         {
@@ -98,12 +72,12 @@
             "on_max_attempts_to": "BLOCKED"
         },
         {
-            "event": "START_VALIDATION",
+            "event": "PASS_AND_CLOSE",
             "from": [
-                "REVIEWED"
+                "VALIDATING"
             ],
-            "to": "VALIDATING",
-            "gate": "validation_ready"
+            "to": "CLOSED",
+            "gate": "validation_passed_and_closure_ready"
         },
         {
             "event": "PASS_VALIDATION",
@@ -143,10 +117,7 @@
                 "QUALIFIED",
                 "PLANNED",
                 "IMPLEMENTING",
-                "IMPLEMENTED",
-                "DOCS_SYNCED",
                 "REVIEWING",
-                "REVIEWED",
                 "VALIDATING",
                 "VERIFIED",
                 "BLOCKED"
@@ -161,10 +132,7 @@
                 "QUALIFIED",
                 "PLANNED",
                 "IMPLEMENTING",
-                "IMPLEMENTED",
-                "DOCS_SYNCED",
                 "REVIEWING",
-                "REVIEWED",
                 "VALIDATING",
                 "VERIFIED"
             ],
@@ -186,10 +154,7 @@
                 "QUALIFIED",
                 "PLANNED",
                 "IMPLEMENTING",
-                "IMPLEMENTED",
-                "DOCS_SYNCED",
                 "REVIEWING",
-                "REVIEWED",
                 "VALIDATING",
                 "VERIFIED",
                 "BLOCKED"

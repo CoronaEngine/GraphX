@@ -114,8 +114,8 @@ def update(
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
     require_protocol_compatible(repo, state)
-    if state["status"] not in {"IMPLEMENTING", "IMPLEMENTED"}:
-        raise RuleFailure("Implementation progress can only update while IMPLEMENTING or IMPLEMENTED")
+    if state["status"] != "IMPLEMENTING":
+        raise RuleFailure("Implementation progress can only update while IMPLEMENTING")
     handoff, reference = validate_handoff(repo, root, directory, state)
     progress_path = resolve_repo_reference(repo, handoff["progress_json_path"])
     existing = read_json(progress_path) if progress_path.exists() else None
@@ -253,8 +253,6 @@ def update(
                 raise RuleFailure(
                     f"SET_PHASE cannot move {progress['phase']} progress to {phase}"
                 )
-            if phase in {"DOCUMENTING", "COMPLETED"} and state["status"] != "IMPLEMENTED":
-                raise RuleFailure(f"{phase} progress requires task state IMPLEMENTED")
             progress["phase"] = phase
             if phase == "FAILED":
                 if not blocker or not user_action:

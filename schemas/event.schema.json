@@ -35,6 +35,12 @@
         "migration_id": {
             "type": "string"
         },
+        "previous_polaris_version": {
+            "type": "string"
+        },
+        "previous_workflow_version": {
+            "type": "string"
+        },
         "from": {
             "type": [
                 "string",

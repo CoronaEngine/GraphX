@@ -1,5 +1,5 @@
 {
-    "protocol_version": 1,
+    "protocol_version": 2,
     "steps": [
         {
             "migration_id": "0.1.9-to-0.1.10",
@@ -90,6 +90,15 @@
             "to_workflow_version": "0.1.2",
             "project_strategy": "replace_version",
             "task_strategy": "append_version_event"
+        },
+        {
+            "migration_id": "0.1.19-to-0.1.20",
+            "from_polaris_version": "0.1.19",
+            "to_polaris_version": "0.1.20",
+            "from_workflow_version": "0.1.2",
+            "to_workflow_version": "0.1.3",
+            "project_strategy": "replace_version_and_workflow",
+            "task_strategy": "append_mapped_workflow_event"
         }
     ]
 }

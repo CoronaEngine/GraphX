@@ -4,21 +4,27 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import sys
 from pathlib import Path
 from typing import Any
 
 from internal.polaris_core import (
+    acquire_lock,
     InputFailure,
     RuleFailure,
     current_work_item_path,
     directory_sha256,
     file_sha256,
+    full_commit,
     protocol_root,
     read_json,
+    rebuild_state_value,
+    release_lock,
     require_protocol_compatible,
     run_main,
     task_dir,
+    subject_diff_hash,
     utc_now,
     validate_json_file,
     write_json_atomic,
@@ -27,7 +33,8 @@ from internal.artifact_protocol import normalized_reference
 from internal.code_intelligence_protocol import record_reference
 from internal.task_location_protocol import logical_repo_path, resolve_repo_reference
 from internal.review_protocol import MAX_REVIEW_ATTEMPTS
-from internal.task_layout import evidence_dir, review_handoff_path, state_path
+from internal.task_layout import events_path, evidence_dir, review_handoff_path, state_path
+from internal.transition_gates import check_gate
 from internal.working_set_protocol import validate_working_set
 
 
@@ -81,18 +88,74 @@ def _code_intelligence_entry(
     return _entry(repo, role, directory / reference["path"])
 
 
-def build(
+def _build_locked(
     repo: Path,
     task_id: str,
     implementer_session_id: str,
     isolation_mode: str | None,
+    implementation_path: Path | None = None,
+    knowledge_path: Path | None = None,
+    subject_base: str | None = None,
+    subject_head: str | None = None,
+    review_response_path: Path | None = None,
 ) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    state = read_json(state_path(directory))
-    require_protocol_compatible(repo, state)
-    if state["status"] != "DOCS_SYNCED":
-        raise RuleFailure("review handoff can only be built from DOCS_SYNCED")
+    stored_state = read_json(state_path(directory))
+    require_protocol_compatible(repo, stored_state)
+    if stored_state["status"] != "IMPLEMENTING":
+        raise RuleFailure("review handoff can only be built from IMPLEMENTING")
+    supplied = (implementation_path, knowledge_path, subject_base, subject_head)
+    if any(value is not None for value in supplied) and not all(
+        value is not None for value in supplied
+    ):
+        raise InputFailure(
+            "review handoff requires implementation, knowledge, subject base, and subject head"
+        )
+    state = copy.deepcopy(stored_state)
+    if all(value is not None for value in supplied):
+        base = full_commit(repo, str(subject_base))
+        head = full_commit(repo, str(subject_head))
+        for name, supplied_path in (
+            ("implementation", implementation_path),
+            ("knowledge_delta", knowledge_path),
+        ):
+            assert supplied_path is not None
+            resolved = supplied_path.resolve()
+            try:
+                relative = resolved.relative_to(directory.resolve())
+            except ValueError as exc:
+                raise RuleFailure(
+                    f"review handoff artifact must be inside the task directory: {resolved}"
+                ) from exc
+            if not resolved.is_file():
+                raise RuleFailure(f"review handoff artifact does not exist: {resolved}")
+            state["artifacts"][name] = {
+                "path": relative.as_posix(),
+                "sha256": file_sha256(resolved),
+            }
+        state["subject"] = {
+            "base_commit": base,
+            "head_commit": head,
+            "diff_hash": subject_diff_hash(repo, base, head),
+        }
+    if review_response_path is not None:
+        resolved_response = review_response_path.resolve()
+        try:
+            relative_response = resolved_response.relative_to(directory.resolve())
+        except ValueError as exc:
+            raise RuleFailure(
+                f"review response must be inside the task directory: {resolved_response}"
+            ) from exc
+        if not resolved_response.is_file():
+            raise RuleFailure(f"review response does not exist: {resolved_response}")
+        state["artifacts"]["review_response"] = {
+            "path": relative_response.as_posix(),
+            "sha256": file_sha256(resolved_response),
+        }
+    workflow = read_json(repo / ".polaris" / "workflow.json")
+    check_gate(repo, root, directory, state, "implementation_ready", None, workflow)
+    check_gate(repo, root, directory, state, "docs_ready", None, workflow)
     implementation_reference = normalized_reference(
         directory, state["artifacts"].get("implementation")
     )
@@ -214,7 +277,7 @@ def build(
         "package": package,
     }
     path = review_handoff_path(directory, revision, attempt)
-    if path.exists():
+    if path.exists() and stored_state["artifacts"].get("review_handoff") is not None:
         raise InputFailure(f"review handoff is immutable and already exists: {path}")
     write_json_atomic(path, handoff)
     validate_json_file(path, root / "schemas" / "review-handoff.schema.json")
@@ -229,6 +292,42 @@ def build(
     }
 
 
+def build(
+    repo: Path,
+    task_id: str,
+    implementer_session_id: str,
+    isolation_mode: str | None,
+    implementation_path: Path | None = None,
+    knowledge_path: Path | None = None,
+    subject_base: str | None = None,
+    subject_head: str | None = None,
+    review_response_path: Path | None = None,
+) -> dict[str, Any]:
+    """Build while excluding task transitions and rejecting stale projections."""
+    directory = task_dir(repo, task_id)
+    lock_path = directory / ".transition.lock"
+    descriptor = acquire_lock(lock_path)
+    try:
+        stored_state = read_json(state_path(directory))
+        if rebuild_state_value(events_path(directory)) != stored_state:
+            raise RuleFailure(
+                "state.json differs from events.jsonl; rebuild before building Review handoff"
+            )
+        return _build_locked(
+            repo,
+            task_id,
+            implementer_session_id,
+            isolation_mode,
+            implementation_path,
+            knowledge_path,
+            subject_base,
+            subject_head,
+            review_response_path,
+        )
+    finally:
+        release_lock(lock_path, descriptor)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("task_id")
@@ -241,6 +340,11 @@ def main() -> int:
             "r0_isolated_same_session",
         ],
     )
+    parser.add_argument("--implementation", type=Path)
+    parser.add_argument("--knowledge-delta", type=Path)
+    parser.add_argument("--subject-base")
+    parser.add_argument("--subject-head")
+    parser.add_argument("--review-response", type=Path)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -250,6 +354,11 @@ def main() -> int:
             args.task_id,
             args.implementer_session_id,
             args.isolation,
+            args.implementation,
+            args.knowledge_delta,
+            args.subject_base,
+            args.subject_head,
+            args.review_response,
         ),
         args.json,
     )

@@ -148,8 +148,19 @@ class CodeGraphTests(unittest.TestCase):
             self.assertIn(official, path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
         for path in [ROOT / "README.md", ROOT / "README.zh-CN.md"]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.19", text, path.relative_to(ROOT).as_posix())
-            self.assertIn("0.1.2", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.20", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
+
+    def test_authority_surfaces_publish_workflow_013(self) -> None:
+        for path in [
+            ROOT / "README.md",
+            ROOT / "README.zh-CN.md",
+            ROOT / "docs" / "USAGE.md",
+            ROOT / "plan.md",
+        ]:
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("0.1.20", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
 
     def test_readmes_keep_codegraph_operational_boundaries(self) -> None:
         """User-facing authorities retain the source-fallback and ownership boundaries."""
@@ -188,6 +199,18 @@ class CodeGraphTests(unittest.TestCase):
                 mutated = text.replace("codegraph sync", "codegraph-sync", 1)
                 with self.assertRaises(AssertionError):
                     self.assertIn("codegraph sync", mutated, path.name)
+
+    def test_stage_surfaces_do_not_require_unused_provider_records(self) -> None:
+        """未执行 Provider 操作的阶段明确省略 record，不制造 UNAVAILABLE 噪声。"""
+        for relative in [
+            "skills/architecture-planning/SKILL.md",
+            "skills/implementation/SKILL.md",
+            "skills/documentation-sync/SKILL.md",
+            "skills/adversarial-review/SKILL.md",
+            "skills/code-intelligence/SKILL.md",
+        ]:
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("omit the Code Intelligence record", text, relative)
 
     def adapter_functions(self) -> tuple[object, object]:
         adapter_path = SCRIPTS / "internal" / "codegraph_adapter.py"
@@ -266,6 +289,29 @@ class CodeGraphTests(unittest.TestCase):
             "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
         )
 
+    def set_workflow_version(self, version: str) -> None:
+        project_path = self.repo / ".polaris/project.json"
+        project = json.loads(project_path.read_text(encoding="utf-8"))
+        project["workflow_version"] = version
+        write_json_atomic(project_path, project)
+        workflow_path = self.repo / ".polaris/workflow.json"
+        workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+        workflow["schema_version"] = version
+        workflow["workflow_version"] = version
+        write_json_atomic(workflow_path, workflow)
+        state_path = self.repo / ".polaris/tasks/TASK-0001/state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["workflow_version"] = version
+        write_json_atomic(state_path, state)
+        event_path = self.repo / ".polaris/tasks/TASK-0001/events.jsonl"
+        events = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+        for event in events:
+            event["workflow_version"] = version
+        write_text_atomic(
+            event_path,
+            "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
+        )
+
     def test_legacy_v1_records_remain_readable_but_cannot_be_written(self) -> None:
         self.initialize_task()
         protocol = importlib.import_module("internal.code_intelligence_protocol")
@@ -309,9 +355,10 @@ class CodeGraphTests(unittest.TestCase):
             record(self.repo, "TASK-0001", value, ROOT)
 
     def test_migration_retires_v1_records_without_rewriting_them(self) -> None:
-        """0.1.19 inventories frozen v1 evidence while leaving its bytes intact."""
+        """0.1.20 inventories frozen v1 evidence while leaving its bytes intact."""
         self.initialize_task()
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         legacy_path = (
             self.repo
             / ".polaris/tasks/TASK-0001/code-intelligence/r001/planning.json"
@@ -348,16 +395,16 @@ class CodeGraphTests(unittest.TestCase):
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.18")
-        self.assertEqual(result["to"], "0.1.19")
+        self.assertEqual(result["from"], "0.1.19")
+        self.assertEqual(result["to"], "0.1.20")
         self.assertEqual(
             json.loads((self.repo / ".polaris/project.json").read_text(encoding="utf-8"))["workflow_version"],
-            "0.1.2",
+            "0.1.3",
         )
         migration = json.loads(
             (
                 self.repo
-                / ".polaris/migrations/MIG-0.1.18-to-0.1.19.json"
+                / ".polaris/migrations/MIG-0.1.19-to-0.1.20.json"
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(
@@ -379,7 +426,8 @@ class CodeGraphTests(unittest.TestCase):
     def test_migration_rejects_noncanonical_v2_record_paths(self) -> None:
         """Migration scans only the canonical Code Intelligence record layout."""
         self.initialize_task()
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         noncanonical = (
             self.repo
             / ".polaris/tasks/TASK-0001/code-intelligence/r001/not-a-stage.json"
@@ -405,7 +453,8 @@ class CodeGraphTests(unittest.TestCase):
             events_path,
             "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
         )
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         legacy_path = (
             self.repo
             / ".polaris/tasks/TASK-0001/code-intelligence/r001/planning.json"
@@ -451,7 +500,7 @@ class CodeGraphTests(unittest.TestCase):
         migration = json.loads(
             (
                 self.repo
-                / ".polaris/migrations/MIG-0.1.18-to-0.1.19.json"
+                / ".polaris/migrations/MIG-0.1.19-to-0.1.20.json"
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(
@@ -467,7 +516,8 @@ class CodeGraphTests(unittest.TestCase):
     def test_migration_rejects_a_dangling_code_intelligence_symlink(self) -> None:
         """A dangling record-root symlink is rejected rather than treated as absent."""
         self.initialize_task()
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         records_root = self.repo / ".polaris/tasks/TASK-0001/code-intelligence"
         shutil.rmtree(records_root)
         records_root.symlink_to(self.repo / "missing-code-intelligence")

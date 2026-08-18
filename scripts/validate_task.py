@@ -29,6 +29,7 @@ from internal.code_intelligence_protocol import record_reference
 from internal.review_protocol import validate_handoff, validate_review, validate_review_response
 from internal.plan_decision_protocol import validate_plan_decisions
 from internal.working_set_protocol import validate_working_set
+from internal.validation_protocol import validate_acceptance_coverage, validate_acceptance_ids
 from internal.task_layout import events_path, explorations_dir
 from internal.task_layout import state_path as task_state_path
 
@@ -38,10 +39,7 @@ ORDER = [
     "QUALIFIED",
     "PLANNED",
     "IMPLEMENTING",
-    "IMPLEMENTED",
-    "DOCS_SYNCED",
     "REVIEWING",
-    "REVIEWED",
     "VALIDATING",
     "VERIFIED",
     "CLOSED",
@@ -50,6 +48,17 @@ ORDER = [
 
 def at_least(status: str, threshold: str) -> bool:
     return status in ORDER and ORDER.index(status) >= ORDER.index(threshold)
+
+
+def authority_status(state: dict[str, Any]) -> str:
+    """Return the durable stage whose invariants a projection must satisfy."""
+    status = state["status"]
+    if status == "BLOCKED":
+        blocked_from = state.get("blocked_from")
+        return blocked_from if blocked_from in ORDER else "DRAFT"
+    if status == "CANCELLED":
+        return "DRAFT"
+    return status
 
 
 def artifact_path(directory: Path, reference: Any) -> Path:
@@ -72,22 +81,17 @@ def require_artifact(state: dict[str, Any], directory: Path, name: str) -> Path:
     return path
 
 
-def validate(repo: Path, task_id: str) -> dict[str, Any]:
+def validate_projection(
+    repo: Path, task_id: str, state: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate a prospective authority projection without reading its event log."""
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
-    state_file = task_state_path(directory)
-    state = validate_json_file(state_file, root / "schemas" / "task-state.schema.json")
-    event_schema = read_json(root / "schemas" / "event.schema.json")
-    for event in load_events_checked(events_path(directory)):
-        errors = validate_schema(event, event_schema)
-        if errors:
-            raise RuleFailure(
-                f"event {event.get('sequence')} failed schema validation:\n- "
-                + "\n- ".join(errors)
-            )
-    rebuilt = rebuild_state_value(events_path(directory))
-    if rebuilt != state:
-        raise RuleFailure("state.json does not match the state reconstructed from events.jsonl")
+    state_errors = validate_schema(
+        state, read_json(root / "schemas" / "task-state.schema.json")
+    )
+    if state_errors:
+        raise RuleFailure("candidate task state failed schema validation:\n- " + "\n- ".join(state_errors))
 
     version = (root / "VERSION").read_text(encoding="utf-8").strip()
     workflow = read_json(repo / ".polaris" / "workflow.json")
@@ -102,6 +106,7 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         raise RuleFailure("current Work Item identity or revision does not match state")
     if work_item["rigor"] != state["rigor"]:
         raise RuleFailure("Work Item rigor does not match task state")
+    validate_acceptance_ids(work_item)
     if any(work_item["risk_flags"].values()) and state["rigor"] != "R2":
         raise RuleFailure("a true risk flag requires rigor R2")
     full_commit(repo, work_item["base_commit"])
@@ -122,7 +127,8 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
             directory / prior_reference["path"], root / "schemas" / "review.schema.json"
         )
 
-    status = state["status"]
+    projected_status = state["status"]
+    status = authority_status(state)
     if at_least(status, "PLANNED"):
         require_artifact(state, directory, "plan")
         working_set_path = require_artifact(state, directory, "working_set")
@@ -130,9 +136,11 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         if "plan_decisions" in state["artifacts"]:
             require_artifact(state, directory, "plan_decisions")
             validate_plan_decisions(repo, root, directory, state, True)
-    if status == "IMPLEMENTING" and "implementation_handoff" in state["artifacts"]:
+    if at_least(status, "IMPLEMENTING"):
         validate_implementation_handoff(repo, root, directory, state)
-    if at_least(status, "IMPLEMENTED"):
+        if state["rigor"] == "R2":
+            require_artifact(state, directory, "pre_approval")
+    if at_least(status, "REVIEWING"):
         handoff, handoff_reference = validate_implementation_handoff(
             repo, root, directory, state
         )
@@ -162,6 +170,9 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
             != handoff_reference["path"]
             or implementation["implementation_handoff_sha256"]
             != handoff_reference["sha256"]
+            or implementation["subject_base_commit"] != subject["base_commit"]
+            or implementation["subject_head_commit"] != subject["head_commit"]
+            or implementation["subject_diff_hash"] != subject["diff_hash"]
         )
         if identity_mismatch:
             raise RuleFailure("Implementation artifact targets the wrong revision or subject")
@@ -180,15 +191,8 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
             != implementation["subject_diff_hash"]
         ):
             raise RuleFailure("Implementation Code Intelligence record targets the wrong subject")
-        if implementation["subject_base_commit"] != subject["base_commit"]:
-            raise RuleFailure("Implementation artifact has the wrong subject base")
-        if status == "IMPLEMENTED" and (
-            implementation["subject_head_commit"] != subject["head_commit"]
-            or implementation["subject_diff_hash"] != subject["diff_hash"]
-        ):
-            raise RuleFailure("Implementation artifact targets the wrong implementation subject")
         validate_review_response(root, directory, state, implementation)
-    if at_least(status, "DOCS_SYNCED"):
+
         knowledge_path = require_artifact(state, directory, "knowledge_delta")
         knowledge = validate_json_file(
             knowledge_path, root / "schemas" / "knowledge-delta.schema.json"
@@ -220,9 +224,9 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
             != knowledge["subject_diff_hash"]
         ):
             raise RuleFailure("Knowledge Delta Code Intelligence record targets the wrong subject")
-    if status == "REVIEWING" or at_least(status, "REVIEWED"):
+
         validate_handoff(repo, root, directory, state)
-    if at_least(status, "REVIEWED"):
+    if at_least(status, "VALIDATING"):
         review_names = ["review"]
         if any(
             work_item["risk_flags"].get(flag, False)
@@ -234,7 +238,7 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
             review_path = require_artifact(state, directory, name)
             review = validate_json_file(review_path, root / "schemas" / "review.schema.json")
             if review["verdict"] != "ACCEPT":
-                raise RuleFailure("REVIEWED requires every mandated Review to ACCEPT")
+                raise RuleFailure("VALIDATING requires every mandated Review to ACCEPT")
             validate_review(repo, root, directory, state, review, work_item)
             if review["reviewer_session_id"] in reviewer_ids:
                 raise RuleFailure("mandated Reviews must use distinct Reviewer sessions")
@@ -246,28 +250,54 @@ def validate(repo: Path, task_id: str) -> dict[str, Any]:
         )
         if validation["verdict"] != "PASS":
             raise RuleFailure("VERIFIED requires a PASS Validation")
-        expected = {item["id"] for item in work_item["acceptance"]}
-        actual = {
-            item["acceptance_id"]
-            for item in validation["acceptance_results"]
-            if item["result"] == "PASS"
-        }
-        if actual != expected:
-            raise RuleFailure("Validation does not PASS every acceptance criterion exactly once")
-        if validation["subject_diff_hash"] != state["subject"]["diff_hash"]:
-            raise RuleFailure("Validation targets the wrong subject")
+        validate_acceptance_coverage(work_item, validation)
+        if (
+            validation["task_id"] != task_id
+            or validation["work_item_revision"] != state["current_revision"]
+            or validation["artifact_attempt"] != implementation["artifact_attempt"]
+            or validation["subject_base_commit"] != state["subject"]["base_commit"]
+            or validation["subject_head_commit"] != state["subject"]["head_commit"]
+            or validation["subject_diff_hash"] != state["subject"]["diff_hash"]
+        ):
+            raise RuleFailure("Validation targets the wrong revision or subject")
     if status == "CLOSED":
         result_path = require_artifact(state, directory, "result")
         result = validate_json_file(result_path, root / "schemas" / "result.schema.json")
         if (
-            result["work_item_revision"] != state["current_revision"]
+            result["task_id"] != task_id
+            or result["work_item_revision"] != state["current_revision"]
+            or result["subject_base_commit"] != state["subject"]["base_commit"]
+            or result["subject_head_commit"] != state["subject"]["head_commit"]
             or result["subject_diff_hash"] != state["subject"]["diff_hash"]
         ):
             raise RuleFailure("Result targets the wrong revision or subject")
         if state["rigor"] == "R2":
             require_artifact(state, directory, "final_approval")
 
-    return {"message": f"{task_id} is valid at {status}", "task": task_id, "state": status}
+    return {
+        "message": f"{task_id} is valid at {projected_status}",
+        "task": task_id,
+        "state": projected_status,
+    }
+
+
+def validate(repo: Path, task_id: str) -> dict[str, Any]:
+    root = protocol_root(repo)
+    directory = task_dir(repo, task_id)
+    state_file = task_state_path(directory)
+    state = validate_json_file(state_file, root / "schemas" / "task-state.schema.json")
+    event_schema = read_json(root / "schemas" / "event.schema.json")
+    for event in load_events_checked(events_path(directory)):
+        errors = validate_schema(event, event_schema)
+        if errors:
+            raise RuleFailure(
+                f"event {event.get('sequence')} failed schema validation:\n- "
+                + "\n- ".join(errors)
+            )
+    rebuilt = rebuild_state_value(events_path(directory))
+    if rebuilt != state:
+        raise RuleFailure("state.json does not match the state reconstructed from events.jsonl")
+    return validate_projection(repo, task_id, state)
 
 
 def main() -> int:
