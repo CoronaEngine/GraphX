@@ -21,7 +21,12 @@ from internal.code_intelligence_protocol import (  # noqa: E402
     select_provider,
     validate_record_value,
 )
-from internal.polaris_core import InputFailure, RuleFailure, file_sha256  # noqa: E402
+from internal.polaris_core import (  # noqa: E402
+    InputFailure,
+    RuleFailure,
+    file_sha256,
+    subject_diff_hash,
+)
 
 
 def completed(
@@ -241,9 +246,13 @@ class CodeGraphTests(unittest.TestCase):
         value["source_fallbacks"][0]["observed_sha256"] = digest
         value["source_fallbacks"][0]["action"] = "INSPECT_GIT_DIFF"
         value["source_fallbacks"][0]["observed_sha256"] = None
-        with self.assertRaisesRegex(RuleFailure, "INSPECT_GIT_DIFF fallback requires"):
+        with self.assertRaisesRegex(RuleFailure, "cannot describe an existing file"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
         value = self.v2_record()
+        value["provider"] = {
+            "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+            "available_operations": ["sync"],
+        }
         value["sync"] = {"status": "SUCCESS", "response_sha256": None, "error": None}
         with self.assertRaisesRegex(RuleFailure, "successful Code Intelligence sync requires"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
@@ -267,6 +276,98 @@ class CodeGraphTests(unittest.TestCase):
         }
         with self.assertRaises(RuleFailure):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+    def test_inspect_git_diff_is_only_valid_for_missing_stale_files(self) -> None:
+        self.initialize_task()
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, capture_output=True,
+            check=True, encoding="utf-8", text=True,
+        ).stdout.strip()
+        source = self.repo / "src/widget.py"
+        source.parent.mkdir()
+        source.write_text("value = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "src/widget.py"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add widget"], cwd=self.repo, check=True
+        )
+        added_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, capture_output=True,
+            check=True, encoding="utf-8", text=True,
+        ).stdout.strip()
+        value = self.v2_record()
+        value.update({
+            "status": "SKIPPED",
+            "target": {
+                "base_commit": base,
+                "head_commit": added_head,
+                "diff_hash": subject_diff_hash(self.repo, base, added_head),
+            },
+            "freshness": {
+                "status": "PARTIAL_STALE",
+                "checked_at": "2026-08-18T00:00:00Z",
+                "basis": ["RESPONSE_BANNER"],
+                "stale_points": [{
+                    "scope": "FILE", "path": "src/widget.py", "reason": "PENDING_SYNC",
+                    "fallback": "INSPECT_GIT_DIFF", "observed_sha256": None,
+                }],
+            },
+            "source_fallbacks": [{
+                "action": "INSPECT_GIT_DIFF", "path": "src/widget.py",
+                "observed_sha256": None, "base_commit": base, "head_commit": added_head,
+                "diff_hash": subject_diff_hash(self.repo, base, added_head), "purpose": "inspect change",
+            }],
+        })
+        with self.assertRaisesRegex(RuleFailure, "existing file"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        source.unlink()
+        subprocess.run(["git", "add", "-u"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "delete widget"], cwd=self.repo, check=True
+        )
+        deleted_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, capture_output=True,
+            check=True, encoding="utf-8", text=True,
+        ).stdout.strip()
+        value["target"] = {
+            "base_commit": base,
+            "head_commit": deleted_head,
+            "diff_hash": subject_diff_hash(self.repo, base, deleted_head),
+        }
+        value["source_fallbacks"][0].update({
+            "base_commit": base,
+            "head_commit": deleted_head,
+            "diff_hash": subject_diff_hash(self.repo, base, deleted_head),
+        })
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
+
+    def test_sync_evidence_requires_advertised_sync_capability(self) -> None:
+        self.initialize_task()
+        value = self.v2_record()
+        value.update({
+            "status": "USED",
+            "provider": {
+                "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                "available_operations": ["status"],
+            },
+            "sync": {"status": "SUCCESS", "response_sha256": "0" * 64, "error": None},
+            "freshness": {
+                "status": "CURRENT_AT_CHECK",
+                "checked_at": "2026-08-18T00:00:00Z",
+                "basis": ["SYNC_ACKNOWLEDGED"],
+                "stale_points": [],
+            },
+        })
+        with self.assertRaisesRegex(RuleFailure, "sync capability"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["provider"] = {
+            "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+            "available_operations": ["sync"],
+        }
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
 
     def test_official_descriptor_uses_explore_status_and_sync(self) -> None:
         descriptor = load_providers(ROOT)["codegraph"]

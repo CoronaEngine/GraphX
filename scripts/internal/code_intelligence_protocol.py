@@ -463,7 +463,8 @@ def _validate_source_fallbacks(
         elif action == "INSPECT_GIT_DIFF":
             if not isinstance(path, str) or digest is not None:
                 raise RuleFailure("INSPECT_GIT_DIFF fallback requires a null SHA")
-            resolve_repo_reference(repo, path)
+            if resolve_repo_reference(repo, path).is_file():
+                raise RuleFailure("INSPECT_GIT_DIFF fallback cannot describe an existing file")
             if head is None or (
                 fallback["base_commit"] != base
                 or fallback["head_commit"] != head
@@ -572,6 +573,10 @@ def _validate_v2_record_value(
                 raise RuleFailure(f"Code Intelligence symbol path is not a file: {symbol['path']}")
     sync = value["sync"]
     if sync is not None:
+        if sync["status"] != "UNAVAILABLE" and (
+            provider is None or "sync" not in provider["available_operations"]
+        ):
+            raise RuleFailure("Code Intelligence sync evidence requires sync capability")
         if sync["status"] == "SUCCESS":
             if sync["response_sha256"] is None or "SYNC_ACKNOWLEDGED" not in value["freshness"]["basis"]:
                 raise RuleFailure("successful Code Intelligence sync requires a response hash and SYNC_ACKNOWLEDGED basis")
