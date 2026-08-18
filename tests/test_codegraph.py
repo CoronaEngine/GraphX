@@ -1062,7 +1062,7 @@ For accurate content of those specific files, Read them directly.
             )
 
             call_log = fixture_root / "codegraph-calls.jsonl"
-            executable = fake_bin / "codegraph"
+            executable = fake_bin / "codegraph.py"
             write_text_atomic(
                 executable,
                 """#!/usr/bin/env python3
@@ -1096,9 +1096,20 @@ else:
     raise SystemExit(2)
 """,
             )
-            executable.chmod(0o755)
+            descriptor_path = (
+                repo
+                / "tools/polaris/providers/code-intelligence/codegraph.json"
+            )
+            descriptor_bytes = descriptor_path.read_bytes()
+            runtime_descriptor = json.loads(descriptor_bytes)
+            runtime_descriptor["cli"] = {
+                "executable": sys.executable,
+                "explore_args": [str(executable), "explore"],
+                "status_args": [str(executable), "status", "--json"],
+                "sync_args": [str(executable), "sync", "--quiet"],
+            }
+            write_json_atomic(descriptor_path, runtime_descriptor)
             environment = os.environ.copy()
-            environment["PATH"] = str(fake_bin) + os.pathsep + environment["PATH"]
             environment["POLARIS_FAKE_CODEGRAPH_LOG"] = str(call_log)
 
             registration = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))[
@@ -1145,6 +1156,7 @@ else:
                 capture_output=True,
                 check=False,
             )
+            descriptor_path.write_bytes(descriptor_bytes)
             self.assertEqual(mcp.returncode, 0, mcp.stderr)
             responses = [json.loads(line) for line in mcp.stdout.splitlines()]
             self.assertEqual([response["id"] for response in responses], [1, 2])
