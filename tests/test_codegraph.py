@@ -1802,3 +1802,30 @@ For accurate content of those specific files, Read them directly.
         payload = json.loads(completed_process.stdout)
         self.assertEqual(payload["status"], "ERROR")
         self.assertIn("symlink", payload["message"])
+
+    @unittest.skipUnless(shutil.which("codegraph"), "codegraph CLI is not installed")
+    def test_real_codegraph_status_shape_when_cli_is_available(self) -> None:
+        """The optional CLI smoke test may initialize only its disposable repository."""
+        temporary_repo = Path(self.temp.name).resolve()
+        self.assertEqual(self.repo.resolve(), temporary_repo)
+        self.assertNotEqual(temporary_repo, ROOT.resolve())
+        self.assertTrue(temporary_repo.is_relative_to(Path(tempfile.gettempdir()).resolve()))
+
+        source = self.repo / "sample.py"
+        source.write_text("def sample():\n    return 1\n", encoding="utf-8")
+        subprocess.run(
+            ["codegraph", "init", str(temporary_repo)],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=120,
+            shell=False,
+        )
+
+        descriptor = load_providers(ROOT)["codegraph"]
+        result = self.adapter_module().inspect_status(
+            temporary_repo, descriptor, timeout_seconds=30
+        )
+        self.assertEqual(result["status"], "CURRENT_AT_CHECK")
