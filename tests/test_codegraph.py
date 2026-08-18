@@ -296,6 +296,82 @@ class CodeGraphTests(unittest.TestCase):
         with self.assertRaises(RuleFailure):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
 
+        for sync in (
+            {"status": "SKIPPED", "response_sha256": None, "error": None},
+            {"status": "SUCCESS", "response_sha256": "0" * 64, "error": None},
+            {"status": "FAILED", "response_sha256": None, "error": "sync failed"},
+            {"status": "UNAVAILABLE", "response_sha256": "0" * 64, "error": None},
+            {"status": "UNAVAILABLE", "response_sha256": None, "error": "unavailable"},
+        ):
+            with self.subTest(sync=sync["status"]):
+                value = self.v2_record()
+                value["sync"] = sync
+                with self.assertRaises(RuleFailure):
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+    def test_unavailable_sync_results_project_to_v2_records(self) -> None:
+        self.initialize_task()
+        _, sync_if_needed = self.adapter_functions()
+        descriptor = load_providers(ROOT)["codegraph"]
+
+        unavailable = sync_if_needed(
+            self.repo,
+            descriptor,
+            runner=lambda *args, **kwargs: self.fail("runner must not be called"),
+        )
+        self.assertEqual(unavailable["freshness"]["status"], "UNAVAILABLE")
+        self.assertEqual(unavailable["sync"], {
+            "status": "UNAVAILABLE", "response_sha256": None, "error": None,
+        })
+        value = self.v2_record()
+        value["sync"] = unavailable["sync"]
+        value["freshness"] = {
+            key: unavailable["freshness"][key]
+            for key in ("status", "checked_at", "basis", "stale_points")
+        }
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
+
+        unsafe_descriptor = dict(descriptor)
+        unsafe_descriptor["project_marker"] = ".."
+        unsafe = sync_if_needed(
+            self.repo,
+            unsafe_descriptor,
+            runner=lambda *args, **kwargs: self.fail("runner must not be called"),
+        )
+        self.assertEqual(unsafe["freshness"]["status"], "NOT_VERIFIED")
+        self.assertEqual(unsafe["sync"], {
+            "status": "UNAVAILABLE", "response_sha256": None, "error": None,
+        })
+        value = self.v2_record()
+        value.update({
+            "status": "FAILED",
+            "provider": {
+                "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                "available_operations": ["status"],
+            },
+            "status_check": {
+                "status": "FAILED", "phase": "STAGE_ENTRY",
+                "response_sha256": unsafe["freshness"]["status_response_sha256"],
+                "error": unsafe["freshness"]["error"],
+            },
+            "sync": unsafe["sync"],
+            "freshness": {
+                key: unsafe["freshness"][key]
+                for key in ("status", "checked_at", "basis", "stale_points")
+            },
+            "source_fallbacks": [{
+                "action": "SEARCH_SOURCE", "path": None,
+                "observed_sha256": None, "base_commit": None,
+                "head_commit": None, "diff_hash": None,
+                "purpose": "recover unavailable CodeGraph evidence",
+            }],
+        })
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+        )
+
     def test_inspect_git_diff_is_only_valid_for_missing_stale_files(self) -> None:
         self.initialize_task()
         base = subprocess.run(

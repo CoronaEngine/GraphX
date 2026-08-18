@@ -542,7 +542,10 @@ def _validate_v2_freshness(
     if status == "UNAVAILABLE":
         if freshness["basis"] != ["NONE"] or points:
             raise RuleFailure("UNAVAILABLE freshness must use NONE with no stale points")
-        if value["sync"] is not None or any(
+        if (
+            value["sync"] is not None
+            and value["sync"]["status"] != "UNAVAILABLE"
+        ) or any(
             item["status"] != "UNAVAILABLE" for item in value["queries"]
         ):
             raise RuleFailure("UNAVAILABLE record contains an attempted query or sync")
@@ -610,6 +613,10 @@ def _validate_v2_record_value(
                 raise RuleFailure("successful Code Intelligence sync requires a response hash and SYNC_ACKNOWLEDGED basis")
         if sync["status"] == "FAILED" and not sync["error"]:
             raise RuleFailure("failed Code Intelligence sync lacks error")
+        if sync["status"] == "UNAVAILABLE" and (
+            sync["response_sha256"] is not None or sync["error"] is not None
+        ):
+            raise RuleFailure("unavailable Code Intelligence sync cannot contain response or error evidence")
     freshness = value["freshness"]
     status_check_success = status_check is not None and status_check["status"] == "SUCCESS"
     status_check_evidence = status_check is not None and status_check["status"] in {

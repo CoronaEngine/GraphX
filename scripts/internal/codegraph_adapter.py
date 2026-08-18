@@ -489,6 +489,9 @@ def sync_if_needed(
         repo, descriptor, runner=runner, timeout_seconds=status_timeout
     )
     skipped = _sync_result("SKIPPED", None, None)
+    unavailable = _sync_result("UNAVAILABLE", None, None)
+    if initial["status"] == "UNAVAILABLE" or _marker_path(repo, descriptor) is None:
+        return {"freshness": initial, "sync": unavailable}
     if not initial["needs_sync"]:
         return {"freshness": initial, "sync": skipped}
 
