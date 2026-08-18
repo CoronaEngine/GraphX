@@ -3544,6 +3544,46 @@ enabled_tools = ["polaris_codegraph_explore"]
             claude,
         )
 
+    def test_project_mcp_registration_imports_without_python_311_tomllib(
+        self,
+    ) -> None:
+        """Python 3.10 can register the managed Codex block without a dependency."""
+        script = f"""
+import builtins
+import sys
+
+real_import = builtins.__import__
+
+def import_without_tomllib(name, *args, **kwargs):
+    if name == "tomllib":
+        raise ModuleNotFoundError("simulated Python 3.10")
+    return real_import(name, *args, **kwargs)
+
+builtins.__import__ = import_without_tomllib
+sys.path.insert(0, {str(SCRIPTS)!r})
+from internal.project_mcp_registration import _parse_toml
+
+value = _parse_toml(
+    'model = "gpt-5"\\n'
+    '[mcp_servers.polaris-codegraph]\\n'
+    'command = "python3"\\n'
+    'args = ["tools/polaris/scripts/code_intelligence_mcp.py", "--repo", "."]\\n'
+    'cwd = "."\\n'
+    'enabled = true\\n'
+    'required = false\\n'
+    'enabled_tools = ["polaris_codegraph_explore"]\\n'
+)
+assert value["mcp_servers"]["polaris-codegraph"]["command"] == "python3"
+"""
+        completed_process = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(completed_process.returncode, 0, completed_process.stderr)
+
     def test_project_mcp_registration_rejects_unsafe_or_conflicting_configuration(
         self,
     ) -> None:

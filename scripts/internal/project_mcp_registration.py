@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import re
-import tomllib
 from pathlib import Path
 from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 compatibility
+    tomllib = None  # type: ignore[assignment]
 
 from .path_security import confined_target, require_regular_file
 from .polaris_core import InputFailure, RuleFailure
@@ -66,7 +70,170 @@ def _codex_block(adapter: dict[str, Any]) -> str:
     )
 
 
+def _strip_toml_comment(line: str) -> str:
+    quote: str | None = None
+    escaped = False
+    for index, character in enumerate(line):
+        if quote == '"':
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+        elif quote == "'":
+            if character == quote:
+                quote = None
+        elif character in {'"', "'"}:
+            quote = character
+        elif character == "#":
+            return line[:index]
+    return line
+
+
+def _toml_key_path(source: str) -> tuple[str, ...]:
+    parts: list[str] = []
+    position = 0
+    while position < len(source):
+        while position < len(source) and source[position].isspace():
+            position += 1
+        if position == len(source):
+            break
+        if source[position] in {'"', "'"}:
+            quote = source[position]
+            start = position
+            position += 1
+            escaped = False
+            while position < len(source):
+                character = source[position]
+                if quote == '"' and escaped:
+                    escaped = False
+                elif quote == '"' and character == "\\":
+                    escaped = True
+                elif character == quote:
+                    position += 1
+                    break
+                position += 1
+            else:
+                raise ValueError("unterminated quoted key")
+            token = source[start:position]
+            try:
+                value = json.loads(token) if quote == '"' else token[1:-1]
+            except json.JSONDecodeError as exc:
+                raise ValueError("invalid quoted key") from exc
+            parts.append(value)
+        else:
+            match = re.match(r"[A-Za-z0-9_-]+", source[position:])
+            if match is None:
+                raise ValueError("invalid bare key")
+            parts.append(match.group(0))
+            position += len(match.group(0))
+        while position < len(source) and source[position].isspace():
+            position += 1
+        if position == len(source):
+            break
+        if source[position] != ".":
+            raise ValueError("invalid dotted key")
+        position += 1
+    if not parts:
+        raise ValueError("empty key")
+    return tuple(parts)
+
+
+def _find_toml_assignment(line: str) -> int | None:
+    quote: str | None = None
+    escaped = False
+    for index, character in enumerate(line):
+        if quote == '"':
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+        elif quote == "'":
+            if character == quote:
+                quote = None
+        elif character in {'"', "'"}:
+            quote = character
+        elif character == "=":
+            return index
+    return None
+
+
+def _toml_compat_value(source: str) -> Any:
+    value = source.strip()
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _parse_toml_compat(source: str) -> dict[str, Any]:
+    """Extract MCP tables on Python 3.10 while preserving unrelated TOML bytes."""
+    result: dict[str, Any] = {}
+    current_table: tuple[str, ...] = ()
+    declared_tables: set[tuple[str, ...]] = set()
+    assigned_keys: set[tuple[str, ...]] = set()
+
+    def ensure_table(path: tuple[str, ...]) -> dict[str, Any]:
+        node = result
+        for part in path:
+            existing = node.get(part)
+            if existing is None:
+                existing = {}
+                node[part] = existing
+            if not isinstance(existing, dict):
+                raise ValueError("table conflicts with a scalar value")
+            node = existing
+        return node
+
+    for raw_line in source.splitlines():
+        line = _strip_toml_comment(raw_line).strip()
+        if not line:
+            continue
+        if line.startswith("["):
+            array_table = line.startswith("[[")
+            closing = "]]" if array_table else "]"
+            opening_length = 2 if array_table else 1
+            if not line.endswith(closing):
+                raise ValueError("malformed table header")
+            current_table = _toml_key_path(line[opening_length:-len(closing)])
+            if current_table in declared_tables:
+                raise ValueError("duplicate table")
+            declared_tables.add(current_table)
+            if current_table[0] == "mcp_servers":
+                ensure_table(current_table)
+            continue
+        assignment = _find_toml_assignment(line)
+        if assignment is None:
+            # Unrelated multiline TOML values are preserved byte-for-byte. The
+            # managed block emitted below never uses multiline values.
+            continue
+        key_path = _toml_key_path(line[:assignment])
+        full_path = (*current_table, *key_path)
+        if full_path in assigned_keys:
+            raise ValueError("duplicate key")
+        assigned_keys.add(full_path)
+        if not full_path or full_path[0] != "mcp_servers":
+            continue
+        parent = ensure_table(full_path[:-1])
+        if full_path[-1] in parent:
+            raise ValueError("key conflicts with a table")
+        parent[full_path[-1]] = _toml_compat_value(line[assignment + 1 :])
+    return result
+
+
 def _parse_toml(source: str) -> dict[str, Any]:
+    if tomllib is None:
+        try:
+            return _parse_toml_compat(source)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise RuleFailure(f"project MCP TOML is invalid: {exc}") from exc
     try:
         value = tomllib.loads(source)
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:

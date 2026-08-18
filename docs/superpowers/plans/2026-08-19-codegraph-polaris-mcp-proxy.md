@@ -6,7 +6,7 @@
 
 **Architecture:** Extend the existing CodeGraph CLI adapter with reusable status/sync/explore primitives, then place a host-neutral proxy orchestration module above it. A thin standard-library stdio MCP entry point exposes only `polaris_codegraph_explore`; host adapter v3 renders project-local registrations for Codex and Claude Code. New v3 records copy and validate the proxy bundle while frozen v1/v2 schemas remain readable historical formats.
 
-**Tech Stack:** Python 3.11+ standard library (`argparse`, `hashlib`, `json`, `subprocess`, `tomllib`, `unittest`), JSON Schema through Polaris's existing validator, JSON-RPC 2.0/MCP stdio protocol revision `2025-11-25`, Git, GitHub Actions.
+**Tech Stack:** Python 3.10+ standard library (`argparse`, `hashlib`, `json`, `subprocess`, `unittest`; `tomllib` when available), JSON Schema through Polaris's existing validator, JSON-RPC 2.0/MCP stdio protocol revision `2025-11-25`, Git, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-08-18-codegraph-polaris-mcp-proxy-design.md`
 
@@ -662,7 +662,7 @@ Assert idempotent rerendering, exact managed-block replacement, malformed TOML/J
 
 - [ ] **Step 5: Implement format-specific merge/validation in one focused module**
 
-Use `tomllib.loads` to validate full TOML before and after replacing the uniquely marked block; never rewrite unrelated TOML bytes. Use `json.loads` plus four-space `json.dumps(..., ensure_ascii=False, indent=4) + "\n"` for Claude. A same-name Claude entry is accepted only if it exactly equals the managed definition; otherwise raise `RuleFailure`.
+Use `tomllib.loads` when available to validate full TOML before and after replacing the uniquely marked block. On Python 3.10, use the standard-library-only compatibility path to validate and extract the managed MCP tables while preserving unrelated TOML bytes; never rewrite unrelated TOML bytes. Use `json.loads` plus four-space `json.dumps(..., ensure_ascii=False, indent=4) + "\n"` for Claude. A same-name Claude entry is accepted only if it exactly equals the managed definition; otherwise raise `RuleFailure`.
 
 - [ ] **Step 6: Integrate registration into the vendor transaction**
 
