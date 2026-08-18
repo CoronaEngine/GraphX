@@ -89,7 +89,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
     except (RuleFailure, InputFailure) as exc:
         working_set_status = {"available": False, "reason": str(exc)}
     live_progress: dict[str, Any] | None = None
-    if state["status"] in {"IMPLEMENTING", "IMPLEMENTED"}:
+    if state["status"] == "IMPLEMENTING":
         task_progress_path = progress_path(directory)
         if task_progress_path.is_file():
             try:

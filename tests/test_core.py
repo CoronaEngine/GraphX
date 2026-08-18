@@ -43,6 +43,7 @@ from internal.install_manifest import (  # noqa: E402
     TEXT_HASH_MODE,
     managed_file_sha256,
 )
+from internal.migration_protocol import map_migrated_status  # noqa: E402
 from build_working_set import build as build_working_set  # noqa: E402
 from build_implementation_handoff import build as build_implementation_handoff  # noqa: E402
 from build_review_handoff import build as build_review_handoff  # noqa: E402
@@ -172,6 +173,55 @@ class PolarisCoreTests(unittest.TestCase):
     def task(self) -> Path:
         return self.repo / ".polaris" / "tasks" / "TASK-0001"
 
+    def test_workflow_013_contains_only_governance_states(self) -> None:
+        """0.1.3 只持久化具有独立治理边界的状态和转换。"""
+        workflow = read_json(ROOT / "workflow" / "default-workflow.json")
+        self.assertEqual(workflow["workflow_version"], "0.1.3")
+        self.assertNotIn("IMPLEMENTED", workflow["states"])
+        self.assertNotIn("DOCS_SYNCED", workflow["states"])
+        self.assertNotIn("REVIEWED", workflow["states"])
+        events = {item["event"]: item for item in workflow["transitions"]}
+        self.assertNotIn("DISPATCH_IMPLEMENTATION", events)
+        self.assertNotIn("FINISH_IMPLEMENTATION", events)
+        self.assertNotIn("SYNC_DOCS", events)
+        self.assertNotIn("START_VALIDATION", events)
+        self.assertEqual(
+            events["START_IMPLEMENTATION"]["from"],
+            ["PLANNED", "IMPLEMENTING"],
+        )
+        self.assertEqual(events["START_REVIEW"]["from"], ["IMPLEMENTING"])
+        self.assertEqual(events["ACCEPT_REVIEW"]["to"], "VALIDATING")
+        self.assertEqual(events["PASS_AND_CLOSE"]["to"], "CLOSED")
+
+    def test_workflow_surfaces_use_simplified_events(self) -> None:
+        """执行 Skills 与恢复入口不再指示已删除的状态或事件。"""
+        surfaces = [
+            ROOT / "skills" / "engineering-task" / "SKILL.md",
+            ROOT / "skills" / "implementation" / "SKILL.md",
+            ROOT / "skills" / "documentation-sync" / "SKILL.md",
+            ROOT / "skills" / "validation" / "SKILL.md",
+            ROOT / "scripts" / "internal" / "recovery_protocol.py",
+            ROOT / "scripts" / "recover_task.py",
+            ROOT / "hosts" / "claude-code" / "agents" / "polaris-implementer.md",
+        ]
+        retired = {
+            "DISPATCH_IMPLEMENTATION",
+            "FINISH_IMPLEMENTATION",
+            "SYNC_DOCS",
+            "START_VALIDATION",
+            '"IMPLEMENTED"',
+            '"DOCS_SYNCED"',
+            '"REVIEWED"',
+        }
+        for path in surfaces:
+            text = path.read_text(encoding="utf-8")
+            for value in retired:
+                self.assertNotIn(value, text, path.relative_to(ROOT).as_posix())
+        validation = (ROOT / "skills" / "validation" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("PASS_AND_CLOSE", validation)
+
     def freeze_work_item(self) -> None:
         path = self.task / "revisions" / "work-item-r001.json"
         value = read_json(path)
@@ -189,6 +239,28 @@ class PolarisCoreTests(unittest.TestCase):
         value["implementation_dispatch"]["authorized"] = True
         value["review_dispatch"]["authorized"] = True
         write_json_atomic(path, value)
+
+    def set_task_rigor(self, rigor: str) -> None:
+        """Keep the initial Work Item, state, and event projection rigor-aligned."""
+        work_item_path = self.task / "revisions" / "work-item-r001.json"
+        work_item = read_json(work_item_path)
+        work_item["rigor"] = rigor
+        write_json_atomic(work_item_path, work_item)
+        state_path = self.task / "state.json"
+        state = read_json(state_path)
+        state["rigor"] = rigor
+        write_json_atomic(state_path, state)
+        event_path = self.task / "events.jsonl"
+        events = read_jsonl(event_path)
+        for event in events:
+            event["rigor"] = rigor
+        write_text_atomic(
+            event_path,
+            "".join(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for event in events
+            ),
+        )
 
     def set_protocol_version(self, version: str) -> None:
         """Rewrite the minimal test fixture as an older internally consistent project."""
@@ -212,33 +284,42 @@ class PolarisCoreTests(unittest.TestCase):
             ),
         )
 
+    def set_workflow_version(self, version: str) -> None:
+        """Rewrite the project, frozen workflow, and task projection workflow version."""
+        project_path = self.repo / ".polaris" / "project.json"
+        project = read_json(project_path)
+        project["workflow_version"] = version
+        write_json_atomic(project_path, project)
+        workflow_path = self.repo / ".polaris" / "workflow.json"
+        workflow = read_json(workflow_path)
+        workflow["schema_version"] = version
+        workflow["workflow_version"] = version
+        write_json_atomic(workflow_path, workflow)
+        state_path = self.task / "state.json"
+        state = read_json(state_path)
+        state["workflow_version"] = version
+        write_json_atomic(state_path, state)
+        event_path = self.task / "events.jsonl"
+        events = read_jsonl(event_path)
+        for event in events:
+            event["workflow_version"] = version
+        write_text_atomic(
+            event_path,
+            "".join(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for event in events
+            ),
+        )
+
     def dispatch_implementation(self) -> tuple[dict[str, object], dict[str, str]]:
         state = read_json(self.task / "state.json")
         existing = state["artifacts"].get("implementation_handoff")
         if existing is None:
-            result = build_implementation_handoff(self.repo, "TASK-0001")
-            handoff_path = Path(result["path"])
-            transition(
-                self.repo,
-                "TASK-0001",
-                "DISPATCH_IMPLEMENTATION",
-                [
-                    "implementation_handoff="
-                    + handoff_path.relative_to(self.task).as_posix()
-                ],
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            state = read_json(self.task / "state.json")
-            existing = state["artifacts"]["implementation_handoff"]
+            raise AssertionError("Implementation handoff was not registered at stage start")
         handoff_path = self.task / existing["path"]
         return read_json(handoff_path), existing
 
-    def enter_implementing(self) -> None:
+    def enter_planned(self) -> None:
         self.freeze_work_item()
         build_working_set(self.repo, "TASK-0001", True)
         transition(
@@ -260,11 +341,28 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
+
+    def enter_implementing(self) -> None:
+        self.enter_planned()
+        self.register_implementation_handoff()
+
+    def register_implementation_handoff(self) -> dict[str, object]:
+        """Register the next deterministic handoff for initial work or rework."""
+        handoff = build_implementation_handoff(self.repo, "TASK-0001")
+        handoff_path = Path(handoff["path"])
+        artifacts = [
+            "implementation_handoff=" + handoff_path.relative_to(self.task).as_posix()
+        ]
+        if read_json(self.task / "state.json")["rigor"] == "R2":
+            approval_path = self.task / "approvals" / "r001" / "pre-approval.txt"
+            approval_path.parent.mkdir(parents=True, exist_ok=True)
+            approval_path.write_text("Approved before implementation\n", encoding="utf-8")
+            artifacts.append("pre_approval=approvals/r001/pre-approval.txt")
         transition(
             self.repo,
             "TASK-0001",
             "START_IMPLEMENTATION",
-            [],
+            artifacts,
             None,
             None,
             None,
@@ -272,6 +370,35 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
+        return handoff
+
+    def test_start_implementation_atomically_registers_handoff(self) -> None:
+        """START_IMPLEMENTATION 同时校验并注册不可变 Implementer 输入。"""
+        self.enter_implementing()
+        state = read_json(self.task / "state.json")
+        self.assertEqual(state["status"], "IMPLEMENTING")
+        self.assertIn("implementation_handoff", state["artifacts"])
+        with self.assertRaisesRegex(RuleFailure, "unknown workflow event"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "DISPATCH_IMPLEMENTATION",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+    def test_recovery_allows_implementing_without_live_progress(self) -> None:
+        """Fresh-session 恢复把缺失进度视为无遥测，而不是流程 blocker。"""
+        self.enter_implementing()
+        self.assertFalse((self.task / "runtime" / "progress.json").exists())
+        recovered = recover(self.repo, "TASK-0001")
+        self.assertIsNone(recovered["live_implementation_progress"])
+        self.assertIn("START_REVIEW", recovered["recommended_next_action"])
 
     def implementation_value(
         self, base: str, head: str, session_id: str
@@ -324,6 +451,31 @@ class PolarisCoreTests(unittest.TestCase):
         )
         return value
 
+    def implementation_value_without_progress(
+        self, base: str, head: str, session_id: str
+    ) -> dict[str, object]:
+        handoff, reference = self.dispatch_implementation()
+        value = read_json(template_path(ROOT, "implementation"))
+        value.update(
+            {
+                "artifact_attempt": handoff["artifact_attempt"],
+                "implementer_session_id": session_id,
+                "implementation_handoff_path": reference["path"],
+                "implementation_handoff_sha256": reference["sha256"],
+                "subject_base_commit": base,
+                "subject_head_commit": head,
+                "subject_diff_hash": subject_diff_hash(self.repo, base, head),
+                "step_results": [
+                    {
+                        "id": "STEP-001",
+                        "status": "COMPLETED",
+                        "result": "Implemented and checked the accepted change",
+                    }
+                ],
+            }
+        )
+        return value
+
     def knowledge_value(
         self, attempt: int, base: str, head: str
     ) -> dict[str, object]:
@@ -338,23 +490,78 @@ class PolarisCoreTests(unittest.TestCase):
         )
         return value
 
-    def start_review(
+    def enter_reviewing_without_progress(
         self,
-        implementer_session_id: str = "impl-session",
-        isolation: str = "fresh_session",
     ) -> tuple[dict[str, object], dict[str, object]]:
+        """Build and register the durable review package without runtime telemetry."""
+        self.enter_implementing()
+        base = run_git(self.repo, "rev-parse", "HEAD")
+        (self.repo / "subject.txt").write_text("final subject\n", encoding="utf-8")
+        run_git(self.repo, "add", "subject.txt")
+        run_git(self.repo, "commit", "-q", "-m", "final subject")
+        head = run_git(self.repo, "rev-parse", "HEAD")
+
+        implementation_path = (
+            self.task / "implementations" / "r001" / "attempt-001.json"
+        )
+        write_json_atomic(
+            implementation_path,
+            self.implementation_value_without_progress(base, head, "impl-session"),
+        )
+        knowledge_path = (
+            self.task / "knowledge" / "r001" / "knowledge-delta-001.json"
+        )
+        knowledge = self.knowledge_value(1, base, head)
+        knowledge["entries"][0].update(
+            {
+                "changed_paths": ["subject.txt"],
+                "evidence": "No project documentation impact",
+            }
+        )
+        write_json_atomic(knowledge_path, knowledge)
+
         handoff_result = build_review_handoff(
             self.repo,
             "TASK-0001",
-            implementer_session_id,
-            isolation,
+            "impl-session",
+            "fresh_session",
+            implementation_path,
+            knowledge_path,
+            base,
+            head,
         )
         handoff_path = Path(handoff_result["path"])
         transition(
             self.repo,
             "TASK-0001",
             "START_REVIEW",
-            [f"review_handoff={handoff_path.relative_to(self.task).as_posix()}"],
+            [
+                "implementation=implementations/r001/attempt-001.json",
+                "knowledge_delta=knowledge/r001/knowledge-delta-001.json",
+                "review_handoff=" + handoff_path.relative_to(self.task).as_posix(),
+            ],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        return read_json(handoff_path), read_json(self.task / "state.json")
+
+    def accept_current_review(
+        self, handoff: dict[str, object], state: dict[str, object]
+    ) -> dict[str, object]:
+        review_path = self.task / "reviews" / "r001" / "review-001.json"
+        write_json_atomic(
+            review_path,
+            self.review_value(handoff, state, "review-session", "ACCEPT"),
+        )
+        transition(
+            self.repo,
+            "TASK-0001",
+            "ACCEPT_REVIEW",
+            ["review=reviews/r001/review-001.json"],
             None,
             None,
             None,
@@ -362,8 +569,213 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
+        return read_json(self.task / "state.json")
+
+    def start_review(
+        self,
+        implementer_session_id: str = "impl-session",
+        isolation: str = "fresh_session",
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        state = read_json(self.task / "state.json")
+        if state["status"] == "REVIEWING":
+            reference = state["artifacts"]["review_handoff"]
+            return read_json(self.task / reference["path"]), state
+        handoff_result, implementation_path, knowledge_path, base, head = (
+            self.build_current_review_handoff(implementer_session_id, isolation)
+        )
+        handoff_path = Path(handoff_result["path"])
+        transition(
+            self.repo,
+            "TASK-0001",
+            "START_REVIEW",
+            [
+                "implementation=" + implementation_path.relative_to(self.task).as_posix(),
+                "knowledge_delta=" + knowledge_path.relative_to(self.task).as_posix(),
+                "review_handoff=" + handoff_path.relative_to(self.task).as_posix(),
+            ]
+            + (
+                [
+                    "review_response="
+                    + (
+                        self.task
+                        / "reviews"
+                        / "r001"
+                        / f"response-{read_json(implementation_path)['artifact_attempt']:03d}.json"
+                    ).relative_to(self.task).as_posix()
+                ]
+                if (
+                    read_json(implementation_path)["artifact_attempt"] > 1
+                    and (
+                        self.task
+                        / "reviews"
+                        / "r001"
+                        / f"response-{read_json(implementation_path)['artifact_attempt']:03d}.json"
+                    ).is_file()
+                )
+                else []
+            ),
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
         state = read_json(self.task / "state.json")
         return read_json(handoff_path), state
+
+    def build_current_review_handoff(
+        self,
+        implementer_session_id: str = "impl-session",
+        isolation: str = "fresh_session",
+    ) -> tuple[dict[str, object], Path, Path, str, str]:
+        state = read_json(self.task / "state.json")
+        handoff_reference = state["artifacts"]["implementation_handoff"]
+        implementation_handoff = read_json(self.task / handoff_reference["path"])
+        attempt = implementation_handoff["artifact_attempt"]
+        implementation_path = (
+            self.task / "implementations" / "r001" / f"attempt-{attempt:03d}.json"
+        )
+        knowledge_path = (
+            self.task / "knowledge" / "r001" / f"knowledge-delta-{attempt:03d}.json"
+        )
+        implementation = read_json(implementation_path)
+        base = implementation["subject_base_commit"]
+        head = implementation["subject_head_commit"]
+        response_candidate = (
+            self.task / "reviews" / "r001" / f"response-{attempt:03d}.json"
+        )
+        response_path = response_candidate if response_candidate.is_file() else None
+        handoff_result = build_review_handoff(
+            self.repo,
+            "TASK-0001",
+            implementer_session_id,
+            isolation,
+            implementation_path,
+            knowledge_path,
+            base,
+            head,
+            response_path,
+        )
+        return handoff_result, implementation_path, knowledge_path, base, head
+
+    def test_start_review_does_not_require_live_progress(self) -> None:
+        """耐久 Review 门禁不依赖 ignored 的本机进度快照。"""
+        self.enter_implementing()
+        base = run_git(self.repo, "rev-parse", "HEAD")
+        (self.repo / "subject.txt").write_text("final subject\n", encoding="utf-8")
+        run_git(self.repo, "add", "subject.txt")
+        run_git(self.repo, "commit", "-q", "-m", "final subject")
+        head = run_git(self.repo, "rev-parse", "HEAD")
+
+        implementation_path = (
+            self.task / "implementations" / "r001" / "attempt-001.json"
+        )
+        write_json_atomic(
+            implementation_path,
+            self.implementation_value_without_progress(base, head, "impl-session"),
+        )
+        knowledge_path = (
+            self.task / "knowledge" / "r001" / "knowledge-delta-001.json"
+        )
+        knowledge = self.knowledge_value(1, base, head)
+        knowledge["entries"][0].update(
+            {
+                "changed_paths": ["subject.txt"],
+                "evidence": "No project documentation impact",
+            }
+        )
+        write_json_atomic(knowledge_path, knowledge)
+
+        handoff_result = build_review_handoff(
+            self.repo,
+            "TASK-0001",
+            "impl-session",
+            "fresh_session",
+            implementation_path,
+            knowledge_path,
+            base,
+            head,
+        )
+        handoff_path = Path(handoff_result["path"])
+        self.assertFalse((self.task / "runtime" / "progress.json").exists())
+        result = transition(
+            self.repo,
+            "TASK-0001",
+            "START_REVIEW",
+            [
+                "implementation=implementations/r001/attempt-001.json",
+                "knowledge_delta=knowledge/r001/knowledge-delta-001.json",
+                "review_handoff=" + handoff_path.relative_to(self.task).as_posix(),
+            ],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(result["to"], "REVIEWING")
+
+    def test_live_progress_can_document_inside_implementing(self) -> None:
+        """可选实时进度在同一个 IMPLEMENTING 节点内覆盖文档阶段。"""
+        self.enter_implementing()
+        title = "Polaris Implement · TASK-0001 · r001 · attempt 1"
+        update_implementation_progress(
+            self.repo, "TASK-0001", title, "Pending", "INITIALIZE"
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "DEFINE_STEPS",
+            defined_steps=[
+                {"title": "Complete subject", "acceptance_ids": ["AC-01"]}
+            ],
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "START_STEP",
+            step_id="STEP-001",
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "COMPLETE_STEP",
+            step_id="STEP-001",
+            result="Subject and checks completed",
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "SET_PHASE",
+            phase="CHECKPOINTING",
+        )
+        update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "SET_PHASE",
+            phase="DOCUMENTING",
+        )
+        result = update_implementation_progress(
+            self.repo,
+            "TASK-0001",
+            title,
+            "impl-session",
+            "SET_PHASE",
+            phase="COMPLETED",
+        )
+        self.assertEqual(result["value"]["phase"], "COMPLETED")
 
     def review_value(
         self,
@@ -400,6 +812,312 @@ class PolarisCoreTests(unittest.TestCase):
         )
         return review
 
+    def test_review_acceptance_enters_validation_directly(self) -> None:
+        """ACCEPT_REVIEW 直接进入 VALIDATING，不保留空壳 REVIEWED 节点。"""
+        handoff, state = self.enter_reviewing_without_progress()
+        accepted = self.accept_current_review(handoff, state)
+        self.assertEqual(accepted["status"], "VALIDATING")
+        with self.assertRaisesRegex(RuleFailure, "unknown workflow event"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "START_VALIDATION",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+    def test_r1_pass_and_close_validates_candidate_projection(self) -> None:
+        """R1 闭环先完整校验候选 CLOSED 投影，失败时不得写事件或状态。"""
+        handoff, state = self.enter_reviewing_without_progress()
+        validating = self.accept_current_review(handoff, state)
+        subject = validating["subject"]
+
+        validation_path = self.task / "validations" / "r001" / "validation-001.json"
+        validation = read_json(template_path(ROOT, "validation"))
+        validation.update(
+            {
+                "subject_base_commit": subject["base_commit"],
+                "subject_head_commit": subject["head_commit"],
+                "subject_diff_hash": subject["diff_hash"],
+                "validated_at": "2026-08-18T00:00:00Z",
+                "verdict": "PASS",
+                "acceptance_results": [
+                    {
+                        "acceptance_id": "AC-01",
+                        "command_or_check": "state validation",
+                        "cwd": ".",
+                        "environment_summary": "test",
+                        "started_at": "2026-08-18T00:00:00Z",
+                        "exit_code": 0,
+                        "result": "PASS",
+                        "output_path_or_hash": "inline:test",
+                    }
+                ],
+            }
+        )
+        write_json_atomic(validation_path, validation)
+        result_path = self.task / "results" / "r001" / "result-001.json"
+        result = read_json(template_path(ROOT, "result"))
+        result.update(
+            {
+                "subject_base_commit": subject["base_commit"],
+                "subject_head_commit": subject["head_commit"],
+                "subject_diff_hash": subject["diff_hash"],
+                "summary": "Validated smoke task",
+            }
+        )
+        write_json_atomic(result_path, result)
+
+        passing_result = copy.deepcopy(validation["acceptance_results"][0])
+        unknown_result = copy.deepcopy(passing_result)
+        unknown_result["acceptance_id"] = "AC-02"
+        failing_result = copy.deepcopy(passing_result)
+        failing_result["result"] = "FAIL"
+        failing_result["exit_code"] = 1
+        for label, invalid_results in (
+            ("duplicate", [passing_result, copy.deepcopy(passing_result)]),
+            ("unknown", [unknown_result]),
+            ("failure", [failing_result]),
+        ):
+            with self.subTest(invalid_validation=label):
+                validation["acceptance_results"] = invalid_results
+                write_json_atomic(validation_path, validation)
+                with self.assertRaisesRegex(RuleFailure, "exactly once.*PASS"):
+                    transition(
+                        self.repo,
+                        "TASK-0001",
+                        "PASS_AND_CLOSE",
+                        [
+                            "validation=validations/r001/validation-001.json",
+                            "result=results/r001/result-001.json",
+                        ],
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+        validation["acceptance_results"] = [passing_result]
+        validation["acceptance_results"].append(
+            {
+                "acceptance_id": "AC-01",
+                "command_or_check": "contradictory check",
+                "cwd": ".",
+                "environment_summary": "test",
+                "started_at": "2026-08-18T00:00:01Z",
+                "exit_code": 1,
+                "result": "FAIL",
+                "output_path_or_hash": "inline:failure",
+            }
+        )
+        write_json_atomic(validation_path, validation)
+        with self.assertRaisesRegex(RuleFailure, "exactly once.*PASS"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PASS_AND_CLOSE",
+                [
+                    "validation=validations/r001/validation-001.json",
+                    "result=results/r001/result-001.json",
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        validation["acceptance_results"].pop()
+        write_json_atomic(validation_path, validation)
+
+        implementation_path = (
+            self.task / "implementations" / "r001" / "attempt-001.json"
+        )
+        implementation = read_json(implementation_path)
+        original_result = implementation["step_results"][0]["result"]
+        implementation["step_results"][0]["result"] = "tampered after review"
+        write_json_atomic(implementation_path, implementation)
+        sequence = validating["sequence"]
+        with self.assertRaisesRegex(RuleFailure, "changed after.*registered"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PASS_AND_CLOSE",
+                [
+                    "validation=validations/r001/validation-001.json",
+                    "result=results/r001/result-001.json",
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        unchanged = read_json(self.task / "state.json")
+        self.assertEqual(unchanged["status"], "VALIDATING")
+        self.assertEqual(unchanged["sequence"], sequence)
+
+        implementation["step_results"][0]["result"] = original_result
+        write_json_atomic(implementation_path, implementation)
+        closed = transition(
+            self.repo,
+            "TASK-0001",
+            "PASS_AND_CLOSE",
+            [
+                "validation=validations/r001/validation-001.json",
+                "result=results/r001/result-001.json",
+            ],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(closed["to"], "CLOSED")
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "CLOSED")
+
+    def test_r2_keeps_verified_and_final_approval_gate(self) -> None:
+        """R2 必须先到 VERIFIED，再由最终人类批准关闭。"""
+        self.set_task_rigor("R2")
+        handoff, state = self.enter_reviewing_without_progress()
+        validating = self.accept_current_review(handoff, state)
+        subject = validating["subject"]
+
+        validation_path = self.task / "validations" / "r001" / "validation-001.json"
+        validation = read_json(template_path(ROOT, "validation"))
+        validation.update(
+            {
+                "subject_base_commit": subject["base_commit"],
+                "subject_head_commit": subject["head_commit"],
+                "subject_diff_hash": subject["diff_hash"],
+                "validated_at": "2026-08-18T00:00:00Z",
+                "verdict": "PASS",
+                "acceptance_results": [
+                    {
+                        "acceptance_id": "AC-01",
+                        "command_or_check": "state validation",
+                        "cwd": ".",
+                        "environment_summary": "test",
+                        "started_at": "2026-08-18T00:00:00Z",
+                        "exit_code": 0,
+                        "result": "PASS",
+                        "output_path_or_hash": "inline:test",
+                    }
+                ],
+            }
+        )
+        write_json_atomic(validation_path, validation)
+        result_path = self.task / "results" / "r001" / "result-001.json"
+        result = read_json(template_path(ROOT, "result"))
+        result.update(
+            {
+                "subject_base_commit": subject["base_commit"],
+                "subject_head_commit": subject["head_commit"],
+                "subject_diff_hash": subject["diff_hash"],
+                "summary": "Validated R2 smoke task",
+            }
+        )
+        write_json_atomic(result_path, result)
+
+        with self.assertRaisesRegex(RuleFailure, "R2 must pass Validation"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PASS_AND_CLOSE",
+                [
+                    "validation=validations/r001/validation-001.json",
+                    "result=results/r001/result-001.json",
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        validation["acceptance_results"].append(
+            {
+                "acceptance_id": "AC-01",
+                "command_or_check": "contradictory check",
+                "cwd": ".",
+                "environment_summary": "test",
+                "started_at": "2026-08-18T00:00:01Z",
+                "exit_code": 1,
+                "result": "FAIL",
+                "output_path_or_hash": "inline:failure",
+            }
+        )
+        write_json_atomic(validation_path, validation)
+        with self.assertRaisesRegex(RuleFailure, "exactly once.*PASS"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "PASS_VALIDATION",
+                ["validation=validations/r001/validation-001.json"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        validation["acceptance_results"].pop()
+        write_json_atomic(validation_path, validation)
+        verified = transition(
+            self.repo,
+            "TASK-0001",
+            "PASS_VALIDATION",
+            ["validation=validations/r001/validation-001.json"],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(verified["to"], "VERIFIED")
+        with self.assertRaisesRegex(RuleFailure, "final_approval"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "CLOSE",
+                ["result=results/r001/result-001.json"],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+        final_approval = self.task / "approvals" / "r001" / "final-approval.txt"
+        final_approval.write_text("Approved for closure\n", encoding="utf-8")
+        closed = transition(
+            self.repo,
+            "TASK-0001",
+            "CLOSE",
+            [
+                "result=results/r001/result-001.json",
+                "final_approval=approvals/r001/final-approval.txt",
+            ],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(closed["to"], "CLOSED")
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "CLOSED")
+
     def finish_and_reject_attempt(
         self,
         attempt: int,
@@ -408,6 +1126,8 @@ class PolarisCoreTests(unittest.TestCase):
         reviewer_session_id: str,
         finding: dict[str, object],
     ) -> dict[str, object]:
+        if "implementation_handoff" not in read_json(self.task / "state.json")["artifacts"]:
+            self.register_implementation_handoff()
         self.dispatch_implementation()
         (self.repo / "subject.txt").write_text(
             f"review attempt {attempt}\n", encoding="utf-8"
@@ -421,9 +1141,6 @@ class PolarisCoreTests(unittest.TestCase):
         )
         implementation = self.implementation_value(base, head, implementer_session_id)
         write_json_atomic(implementation_path, implementation)
-        artifacts = [
-            f"implementation=implementations/r001/attempt-{attempt:03d}.json"
-        ]
         if attempt > 1:
             prior_reference = read_json(self.task / "state.json")["artifacts"][
                 "prior_review"
@@ -452,19 +1169,6 @@ class PolarisCoreTests(unittest.TestCase):
                 }
             )
             write_json_atomic(response_path, response)
-            artifacts.append(f"review_response=reviews/r001/response-{attempt:03d}.json")
-        transition(
-            self.repo,
-            "TASK-0001",
-            "FINISH_IMPLEMENTATION",
-            artifacts,
-            None,
-            base,
-            head,
-            None,
-            None,
-            None,
-        )
         knowledge_path = (
             self.task
             / "knowledge"
@@ -476,18 +1180,6 @@ class PolarisCoreTests(unittest.TestCase):
             {"changed_paths": ["subject.txt"], "evidence": "No documentation impact"}
         )
         write_json_atomic(knowledge_path, knowledge)
-        transition(
-            self.repo,
-            "TASK-0001",
-            "SYNC_DOCS",
-            [f"knowledge_delta=knowledge/r001/knowledge-delta-{attempt:03d}.json"],
-            None,
-            base,
-            head,
-            None,
-            None,
-            None,
-        )
         handoff, state = self.start_review(implementer_session_id)
         current_finding = copy.deepcopy(finding)
         if attempt > 1:
@@ -1087,11 +1779,15 @@ class PolarisCoreTests(unittest.TestCase):
             with self.assertRaises(RuleFailure):
                 validate(self.repo, "TASK-0001")
 
+        handoff = build_implementation_handoff(self.repo, "TASK-0001")
         transition(
             self.repo,
             "TASK-0001",
             "START_IMPLEMENTATION",
-            [],
+            [
+                "implementation_handoff="
+                + Path(handoff["path"]).relative_to(self.task).as_posix()
+            ],
             None,
             None,
             None,
@@ -1099,7 +1795,6 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
-        handoff = build_implementation_handoff(self.repo, "TASK-0001")
         package = read_json(Path(handoff["path"]))["package"]
         self.assertIn("plan_decisions", {entry["role"] for entry in package})
 
@@ -1392,7 +2087,7 @@ class PolarisCoreTests(unittest.TestCase):
         with self.assertRaisesRegex(RuleFailure, "frozen workflow"):
             require_protocol_compatible(self.repo)
 
-        workflow["workflow_version"] = "0.1.2"
+        workflow["workflow_version"] = "0.1.3"
         write_json_atomic(workflow_path, workflow)
         state = read_json(self.task / "state.json")
         state["polaris_version"] = "0.1.10"
@@ -1401,25 +2096,27 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_explicit_migration_appends_task_event_and_records_completion(self) -> None:
         """相邻版本迁移追加审计事件，不改写任务历史，并留下完成记录。"""
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         vendor(ROOT, self.repo, False)
 
         result = migrate_project(self.repo)
 
-        self.assertEqual(result["from"], "0.1.18")
-        self.assertEqual(result["to"], "0.1.19")
+        self.assertEqual(result["from"], "0.1.19")
+        self.assertEqual(result["to"], "0.1.20")
         self.assertEqual(result["migrated_tasks"], 1)
         events = read_jsonl(self.task / "events.jsonl")
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["polaris_version"], "0.1.18")
+        self.assertEqual(events[0]["polaris_version"], "0.1.19")
         self.assertEqual(events[1]["event"], "MIGRATE_POLARIS")
         self.assertEqual(events[1]["from"], events[1]["to"])
-        self.assertEqual(events[1]["polaris_version"], "0.1.19")
+        self.assertEqual(events[1]["polaris_version"], "0.1.20")
+        self.assertEqual(events[1]["workflow_version"], "0.1.3")
         record = read_json(
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.18-to-0.1.19.json"
+            / "MIG-0.1.19-to-0.1.20.json"
         )
         self.assertEqual(record["status"], "COMPLETED")
         self.assertIsNotNone(record["completed_at"])
@@ -1429,19 +2126,255 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(validate_project(self.repo)["active_tasks"], 1)
 
+    def test_workflow_migration_maps_every_legacy_state(self) -> None:
+        """0.1.2 状态按治理含义映射，BLOCKED 的恢复目标同步转换。"""
+        cases = {
+            "DRAFT": "DRAFT",
+            "QUALIFIED": "QUALIFIED",
+            "PLANNED": "PLANNED",
+            "IMPLEMENTED": "IMPLEMENTING",
+            "DOCS_SYNCED": "IMPLEMENTING",
+            "REVIEWING": "REVIEWING",
+            "REVIEWED": "VALIDATING",
+            "VALIDATING": "VALIDATING",
+            "CLOSED": "CLOSED",
+            "CANCELLED": "CANCELLED",
+        }
+        for legacy, expected in cases.items():
+            with self.subTest(legacy=legacy):
+                self.assertEqual(
+                    map_migrated_status(
+                        {
+                            "status": legacy,
+                            "blocked_from": None,
+                            "artifacts": {},
+                            "rigor": "R1",
+                        }
+                    ),
+                    (expected, None),
+                )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "IMPLEMENTING",
+                    "blocked_from": None,
+                    "artifacts": {},
+                    "rigor": "R1",
+                }
+            ),
+            ("PLANNED", None),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "IMPLEMENTING",
+                    "blocked_from": None,
+                    "artifacts": {"implementation_handoff": {"path": "handoff.json"}},
+                    "rigor": "R1",
+                }
+            ),
+            ("IMPLEMENTING", None),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "BLOCKED",
+                    "blocked_from": "DOCS_SYNCED",
+                    "artifacts": {},
+                    "rigor": "R1",
+                }
+            ),
+            ("BLOCKED", "IMPLEMENTING"),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "VERIFIED",
+                    "blocked_from": None,
+                    "artifacts": {},
+                    "rigor": "R1",
+                }
+            ),
+            ("VALIDATING", None),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "VERIFIED",
+                    "blocked_from": None,
+                    "artifacts": {},
+                    "rigor": "R2",
+                }
+            ),
+            ("VERIFIED", None),
+        )
+        self.assertEqual(
+            map_migrated_status(
+                {
+                    "status": "BLOCKED",
+                    "blocked_from": "VERIFIED",
+                    "artifacts": {},
+                    "rigor": "R0",
+                }
+            ),
+            ("BLOCKED", "VALIDATING"),
+        )
+
+    def test_migration_replaces_frozen_workflow_and_maps_tasks(self) -> None:
+        """0.1.19 迁移替换冻结 workflow，并用单个事件映射旧状态。"""
+        self.enter_implementing()
+        self.set_protocol_version("0.1.19")
+        project_path = self.repo / ".polaris" / "project.json"
+        project = read_json(project_path)
+        project["workflow_version"] = "0.1.2"
+        write_json_atomic(project_path, project)
+        workflow_path = self.repo / ".polaris" / "workflow.json"
+        workflow = read_json(workflow_path)
+        workflow["schema_version"] = "0.1.2"
+        workflow["workflow_version"] = "0.1.2"
+        write_json_atomic(workflow_path, workflow)
+        state_path = self.task / "state.json"
+        state = read_json(state_path)
+        state["status"] = "DOCS_SYNCED"
+        state["workflow_version"] = "0.1.2"
+        write_json_atomic(state_path, state)
+        event_path = self.task / "events.jsonl"
+        events = read_jsonl(event_path)
+        for event in events:
+            event["workflow_version"] = "0.1.2"
+        events[-1]["to"] = "DOCS_SYNCED"
+        write_text_atomic(
+            event_path,
+            "".join(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for event in events
+            ),
+        )
+        vendor(ROOT, self.repo, False)
+
+        result = migrate_project(self.repo)
+
+        self.assertEqual(result["from"], "0.1.19")
+        self.assertEqual(result["to"], "0.1.20")
+        project = read_json(project_path)
+        self.assertEqual(project["polaris_version"], "0.1.20")
+        self.assertEqual(project["workflow_version"], "0.1.3")
+        self.assertEqual(read_json(workflow_path)["workflow_version"], "0.1.3")
+        state = read_json(state_path)
+        self.assertEqual(state["status"], "IMPLEMENTING")
+        event = read_jsonl(event_path)[-1]
+        self.assertEqual(event["from"], "DOCS_SYNCED")
+        self.assertEqual(event["to"], "IMPLEMENTING")
+        self.assertEqual(event["previous_polaris_version"], "0.1.19")
+        self.assertEqual(event["previous_workflow_version"], "0.1.2")
+        record = read_json(
+            self.repo
+            / ".polaris"
+            / "migrations"
+            / "MIG-0.1.19-to-0.1.20.json"
+        )
+        self.assertEqual(record["tasks"][0]["source_status"], "DOCS_SYNCED")
+        self.assertEqual(record["tasks"][0]["target_status"], "IMPLEMENTING")
+
+    def test_migrated_r1_verified_task_can_close(self) -> None:
+        """旧 R1 VERIFIED 回到 VALIDATING 后可用原 Validation 原子关闭。"""
+        handoff, state = self.enter_reviewing_without_progress()
+        validating = self.accept_current_review(handoff, state)
+        subject = validating["subject"]
+        validation_path = self.task / "validations" / "r001" / "validation-001.json"
+        validation = read_json(template_path(ROOT, "validation"))
+        validation.update(
+            {
+                "subject_base_commit": subject["base_commit"],
+                "subject_head_commit": subject["head_commit"],
+                "subject_diff_hash": subject["diff_hash"],
+                "validated_at": "2026-08-18T00:00:00Z",
+                "verdict": "PASS",
+                "acceptance_results": [
+                    {
+                        "acceptance_id": "AC-01",
+                        "command_or_check": "state validation",
+                        "cwd": ".",
+                        "environment_summary": "legacy fixture",
+                        "started_at": "2026-08-18T00:00:00Z",
+                        "exit_code": 0,
+                        "result": "PASS",
+                        "output_path_or_hash": "inline:test",
+                    }
+                ],
+            }
+        )
+        write_json_atomic(validation_path, validation)
+        validation_reference = {
+            "path": "validations/r001/validation-001.json",
+            "sha256": file_sha256(validation_path),
+        }
+        state_path = self.task / "state.json"
+        legacy_state = read_json(state_path)
+        legacy_state["status"] = "VERIFIED"
+        legacy_state["artifacts"]["validation"] = validation_reference
+        write_json_atomic(state_path, legacy_state)
+        event_path = self.task / "events.jsonl"
+        events = read_jsonl(event_path)
+        events[-1]["to"] = "VERIFIED"
+        events[-1]["artifacts"] = legacy_state["artifacts"]
+        write_text_atomic(
+            event_path,
+            "".join(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for event in events
+            ),
+        )
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
+        vendor(ROOT, self.repo, False)
+
+        migrate_project(self.repo)
+
+        migrated = read_json(state_path)
+        self.assertEqual(migrated["status"], "VALIDATING")
+        result_path = self.task / "results" / "r001" / "result-001.json"
+        result = read_json(template_path(ROOT, "result"))
+        result.update(
+            {
+                "subject_base_commit": subject["base_commit"],
+                "subject_head_commit": subject["head_commit"],
+                "subject_diff_hash": subject["diff_hash"],
+                "summary": "Closed after workflow migration",
+            }
+        )
+        write_json_atomic(result_path, result)
+        closed = transition(
+            self.repo,
+            "TASK-0001",
+            "PASS_AND_CLOSE",
+            [
+                "validation=validations/r001/validation-001.json",
+                "result=results/r001/result-001.json",
+            ],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(closed["to"], "CLOSED")
+
     def test_migration_resumes_after_event_append_without_duplication(self) -> None:
         """中断后重跑会采用已追加的迁移事件并完成投影，不重复写事件。"""
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         vendor(ROOT, self.repo, False)
         state = read_json(self.task / "state.json")
         started_at = "2026-08-15T00:00:00Z"
         record = {
-            "record_version": 1,
-            "migration_id": "0.1.18-to-0.1.19",
-            "from_polaris_version": "0.1.18",
-            "to_polaris_version": "0.1.19",
+            "record_version": 2,
+            "migration_id": "0.1.19-to-0.1.20",
+            "from_polaris_version": "0.1.19",
+            "to_polaris_version": "0.1.20",
             "from_workflow_version": "0.1.2",
-            "to_workflow_version": "0.1.2",
+            "to_workflow_version": "0.1.3",
             "status": "IN_PROGRESS",
             "started_at": started_at,
             "completed_at": None,
@@ -1450,6 +2383,8 @@ class PolarisCoreTests(unittest.TestCase):
                     "task_id": "TASK-0001",
                     "source_sequence": 0,
                     "migration_sequence": 1,
+                    "source_status": "DRAFT",
+                    "target_status": "DRAFT",
                 }
             ],
         }
@@ -1457,7 +2392,7 @@ class PolarisCoreTests(unittest.TestCase):
             self.repo
             / ".polaris"
             / "migrations"
-            / "MIG-0.1.18-to-0.1.19.json",
+            / "MIG-0.1.19-to-0.1.20.json",
             record,
         )
         append_jsonl(
@@ -1470,15 +2405,17 @@ class PolarisCoreTests(unittest.TestCase):
                 "from": state["status"],
                 "to": state["status"],
                 "task_id": "TASK-0001",
-                "polaris_version": "0.1.19",
-                "workflow_version": "0.1.2",
+                "polaris_version": "0.1.20",
+                "workflow_version": "0.1.3",
                 "current_revision": state["current_revision"],
                 "rigor": state["rigor"],
                 "blocked_from": state["blocked_from"],
                 "blocker": state["blocker"],
                 "artifacts": state["artifacts"],
                 "subject": state["subject"],
-                "migration_id": "0.1.18-to-0.1.19",
+                "migration_id": "0.1.19-to-0.1.20",
+                "previous_polaris_version": "0.1.19",
+                "previous_workflow_version": "0.1.2",
             },
         )
 
@@ -1490,7 +2427,8 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_migration_reclaims_only_its_own_dead_process_lock(self) -> None:
         """迁移可接管同一迁移的崩溃锁，但不能抢占仍存活的进程。"""
-        self.set_protocol_version("0.1.18")
+        self.set_protocol_version("0.1.19")
+        self.set_workflow_version("0.1.2")
         vendor(ROOT, self.repo, False)
         lock_path = self.task / ".transition.lock"
         write_json_atomic(
@@ -1498,7 +2436,7 @@ class PolarisCoreTests(unittest.TestCase):
             {
                 "lock_version": 1,
                 "kind": "polaris_migration",
-                "migration_id": "0.1.18-to-0.1.19",
+                "migration_id": "0.1.19-to-0.1.20",
                 "task_id": "TASK-0001",
                 "hostname": socket.gethostname(),
                 "pid": 2147483647,
@@ -2507,8 +3445,7 @@ class PolarisCoreTests(unittest.TestCase):
                 "POLARIS_STARTED",
                 "IMPLEMENTATION_SESSION_STARTED",
                 "IMPLEMENTATION_PROGRESS",
-                "IMPLEMENTATION_FINISHED",
-                "DOCS_SYNCED",
+                "REVIEW_HANDOFF_READY",
                 "REVIEW_SESSION_STARTED",
                 "REVIEW_ACCEPTED",
                 "REVIEW_REJECTED",
@@ -2646,6 +3583,7 @@ class PolarisCoreTests(unittest.TestCase):
                 None,
                 None,
             )
+
         write_json_atomic(path, value)
         with self.assertRaises(RuleFailure):
             transition(
@@ -2678,6 +3616,35 @@ class PolarisCoreTests(unittest.TestCase):
             )["to"],
             "QUALIFIED",
         )
+
+    def test_duplicate_acceptance_ids_are_rejected(self) -> None:
+        """不同内容不得复用同一个 Acceptance ID，否则 Validation 无法精确覆盖。"""
+        self.freeze_work_item()
+        work_item_path = self.task / "revisions" / "work-item-r001.json"
+        work_item = read_json(work_item_path)
+        work_item["acceptance"].append(
+            {
+                "id": "AC-01",
+                "statement": "A distinct criterion with a reused ID",
+                "evidence": "a different check",
+            }
+        )
+        write_json_atomic(work_item_path, work_item)
+        with self.assertRaisesRegex(RuleFailure, "duplicate acceptance IDs"):
+            validate(self.repo, "TASK-0001")
+        with self.assertRaisesRegex(RuleFailure, "duplicate acceptance IDs"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "QUALIFY",
+                [],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
 
     def test_r0_keeps_isolated_review_in_same_session(self) -> None:
         """R0 继续使用同会话隔离审查，不创建独立 Review 任务。"""
@@ -2727,12 +3694,12 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn("Give the Implementer only the task ID and registered handoff path", entry_text)
         self.assertIn("Load only <HANDOFF> and its package", entry_text)
         self.assertIn("Do not read the main conversation", implementation_text)
-        self.assertIn("Do not run `FINISH_IMPLEMENTATION`", implementation_text)
-        self.assertIn("Continue the exact same Implementer worker", entry_text)
-        self.assertIn("Do not run `SYNC_DOCS`", docs_text)
+        self.assertIn("Do not run workflow transitions", implementation_text)
+        self.assertIn("continue the exact same Implementer worker", entry_text)
+        self.assertIn("Do not run workflow transitions", docs_text)
 
     def test_implementation_handoff_and_result_are_mechanically_bound(self) -> None:
-        """DISPATCH_IMPLEMENTATION 注册不可变 handoff，未绑定该 handoff 的实现结果不能完成。"""
+        """START_REVIEW 拒绝未绑定已注册 handoff 的 Implementation。"""
         self.enter_implementing()
         handoff, reference = self.dispatch_implementation()
         state = read_json(self.task / "state.json")
@@ -2752,26 +3719,45 @@ class PolarisCoreTests(unittest.TestCase):
         implementation = self.implementation_value(base, head, "impl-bound-session")
         implementation["implementation_handoff_sha256"] = "0" * 64
         write_json_atomic(path, implementation)
+        knowledge_path = self.task / "knowledge" / "r001" / "knowledge-delta-001.json"
+        knowledge = self.knowledge_value(1, base, head)
+        knowledge["entries"][0].update(
+            {"changed_paths": ["subject.txt"], "evidence": "No documentation impact"}
+        )
+        write_json_atomic(knowledge_path, knowledge)
         with self.assertRaises(RuleFailure):
-            transition(
+            build_review_handoff(
                 self.repo,
                 "TASK-0001",
-                "FINISH_IMPLEMENTATION",
-                ["implementation=implementations/r001/attempt-001.json"],
-                None,
+                "impl-bound-session",
+                "fresh_session",
+                path,
+                knowledge_path,
                 base,
                 head,
-                None,
-                None,
-                None,
             )
         implementation["implementation_handoff_sha256"] = reference["sha256"]
         write_json_atomic(path, implementation)
+        handoff_result = build_review_handoff(
+            self.repo,
+            "TASK-0001",
+            "impl-bound-session",
+            "fresh_session",
+            path,
+            knowledge_path,
+            base,
+            head,
+        )
+        review_handoff_path = Path(handoff_result["path"])
         result = transition(
             self.repo,
             "TASK-0001",
-            "FINISH_IMPLEMENTATION",
-            ["implementation=implementations/r001/attempt-001.json"],
+            "START_REVIEW",
+            [
+                "implementation=implementations/r001/attempt-001.json",
+                "knowledge_delta=knowledge/r001/knowledge-delta-001.json",
+                "review_handoff=" + review_handoff_path.relative_to(self.task).as_posix(),
+            ],
             None,
             base,
             head,
@@ -2779,7 +3765,7 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
-        self.assertEqual(result["to"], "IMPLEMENTED")
+        self.assertEqual(result["to"], "REVIEWING")
 
     def test_frozen_task_references_survive_physical_root_relocation(self) -> None:
         """任务整体搬迁后，逻辑路径、handoff、进度、探索与恢复仍可解析。"""
@@ -3023,10 +4009,10 @@ class PolarisCoreTests(unittest.TestCase):
         )
         self.assertEqual(progress["implementation_steps"][0]["status"], "SKIPPED")
 
-    def test_checkpoint_requires_terminal_steps_and_freezes_step_results(self) -> None:
-        """未完成步骤不能进入 checkpoint，最终 artifact 必须精确冻结步骤结果。"""
+    def test_optional_progress_requires_terminal_steps_before_checkpointing(self) -> None:
+        """可选实时进度仍拒绝在步骤未终结时进入 checkpoint。"""
         self.enter_implementing()
-        handoff, reference = self.dispatch_implementation()
+        self.dispatch_implementation()
         title = "Polaris Implement · TASK-0001 · r001 · attempt 1"
         update_implementation_progress(
             self.repo, "TASK-0001", title, "Pending", "INITIALIZE"
@@ -3051,39 +4037,6 @@ class PolarisCoreTests(unittest.TestCase):
         update_implementation_progress(
             self.repo, "TASK-0001", title, "impl-freeze-session", "SET_PHASE",
             phase="CHECKPOINTING",
-        )
-        base = run_git(self.repo, "rev-parse", "HEAD")
-        (self.repo / "freeze.txt").write_text("done\n", encoding="utf-8")
-        run_git(self.repo, "add", "freeze.txt")
-        run_git(self.repo, "commit", "-q", "-m", "freeze implementation")
-        head = run_git(self.repo, "rev-parse", "HEAD")
-        implementation = read_json(template_path(ROOT, "implementation"))
-        implementation.update({
-            "artifact_attempt": handoff["artifact_attempt"],
-            "implementer_session_id": "impl-freeze-session",
-            "implementation_handoff_path": reference["path"],
-            "implementation_handoff_sha256": reference["sha256"],
-            "subject_base_commit": base,
-            "subject_head_commit": head,
-            "subject_diff_hash": subject_diff_hash(self.repo, base, head),
-            "step_results": [{"id": "STEP-001", "status": "COMPLETED", "result": "wrong"}],
-        })
-        path = self.task / handoff["output_path"]
-        write_json_atomic(path, implementation)
-        with self.assertRaises(RuleFailure):
-            transition(
-                self.repo, "TASK-0001", "FINISH_IMPLEMENTATION",
-                ["implementation=implementations/r001/attempt-001.json"],
-                None, base, head, None, None, None,
-            )
-        implementation["step_results"] = [
-            {"id": "STEP-001", "status": "COMPLETED", "result": "Finished work"}
-        ]
-        write_json_atomic(path, implementation)
-        transition(
-            self.repo, "TASK-0001", "FINISH_IMPLEMENTATION",
-            ["implementation=implementations/r001/attempt-001.json"],
-            None, base, head, None, None, None,
         )
         update_implementation_progress(
             self.repo, "TASK-0001", title, "impl-freeze-session", "SET_PHASE",
@@ -3119,6 +4072,14 @@ class PolarisCoreTests(unittest.TestCase):
             self.assertIn(detail, entry_text)
         self.assertIn("Dispatch mode: same_session_fallback", entry_text)
         self.assertIn("immediate status responses may be delayed", entry_text)
+        implementation_text = (
+            ROOT / "skills" / "implementation" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("When an initialized live snapshot exists", entry_text)
+        self.assertIn(
+            "When live telemetry exists, append reproducible evidence",
+            implementation_text,
+        )
 
     def test_r1_dispatches_one_visible_fresh_local_task(self) -> None:
         """R1 按宿主创建隔离 worker，禁止 fork 和默认 worktree。"""
@@ -3337,47 +4298,17 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(read_json(self.task / "state.json")["current_revision"], 2)
 
     def test_implementation_and_final_documentation_subjects_are_bound(self) -> None:
-        """Implementation 绑定实现 checkpoint，Knowledge Delta 绑定含文档的最终 subject。"""
-        self.freeze_work_item()
-        build_working_set(self.repo, "TASK-0001", True)
-        transition(
-            self.repo, "TASK-0001", "QUALIFY", [], None, None, None, None, None, None
-        )
-        transition(
-            self.repo,
-            "TASK-0001",
-            "PLAN",
-            [
-                "plan=PLAN.md",
-                "plan_decisions=plan-decisions.json",
-                "working_set=working-set.json",
-            ],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        transition(
-            self.repo,
-            "TASK-0001",
-            "START_IMPLEMENTATION",
-            [],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        self.dispatch_implementation()
+        """Implementation 与 Knowledge Delta 共同绑定含文档的最终 subject。"""
+        self.enter_implementing()
         base = run_git(self.repo, "rev-parse", "HEAD")
         (self.repo / "subject.txt").write_text("subject\n", encoding="utf-8")
-        run_git(self.repo, "add", "subject.txt")
-        run_git(self.repo, "commit", "-q", "-m", "subject")
-        head = run_git(self.repo, "rev-parse", "HEAD")
-        diff_hash = subject_diff_hash(self.repo, base, head)
+        docs_path = self.repo / "docs" / "subject.md"
+        docs_path.parent.mkdir()
+        docs_path.write_text("Subject behavior documentation\n", encoding="utf-8")
+        run_git(self.repo, "add", "subject.txt", "docs/subject.md")
+        run_git(self.repo, "commit", "-q", "-m", "subject and documentation")
+        final_head = run_git(self.repo, "rev-parse", "HEAD")
+        final_diff_hash = subject_diff_hash(self.repo, base, final_head)
 
         implementation_intelligence = read_json(
             ROOT / "templates" / "task-sources" / "code-intelligence-record.json"
@@ -3388,8 +4319,8 @@ class PolarisCoreTests(unittest.TestCase):
                 "artifact_attempt": 1,
                 "target": {
                     "base_commit": base,
-                    "head_commit": head,
-                    "diff_hash": diff_hash,
+                    "head_commit": final_head,
+                    "diff_hash": final_diff_hash,
                 },
             }
         )
@@ -3400,32 +4331,12 @@ class PolarisCoreTests(unittest.TestCase):
             implementation_intelligence_result["path"]
         )
         implementation_path = self.task / "implementations" / "r001" / "attempt-001.json"
-        implementation = self.implementation_value(base, head, "impl-session")
+        implementation = self.implementation_value(base, final_head, "impl-session")
         implementation["code_intelligence"] = {
             "path": implementation_intelligence_path.relative_to(self.task).as_posix(),
             "sha256": file_sha256(implementation_intelligence_path),
         }
         write_json_atomic(implementation_path, implementation)
-        transition(
-            self.repo,
-            "TASK-0001",
-            "FINISH_IMPLEMENTATION",
-            ["implementation=implementations/r001/attempt-001.json"],
-            None,
-            base,
-            head,
-            None,
-            None,
-            None,
-        )
-
-        docs_path = self.repo / "docs" / "subject.md"
-        docs_path.parent.mkdir()
-        docs_path.write_text("Subject behavior documentation\n", encoding="utf-8")
-        run_git(self.repo, "add", "docs/subject.md")
-        run_git(self.repo, "commit", "-q", "-m", "sync subject documentation")
-        final_head = run_git(self.repo, "rev-parse", "HEAD")
-        final_diff_hash = subject_diff_hash(self.repo, base, final_head)
         documentation_intelligence = read_json(
             ROOT / "templates" / "task-sources" / "code-intelligence-record.json"
         )
@@ -3464,36 +4375,12 @@ class PolarisCoreTests(unittest.TestCase):
         knowledge["subject_diff_hash"] = "0" * 64
         write_json_atomic(knowledge_path, knowledge)
         with self.assertRaises(RuleFailure):
-            transition(
-                self.repo,
-                "TASK-0001",
-                "SYNC_DOCS",
-                ["knowledge_delta=knowledge/r001/knowledge-delta-001.json"],
-                None,
-                base,
-                final_head,
-                None,
-                None,
-                None,
-            )
+            check_docs(self.repo, "TASK-0001", knowledge_path, base, final_head)
         knowledge["subject_diff_hash"] = correct_diff_hash
         write_json_atomic(knowledge_path, knowledge)
         result = check_docs(self.repo, "TASK-0001", knowledge_path, base, final_head)
         self.assertEqual(result["changed_paths"], 2)
-        synced = transition(
-            self.repo,
-            "TASK-0001",
-            "SYNC_DOCS",
-            ["knowledge_delta=knowledge/r001/knowledge-delta-001.json"],
-            None,
-            base,
-            final_head,
-            None,
-            None,
-            None,
-        )
-        self.assertEqual(synced["to"], "DOCS_SYNCED")
-        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "DOCS_SYNCED")
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "IMPLEMENTING")
 
     def test_stale_documentation_is_rejected(self) -> None:
         """Knowledge Delta 存在未处置 STALE 时拒绝文档同步通过。"""
@@ -3507,189 +4394,7 @@ class PolarisCoreTests(unittest.TestCase):
 
     def test_full_r1_flow_closes_only_after_review_and_validation(self) -> None:
         """R1 必须依次通过独立 Review、全部 AC Validation 和 Result 才能 CLOSED。"""
-        self.test_implementation_and_final_documentation_subjects_are_bound()
-        state = read_json(self.task / "state.json")
-        subject = state["subject"]
-        with self.assertRaises(RuleFailure):
-            transition(
-                self.repo, "TASK-0001", "CLOSE", [], None, None, None, None, None, None
-            )
-        review_handoff_result = build_review_handoff(
-            self.repo, "TASK-0001", "impl-session", "fresh_session"
-        )
-        review_handoff = read_json(Path(review_handoff_result["path"]))
-        self.assertTrue(
-            {
-                "implementation_code_intelligence",
-                "documentation_code_intelligence",
-            }.issubset({item["role"] for item in review_handoff["package"]})
-        )
-        transition(
-            self.repo,
-            "TASK-0001",
-            "START_REVIEW",
-            [
-                "review_handoff="
-                + Path(review_handoff_result["path"]).relative_to(self.task).as_posix()
-            ],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        review_path = self.task / "reviews" / "r001" / "review-001.json"
-        review = read_json(template_path(ROOT, "review"))
-        handoff_reference = read_json(self.task / "state.json")["artifacts"][
-            "review_handoff"
-        ]
-        review.update(
-            {
-                "work_item_revision": 2,
-                "implementer_session_id": "impl-session",
-                "reviewer_session_id": "review-session",
-                "handoff_path": handoff_reference["path"],
-                "handoff_sha256": handoff_reference["sha256"],
-                "subject_base_commit": subject["base_commit"],
-                "subject_head_commit": subject["head_commit"],
-                "subject_diff_hash": subject["diff_hash"],
-                "reviewed_at": "2026-08-12T00:00:00Z",
-                "verdict": "ACCEPT",
-            }
-        )
-        write_json_atomic(review_path, review)
-        with self.assertRaises(RuleFailure):
-            transition(
-                self.repo,
-                "TASK-0001",
-                "ACCEPT_REVIEW",
-                ["review=reviews/r001/review-001.json"],
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        review["work_item_revision"] = 1
-        review["subject_diff_hash"] = "0" * 64
-        write_json_atomic(review_path, review)
-        with self.assertRaises(RuleFailure):
-            transition(
-                self.repo,
-                "TASK-0001",
-                "ACCEPT_REVIEW",
-                ["review=reviews/r001/review-001.json"],
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        review["subject_diff_hash"] = subject["diff_hash"]
-        write_json_atomic(review_path, review)
-        transition(
-            self.repo,
-            "TASK-0001",
-            "ACCEPT_REVIEW",
-            ["review=reviews/r001/review-001.json"],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        transition(
-            self.repo,
-            "TASK-0001",
-            "START_VALIDATION",
-            [],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        validation_path = self.task / "validations" / "r001" / "validation-001.json"
-        validation = read_json(template_path(ROOT, "validation"))
-        validation.update(
-            {
-                "subject_base_commit": subject["base_commit"],
-                "subject_head_commit": subject["head_commit"],
-                "subject_diff_hash": subject["diff_hash"],
-                "validated_at": "2026-08-12T00:01:00Z",
-                "verdict": "PASS",
-                "acceptance_results": [],
-            }
-        )
-        write_json_atomic(validation_path, validation)
-        with self.assertRaises(RuleFailure):
-            transition(
-                self.repo,
-                "TASK-0001",
-                "PASS_VALIDATION",
-                ["validation=validations/r001/validation-001.json"],
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        validation["acceptance_results"] = [
-                    {
-                        "acceptance_id": "AC-01",
-                        "command_or_check": "state validation",
-                        "cwd": ".",
-                        "environment_summary": "test",
-                        "started_at": "2026-08-12T00:01:00Z",
-                        "exit_code": 0,
-                        "result": "PASS",
-                        "output_path_or_hash": "inline:test",
-                    }
-                ]
-        write_json_atomic(validation_path, validation)
-        transition(
-            self.repo,
-            "TASK-0001",
-            "PASS_VALIDATION",
-            ["validation=validations/r001/validation-001.json"],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        result_path = self.task / "results" / "r001" / "result-001.json"
-        result = read_json(template_path(ROOT, "result"))
-        result.update(
-            {
-                "subject_base_commit": subject["base_commit"],
-                "subject_head_commit": subject["head_commit"],
-                "subject_diff_hash": subject["diff_hash"],
-                "summary": "Validated smoke task",
-            }
-        )
-        write_json_atomic(result_path, result)
-        closed = transition(
-            self.repo,
-            "TASK-0001",
-            "CLOSE",
-            ["result=results/r001/result-001.json"],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        self.assertEqual(closed["to"], "CLOSED")
-        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "CLOSED")
+        self.test_r1_pass_and_close_validates_candidate_projection()
 
     def test_r1_review_requires_a_bound_independent_session_attestation(self) -> None:
         """R1 Review 即使 session 字段不同，也必须绑定 handoff 且声明未继承实现聊天。"""
@@ -3735,18 +4440,97 @@ class PolarisCoreTests(unittest.TestCase):
         self.test_implementation_and_final_documentation_subjects_are_bound()
         evidence = self.task / "evidence" / "r001" / "checks.txt"
         evidence.write_text("original evidence\n", encoding="utf-8")
-        handoff_path = Path(
-            build_review_handoff(
-                self.repo, "TASK-0001", "impl-session", "fresh_session"
-            )["path"]
+        handoff_result, implementation_path, knowledge_path, base, head = (
+            self.build_current_review_handoff()
         )
+        handoff_path = Path(handoff_result["path"])
         evidence.write_text("mutated evidence\n", encoding="utf-8")
         with self.assertRaises(RuleFailure):
             transition(
                 self.repo,
                 "TASK-0001",
                 "START_REVIEW",
-                [f"review_handoff={handoff_path.relative_to(self.task).as_posix()}"],
+                [
+                    "implementation=" + implementation_path.relative_to(self.task).as_posix(),
+                    "knowledge_delta=" + knowledge_path.relative_to(self.task).as_posix(),
+                    f"review_handoff={handoff_path.relative_to(self.task).as_posix()}",
+                ],
+                None,
+                base,
+                head,
+                None,
+                None,
+                None,
+            )
+        evidence.write_text("original evidence\n", encoding="utf-8")
+        lock_path = self.task / ".transition.lock"
+        lock_path.write_text("held", encoding="utf-8")
+        with self.assertRaises(InputFailure):
+            build_review_handoff(
+                self.repo,
+                "TASK-0001",
+                "impl-session",
+                "fresh_session",
+                implementation_path,
+                knowledge_path,
+                base,
+                head,
+            )
+        lock_path.unlink()
+        rebuilt = build_review_handoff(
+            self.repo,
+            "TASK-0001",
+            "impl-session",
+            "fresh_session",
+            implementation_path,
+            knowledge_path,
+            base,
+            head,
+        )
+        self.assertEqual(Path(rebuilt["path"]), handoff_path)
+        stale_state = read_json(self.task / "state.json")
+        transition(
+            self.repo,
+            "TASK-0001",
+            "START_REVIEW",
+            [
+                "implementation=" + implementation_path.relative_to(self.task).as_posix(),
+                "knowledge_delta=" + knowledge_path.relative_to(self.task).as_posix(),
+                "review_handoff=" + handoff_path.relative_to(self.task).as_posix(),
+            ],
+            None,
+            base,
+            head,
+            None,
+            None,
+            None,
+        )
+        registered_hash = file_sha256(handoff_path)
+        write_json_atomic(self.task / "state.json", stale_state)
+        evidence.write_text("changed after registration\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuleFailure, "differs from events"):
+            build_review_handoff(
+                self.repo,
+                "TASK-0001",
+                "impl-session",
+                "fresh_session",
+                implementation_path,
+                knowledge_path,
+                base,
+                head,
+            )
+        self.assertEqual(file_sha256(handoff_path), registered_hash)
+
+    def test_start_implementation_self_transition_requires_new_handoff(self) -> None:
+        """IMPLEMENTING 自转换只能在返工清除旧 handoff 后注册下一 attempt。"""
+        self.enter_implementing()
+        state = read_json(self.task / "state.json")
+        with self.assertRaisesRegex(RuleFailure, "new implementation_handoff"):
+            transition(
+                self.repo,
+                "TASK-0001",
+                "START_IMPLEMENTATION",
+                [],
                 None,
                 None,
                 None,
@@ -3754,6 +4538,8 @@ class PolarisCoreTests(unittest.TestCase):
                 None,
                 None,
             )
+        unchanged = read_json(self.task / "state.json")
+        self.assertEqual(unchanged["sequence"], state["sequence"])
 
     def test_review_handoff_survives_physical_root_relocation(self) -> None:
         """Reviewer 冻结包使用逻辑任务路径，整体搬迁不改变其内容或校验结果。"""
@@ -3789,18 +4575,6 @@ class PolarisCoreTests(unittest.TestCase):
             "TASK-0001",
             "ACCEPT_REVIEW",
             ["review=reviews/r001/review-001.json"],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        transition(
-            self.repo,
-            "TASK-0001",
-            "START_VALIDATION",
-            [],
             None,
             None,
             None,
@@ -3848,6 +4622,7 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(failed["to"], "IMPLEMENTING")
         state = read_json(self.task / "state.json")
         self.assertEqual(state["artifacts"]["prior_review"]["path"], "reviews/r001/review-001.json")
+        self.register_implementation_handoff()
 
         base = subject_1["base_commit"]
         (self.repo / "subject.txt").write_text("validation fix\n", encoding="utf-8")
@@ -3858,18 +4633,6 @@ class PolarisCoreTests(unittest.TestCase):
         implementation_path = self.task / "implementations" / "r001" / "attempt-002.json"
         implementation = self.implementation_value(base, head, "impl-session-2")
         write_json_atomic(implementation_path, implementation)
-        transition(
-            self.repo,
-            "TASK-0001",
-            "FINISH_IMPLEMENTATION",
-            ["implementation=implementations/r001/attempt-002.json"],
-            None,
-            base,
-            head,
-            None,
-            None,
-            None,
-        )
         knowledge_path = self.task / "knowledge" / "r001" / "knowledge-delta-002.json"
         knowledge = self.knowledge_value(2, base, head)
         knowledge["entries"][0].update(
@@ -3879,18 +4642,6 @@ class PolarisCoreTests(unittest.TestCase):
             }
         )
         write_json_atomic(knowledge_path, knowledge)
-        transition(
-            self.repo,
-            "TASK-0001",
-            "SYNC_DOCS",
-            ["knowledge_delta=knowledge/r001/knowledge-delta-002.json"],
-            None,
-            base,
-            head,
-            None,
-            None,
-            None,
-        )
         handoff_2, state = self.start_review("impl-session-2")
         self.assertEqual(handoff_2["artifact_attempt"], 2)
         self.assertEqual(
@@ -3937,6 +4688,7 @@ class PolarisCoreTests(unittest.TestCase):
             None,
         )
         self.assertEqual(rejected["to"], "IMPLEMENTING")
+        self.register_implementation_handoff()
 
         base = handoff_1["subject_base_commit"]
         (self.repo / "subject.txt").write_text("subject fixed\n", encoding="utf-8")
@@ -3947,19 +4699,17 @@ class PolarisCoreTests(unittest.TestCase):
         implementation_path = self.task / "implementations" / "r001" / "attempt-002.json"
         implementation = self.implementation_value(base, head, "impl-session-2")
         write_json_atomic(implementation_path, implementation)
+        knowledge_path = self.task / "knowledge" / "r001" / "knowledge-delta-002.json"
+        knowledge = self.knowledge_value(2, base, head)
+        knowledge["entries"][0].update(
+            {
+                "changed_paths": ["docs/subject.md", "subject.txt"],
+                "evidence": "The final subject retains the synchronized documentation",
+            }
+        )
+        write_json_atomic(knowledge_path, knowledge)
         with self.assertRaises(RuleFailure):
-            transition(
-                self.repo,
-                "TASK-0001",
-                "FINISH_IMPLEMENTATION",
-                ["implementation=implementations/r001/attempt-002.json"],
-                None,
-                base,
-                head,
-                None,
-                None,
-                None,
-            )
+            self.start_review("impl-session-2")
 
         prior_reference = read_json(self.task / "state.json")["artifacts"]["prior_review"]
         response_path = self.task / "reviews" / "r001" / "response-002.json"
@@ -3983,42 +4733,6 @@ class PolarisCoreTests(unittest.TestCase):
             }
         )
         write_json_atomic(response_path, response)
-        transition(
-            self.repo,
-            "TASK-0001",
-            "FINISH_IMPLEMENTATION",
-            [
-                "implementation=implementations/r001/attempt-002.json",
-                "review_response=reviews/r001/response-002.json",
-            ],
-            None,
-            base,
-            head,
-            None,
-            None,
-            None,
-        )
-        knowledge_path = self.task / "knowledge" / "r001" / "knowledge-delta-002.json"
-        knowledge = self.knowledge_value(2, base, head)
-        knowledge["entries"][0].update(
-            {
-                "changed_paths": ["docs/subject.md", "subject.txt"],
-                "evidence": "The final subject retains the synchronized documentation",
-            }
-        )
-        write_json_atomic(knowledge_path, knowledge)
-        transition(
-            self.repo,
-            "TASK-0001",
-            "SYNC_DOCS",
-            ["knowledge_delta=knowledge/r001/knowledge-delta-002.json"],
-            None,
-            base,
-            head,
-            None,
-            None,
-            None,
-        )
         handoff_2, state = self.start_review("impl-session-2")
         review_2_path = self.task / "reviews" / "r001" / "review-002.json"
         write_json_atomic(
@@ -4065,8 +4779,8 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
-        self.assertEqual(accepted["to"], "REVIEWED")
-        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "REVIEWED")
+        self.assertEqual(accepted["to"], "VALIDATING")
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "VALIDATING")
 
     def test_third_rejected_review_enters_human_blocked_state(self) -> None:
         """第三次 Review 仍 REJECT 时不再自动返工，而是进入 Human-owned BLOCKED。"""
@@ -4089,9 +4803,7 @@ class PolarisCoreTests(unittest.TestCase):
             None,
             None,
         )
-        transition(
-            self.repo, "TASK-0001", "START_IMPLEMENTATION", [], None, None, None, None, None, None
-        )
+        self.register_implementation_handoff()
         base = run_git(self.repo, "rev-parse", "HEAD")
         finding = {
             "id": "F-001",

@@ -281,10 +281,8 @@ def validate_progress(repo: Path, task_id: str) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
     state = read_json(state_path(directory))
-    if state["status"] not in {"IMPLEMENTING", "IMPLEMENTED"}:
-        raise RuleFailure(
-            "Live implementation progress is valid only while IMPLEMENTING or IMPLEMENTED"
-        )
+    if state["status"] != "IMPLEMENTING":
+        raise RuleFailure("Live implementation progress is valid only while IMPLEMENTING")
     handoff, reference = validate_handoff(repo, root, directory, state)
     path = resolve_repo_reference(repo, handoff["progress_json_path"])
     progress = validate_json_file(

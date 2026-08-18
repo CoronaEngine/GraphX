@@ -10,9 +10,9 @@ description: Internal Polaris stage for an explicitly started `{{skill:engineeri
 3. Record command/check, working directory, environment summary, start time, exit code, result, and output path or hash.
 4. Mark the overall verdict PASS only when every acceptance criterion passes.
 5. Write a new immutable Validation JSON attempt. Do not create a duplicate Markdown artifact.
-6. Use `PASS_VALIDATION`, `FAIL_IMPLEMENTATION`, or `FAIL_PLAN` according to the evidence.
-7. Require final Human approval before `CLOSE` when rigor is R2.
+6. On PASS, write the immutable Result JSON bound to the same revision and subject. For R0/R1, submit Validation and Result together with `PASS_AND_CLOSE`. For R2, submit Validation with `PASS_VALIDATION`, require final Human approval, then submit Result and approval with `CLOSE`.
+7. On FAIL, use `FAIL_IMPLEMENTATION` or `FAIL_PLAN` according to the evidence.
 
-After the transition succeeds, reload state and emit `[POLARIS:VALIDATION_PASS]` or `[POLARIS:VALIDATION_FAIL]` with the nine fixed `{{skill:engineering-task}}` status fields. Include one result per acceptance ID, its evidence path or hash, the overall Validation path, and the next legal transition. Emit `[POLARIS:TASK_CLOSED]` only after a separate successful `CLOSE` transition.
+After the transition succeeds, reload state and emit `[POLARIS:VALIDATION_PASS]` or `[POLARIS:VALIDATION_FAIL]` with the nine fixed `{{skill:engineering-task}}` status fields. Include one result per acceptance ID, its evidence path or hash, the Validation path, Result path on PASS, and the next legal transition. For R0/R1, emit `[POLARIS:TASK_CLOSED]` only after `PASS_AND_CLOSE` succeeds. For R2, emit it only after the later `CLOSE` succeeds.
 
 Compilation alone is not completion unless it is the only explicit acceptance criterion. Never edit `state.json` or claim `CLOSED` directly.

@@ -39,6 +39,50 @@ from .task_layout import (
 
 MIGRATIONS_ROOT = Path(".polaris/migrations")
 
+LEGACY_STATUS_MAP = {
+    "DRAFT": "DRAFT",
+    "QUALIFIED": "QUALIFIED",
+    "PLANNED": "PLANNED",
+    "IMPLEMENTED": "IMPLEMENTING",
+    "DOCS_SYNCED": "IMPLEMENTING",
+    "REVIEWING": "REVIEWING",
+    "REVIEWED": "VALIDATING",
+    "VALIDATING": "VALIDATING",
+    "VERIFIED": "VERIFIED",
+    "CLOSED": "CLOSED",
+    "CANCELLED": "CANCELLED",
+}
+
+
+def _map_legacy_stage(status: str, artifacts: dict[str, Any], rigor: str) -> str:
+    if status == "IMPLEMENTING":
+        return "IMPLEMENTING" if "implementation_handoff" in artifacts else "PLANNED"
+    if status == "VERIFIED" and rigor != "R2":
+        return "VALIDATING"
+    mapped = LEGACY_STATUS_MAP.get(status)
+    if mapped is None:
+        raise RuleFailure(f"cannot map legacy workflow state: {status}")
+    return mapped
+
+
+def map_migrated_status(state: dict[str, Any]) -> tuple[str, str | None]:
+    """Map a workflow 0.1.2 task projection into workflow 0.1.3."""
+    artifacts = state.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise RuleFailure("legacy task artifacts must be an object")
+    rigor = state.get("rigor")
+    if rigor not in {"R0", "R1", "R2"}:
+        raise RuleFailure("legacy task rigor must be R0, R1, or R2")
+    status = state.get("status")
+    if status == "BLOCKED":
+        blocked_from = state.get("blocked_from")
+        if not isinstance(blocked_from, str):
+            raise RuleFailure("legacy BLOCKED task has no blocked_from state")
+        return "BLOCKED", _map_legacy_stage(blocked_from, artifacts, rigor)
+    if not isinstance(status, str):
+        raise RuleFailure("legacy task status must be a string")
+    return _map_legacy_stage(status, artifacts, rigor), None
+
 
 def load_migration_protocol(protocol_root: Path) -> dict[str, Any]:
     protocol = validate_json_file(
@@ -57,9 +101,23 @@ def load_migration_protocol(protocol_root: Path) -> dict[str, Any]:
     for step in protocol["steps"]:
         if step["from_polaris_version"] == step["to_polaris_version"]:
             raise RuleFailure(f"migration route does not advance: {step['migration_id']}")
-        if step["from_workflow_version"] != step["to_workflow_version"]:
+        changes_workflow = (
+            step["from_workflow_version"] != step["to_workflow_version"]
+        )
+        if changes_workflow and (
+            step["project_strategy"] != "replace_version_and_workflow"
+            or step["task_strategy"] != "append_mapped_workflow_event"
+        ):
             raise RuleFailure(
-                "v1 migration protocol cannot change workflow versions: "
+                "workflow migration requires replacement and mapped-event strategies: "
+                f"{step['migration_id']}"
+            )
+        if not changes_workflow and (
+            step["project_strategy"] != "replace_version"
+            or step["task_strategy"] != "append_version_event"
+        ):
+            raise RuleFailure(
+                "version-only migration requires version-only strategies: "
                 f"{step['migration_id']}"
             )
     return protocol
@@ -95,6 +153,15 @@ def load_migration_records(repo: Path, protocol_root: Path) -> list[dict[str, An
                 f"migration record contains a non-adjacent task sequence: "
                 f"{record['migration_id']}"
             )
+        if record["record_version"] == 2 and any(
+            not isinstance(item.get("source_status"), str)
+            or not isinstance(item.get("target_status"), str)
+            for item in record["tasks"]
+        ):
+            raise RuleFailure(
+                f"v2 migration record lacks task status mapping: "
+                f"{record['migration_id']}"
+            )
         if record["status"] == "COMPLETED" and record["completed_at"] is None:
             raise RuleFailure(
                 f"completed migration lacks completion time: {record['migration_id']}"
@@ -126,12 +193,15 @@ def validate_completed_migrations(repo: Path, protocol_root: Path) -> None:
                 )
             event = events[sequence]
             prior = events[sequence - 1]
+            expected_from = item.get("source_status", event.get("to"))
+            expected_to = item.get("target_status", expected_from)
             if (
                 event.get("event") != "MIGRATE_POLARIS"
                 or event.get("migration_id") != record["migration_id"]
                 or event.get("polaris_version") != record["to_polaris_version"]
                 or event.get("workflow_version") != record["to_workflow_version"]
-                or event.get("from") != event.get("to")
+                or event.get("from") != expected_from
+                or event.get("to") != expected_to
                 or prior.get("polaris_version")
                 != record["from_polaris_version"]
                 or prior.get("workflow_version")
@@ -146,23 +216,29 @@ def validate_completed_migrations(repo: Path, protocol_root: Path) -> None:
 def _migration_event(
     state: dict[str, Any], step: dict[str, Any], timestamp: str
 ) -> dict[str, Any]:
+    target_status = state["status"]
+    target_blocked_from = state.get("blocked_from")
+    if step["task_strategy"] == "append_mapped_workflow_event":
+        target_status, target_blocked_from = map_migrated_status(state)
     return {
         "sequence": state["sequence"] + 1,
         "timestamp": timestamp,
         "event": "MIGRATE_POLARIS",
         "gate": "explicit_protocol_migration",
         "from": state["status"],
-        "to": state["status"],
+        "to": target_status,
         "task_id": state["task_id"],
         "polaris_version": step["to_polaris_version"],
         "workflow_version": step["to_workflow_version"],
         "current_revision": state["current_revision"],
         "rigor": state["rigor"],
-        "blocked_from": state.get("blocked_from"),
+        "blocked_from": target_blocked_from,
         "blocker": state.get("blocker"),
         "artifacts": state["artifacts"],
         "subject": state.get("subject"),
         "migration_id": step["migration_id"],
+        "previous_polaris_version": step["from_polaris_version"],
+        "previous_workflow_version": step["from_workflow_version"],
     }
 
 
@@ -266,13 +342,17 @@ def _new_record(
                 "task_id": task_id,
                 "source_sequence": state["sequence"],
                 "migration_sequence": state["sequence"] + 1,
+                "source_status": state["status"],
+                "target_status": map_migrated_status(state)[0]
+                if step["task_strategy"] == "append_mapped_workflow_event"
+                else state["status"],
             }
         )
         retired_code_intelligence_records.extend(
             _retired_code_intelligence_records(repo, task_id, directory, protocol_root)
         )
     return {
-        "record_version": 1,
+        "record_version": 2,
         "migration_id": step["migration_id"],
         "from_polaris_version": step["from_polaris_version"],
         "to_polaris_version": step["to_polaris_version"],
@@ -310,9 +390,12 @@ def migrate_project(repo: Path, protocol_root: Path) -> dict[str, Any]:
             step["to_polaris_version"],
         }:
             raise RuleFailure("project version is outside the in-progress migration")
-        if project["workflow_version"] != step["from_workflow_version"]:
+        allowed_workflow_versions = {step["from_workflow_version"]}
+        if step["project_strategy"] == "replace_version_and_workflow":
+            allowed_workflow_versions.add(step["to_workflow_version"])
+        if project["workflow_version"] not in allowed_workflow_versions:
             raise RuleFailure("project workflow version changed during migration")
-        if workflow["workflow_version"] != step["from_workflow_version"]:
+        if workflow["workflow_version"] not in allowed_workflow_versions:
             raise RuleFailure("frozen workflow changed during migration")
     elif project["polaris_version"] == target_version:
         return {
@@ -371,6 +454,15 @@ def migrate_project(repo: Path, protocol_root: Path) -> dict[str, Any]:
         if incomplete is None:
             write_json_atomic(record_path, record)
 
+        if step["project_strategy"] == "replace_version_and_workflow":
+            target_workflow = validate_json_file(
+                protocol_root / "workflow" / "default-workflow.json",
+                protocol_root / "schemas" / "workflow.schema.json",
+            )
+            if target_workflow["workflow_version"] != step["to_workflow_version"]:
+                raise RuleFailure("vendored workflow does not match migration target")
+            write_json_atomic(repo / ".polaris" / "workflow.json", target_workflow)
+
         for item in record["tasks"]:
             directory = task_dir(repo, item["task_id"])
             ledger_path = events_path(directory)
@@ -396,10 +488,15 @@ def migrate_project(repo: Path, protocol_root: Path) -> dict[str, Any]:
                     f"task advanced during migration: {item['task_id']}"
                 )
             event = events[sequence]
+            expected_from = item.get("source_status", event.get("to"))
+            expected_to = item.get("target_status", expected_from)
             if (
                 event.get("event") != "MIGRATE_POLARIS"
                 or event.get("migration_id") != record["migration_id"]
                 or event.get("polaris_version") != step["to_polaris_version"]
+                or event.get("workflow_version") != step["to_workflow_version"]
+                or event.get("from") != expected_from
+                or event.get("to") != expected_to
             ):
                 raise RuleFailure(
                     f"task has an unexpected migration event: {item['task_id']}"

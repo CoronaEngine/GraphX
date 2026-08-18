@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
-from .implementation_protocol import (
-    step_results,
-    validate_handoff as validate_implementation_handoff,
-    validate_progress,
-)
+from .implementation_protocol import validate_handoff as validate_implementation_handoff
 from .code_intelligence_protocol import record_reference
 from .polaris_core import (
     RuleFailure,
@@ -22,6 +19,7 @@ from .polaris_core import (
 from .review_protocol import validate_handoff, validate_review, validate_review_response
 from .plan_decision_protocol import validate_plan_decisions
 from .working_set_protocol import validate_working_set
+from .validation_protocol import validate_acceptance_coverage, validate_acceptance_ids
 
 
 def artifact_file(directory: Path, state: dict[str, Any], name: str) -> Path:
@@ -92,6 +90,7 @@ def check_gate(
                     raise RuleFailure(
                         f"Acceptance {criterion['id']} has unresolved {field}"
                     )
+        validate_acceptance_ids(work_item)
         if work_item["known_unknowns"]:
             raise RuleFailure("Work Item has unresolved known_unknowns")
         dispatch = work_item.get("review_dispatch")
@@ -113,10 +112,9 @@ def check_gate(
         validate_plan_decisions(repo, root, directory, state, True)
         working_set_path = artifact_file(directory, state, "working_set")
         validate_working_set(repo, state["task_id"], working_set_path)
-    elif gate == "implementation_approved":
+    elif gate == "implementation_start_ready":
         if state["rigor"] == "R2":
             artifact_file(directory, state, "pre_approval")
-    elif gate == "implementation_handoff_ready":
         validate_implementation_handoff(repo, root, directory, state, True)
     elif gate == "implementation_ready":
         handoff, handoff_reference = validate_implementation_handoff(
@@ -156,13 +154,6 @@ def check_gate(
             != implementation["subject_diff_hash"]
         ):
             raise RuleFailure("Implementation Code Intelligence record targets the wrong subject")
-        progress = validate_progress(repo, state["task_id"])
-        if progress["phase"] != "CHECKPOINTING":
-            raise RuleFailure("FINISH_IMPLEMENTATION requires CHECKPOINTING live progress")
-        if progress["implementer_session_id"] != implementation["implementer_session_id"]:
-            raise RuleFailure("Implementation and live progress have different sessions")
-        if implementation["step_results"] != step_results(progress):
-            raise RuleFailure("Implementation step_results do not match live progress")
         validate_review_response(root, directory, state, implementation)
     elif gate == "docs_ready":
         knowledge_path = artifact_file(directory, state, "knowledge_delta")
@@ -204,6 +195,14 @@ def check_gate(
             state["subject"]["base_commit"],
             state["subject"]["head_commit"],
         )
+    elif gate == "review_start_ready":
+        check_gate(
+            repo, root, directory, state, "implementation_ready", blocker, workflow
+        )
+        check_gate(repo, root, directory, state, "docs_ready", blocker, workflow)
+        check_gate(
+            repo, root, directory, state, "review_package_ready", blocker, workflow
+        )
     elif gate == "review_package_ready":
         artifact_file(directory, state, "knowledge_delta")
         check_subject(repo, state.get("subject"))
@@ -237,20 +236,23 @@ def check_gate(
             if review["verdict"] != "ACCEPT":
                 raise RuleFailure("Validation requires all mandated Reviews to ACCEPT")
             validate_review(repo, root, directory, state, review, work_item)
-    elif gate == "validation_passed":
+    elif gate in {"validation_passed", "validation_passed_and_closure_ready"}:
+        if gate == "validation_passed" and state["rigor"] != "R2":
+            raise RuleFailure("R0/R1 must use PASS_AND_CLOSE")
+        if gate == "validation_passed_and_closure_ready" and state["rigor"] == "R2":
+            raise RuleFailure("R2 must pass Validation before final approval and closure")
         validation = load_validation(root, directory, state)
         if validation["verdict"] != "PASS":
             raise RuleFailure("Validation verdict must be PASS")
-        expected = {item["id"] for item in work_item["acceptance"]}
-        actual = {
-            item["acceptance_id"]
-            for item in validation["acceptance_results"]
-            if item["result"] == "PASS"
-        }
-        if expected != actual:
-            raise RuleFailure("Validation must PASS every acceptance criterion")
+        validate_acceptance_coverage(work_item, validation)
         if validation["subject_diff_hash"] != state["subject"]["diff_hash"]:
             raise RuleFailure("Validation targets the wrong subject")
+        if gate == "validation_passed_and_closure_ready":
+            from validate_task import validate_projection
+
+            candidate = copy.deepcopy(state)
+            candidate["status"] = "CLOSED"
+            validate_projection(repo, state["task_id"], candidate)
     elif gate in {"validation_failed_implementation", "validation_failed_plan"}:
         validation = load_validation(root, directory, state)
         if validation["verdict"] != "FAIL":
@@ -264,14 +266,14 @@ def check_gate(
         ):
             raise RuleFailure("failed Validation targets the wrong revision or subject")
     elif gate == "closure_ready":
-        result = validate_json_file(
-            artifact_file(directory, state, "result"),
-            root / "schemas" / "result.schema.json",
-        )
-        if result["subject_diff_hash"] != state["subject"]["diff_hash"]:
-            raise RuleFailure("Result targets the wrong subject")
-        if state["rigor"] == "R2":
-            artifact_file(directory, state, "final_approval")
+        if state["rigor"] != "R2":
+            raise RuleFailure("only R2 closes from VERIFIED")
+        artifact_file(directory, state, "final_approval")
+        from validate_task import validate_projection
+
+        candidate = copy.deepcopy(state)
+        candidate["status"] = "CLOSED"
+        validate_projection(repo, state["task_id"], candidate)
     elif gate == "new_revision_ready":
         validate_json_file(work_item_path, root / "schemas" / "work-item.schema.json")
     elif gate == "blocker_recorded":
