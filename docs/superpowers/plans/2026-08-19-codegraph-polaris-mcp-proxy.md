@@ -662,7 +662,7 @@ Assert idempotent rerendering, exact managed-block replacement, malformed TOML/J
 
 - [ ] **Step 5: Implement format-specific merge/validation in one focused module**
 
-Use `tomllib.loads` when available to validate full TOML before and after replacing the uniquely marked block. On Python 3.10, use the standard-library-only compatibility path to validate and extract the managed MCP tables while preserving unrelated TOML bytes; never rewrite unrelated TOML bytes. Use `json.loads` plus four-space `json.dumps(..., ensure_ascii=False, indent=4) + "\n"` for Claude. A same-name Claude entry is accepted only if it exactly equals the managed definition; otherwise raise `RuleFailure`.
+Use `tomllib.loads` when available to validate full TOML before and after replacing the uniquely marked block. On Python 3.10, use the vendored standard-library TOML parser compatibility package for equivalent full-document validation; never rewrite unrelated TOML bytes. Use `json.loads` plus four-space `json.dumps(..., ensure_ascii=False, indent=4) + "\n"` for Claude. A same-name Claude entry is accepted only if it exactly equals the managed definition; otherwise raise `RuleFailure`.
 
 - [ ] **Step 6: Integrate registration into the vendor transaction**
 

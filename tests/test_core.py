@@ -3548,6 +3548,24 @@ enabled_tools = ["polaris_codegraph_explore"]
         self,
     ) -> None:
         """Python 3.10 can register the managed Codex block without a dependency."""
+        valid_source = '''
+[[profiles]]
+name = "first"
+
+[[profiles]]
+name = "second"
+description = """
+[mcp_servers.not-a-real-table]
+"""
+
+[mcp_servers.polaris-codegraph]
+command = "python3"
+args = ["tools/polaris/scripts/code_intelligence_mcp.py", "--repo", "."]
+cwd = "."
+enabled = true
+required = false
+enabled_tools = ["polaris_codegraph_explore"]
+'''
         script = f"""
 import builtins
 import sys
@@ -3562,18 +3580,18 @@ def import_without_tomllib(name, *args, **kwargs):
 builtins.__import__ = import_without_tomllib
 sys.path.insert(0, {str(SCRIPTS)!r})
 from internal.project_mcp_registration import _parse_toml
+from internal.polaris_core import RuleFailure
 
-value = _parse_toml(
-    'model = "gpt-5"\\n'
-    '[mcp_servers.polaris-codegraph]\\n'
-    'command = "python3"\\n'
-    'args = ["tools/polaris/scripts/code_intelligence_mcp.py", "--repo", "."]\\n'
-    'cwd = "."\\n'
-    'enabled = true\\n'
-    'required = false\\n'
-    'enabled_tools = ["polaris_codegraph_explore"]\\n'
-)
+value = _parse_toml({valid_source!r})
+assert [profile["name"] for profile in value["profiles"]] == ["first", "second"]
+assert value["profiles"][1]["description"].strip() == "[mcp_servers.not-a-real-table]"
 assert value["mcp_servers"]["polaris-codegraph"]["command"] == "python3"
+try:
+    _parse_toml("this is not TOML\\n")
+except RuleFailure:
+    pass
+else:
+    raise AssertionError("malformed TOML was accepted")
 """
         completed_process = subprocess.run(
             [sys.executable, "-c", script],
