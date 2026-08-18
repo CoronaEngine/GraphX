@@ -374,3 +374,83 @@ class CodeGraphTests(unittest.TestCase):
             ["INDEX_FAILED", "SYNC_FAILED"],
         )
         self.assertFalse(result["freshness"]["needs_sync"])
+
+    def test_invalid_status_timeouts_do_not_run_codegraph(self) -> None:
+        inspect_status, _ = self.adapter_functions()
+        (self.repo / ".codegraph").mkdir()
+        descriptor = load_providers(ROOT)["codegraph"]
+        invalid_timeouts = [
+            (None, "none"),
+            (float("nan"), "nan"),
+            (float("inf"), "positive infinity"),
+            (float("-inf"), "negative infinity"),
+            (0, "zero"),
+            (-1, "negative"),
+            ("15", "string"),
+            (True, "boolean"),
+        ]
+        for timeout, name in invalid_timeouts:
+            with self.subTest(timeout=name):
+                calls: list[list[str]] = []
+
+                def runner(
+                    command: list[str], **kwargs: object
+                ) -> subprocess.CompletedProcess[str]:
+                    calls.append(command)
+                    return completed(healthy_status(self.repo))
+
+                result = inspect_status(
+                    self.repo,
+                    descriptor,
+                    runner=runner,
+                    timeout_seconds=timeout,
+                )
+
+                self.assertEqual(result["status"], "NOT_VERIFIED")
+                self.assertEqual(
+                    result["stale_points"][0]["reason"], "STATUS_UNREADABLE"
+                )
+                self.assertEqual(calls, [])
+
+    def test_invalid_sync_timeouts_do_not_run_codegraph(self) -> None:
+        _, sync_if_needed = self.adapter_functions()
+        (self.repo / ".codegraph").mkdir()
+        descriptor = load_providers(ROOT)["codegraph"]
+        invalid_timeouts = [
+            ("status_timeout_seconds", None, "none"),
+            ("status_timeout_seconds", float("nan"), "nan"),
+            ("status_timeout_seconds", float("inf"), "positive infinity"),
+            ("status_timeout_seconds", float("-inf"), "negative infinity"),
+            ("status_timeout_seconds", 0, "zero"),
+            ("status_timeout_seconds", -1, "negative"),
+            ("status_timeout_seconds", "15", "string"),
+            ("sync_timeout_seconds", None, "none"),
+            ("sync_timeout_seconds", float("nan"), "nan"),
+            ("sync_timeout_seconds", float("inf"), "positive infinity"),
+            ("sync_timeout_seconds", float("-inf"), "negative infinity"),
+            ("sync_timeout_seconds", 0, "zero"),
+            ("sync_timeout_seconds", -1, "negative"),
+            ("sync_timeout_seconds", "120", "string"),
+        ]
+        for parameter, timeout, name in invalid_timeouts:
+            with self.subTest(parameter=parameter, timeout=name):
+                calls: list[list[str]] = []
+
+                def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                    calls.append(command)
+                    self.fail("runner must not be called for an invalid timeout")
+
+                arguments: dict[str, object] = {
+                    "runner": runner,
+                    parameter: timeout,
+                }
+
+                result = sync_if_needed(self.repo, descriptor, **arguments)
+
+                self.assertEqual(result["freshness"]["status"], "NOT_VERIFIED")
+                self.assertEqual(
+                    result["freshness"]["stale_points"][0]["reason"],
+                    "STATUS_UNREADABLE",
+                )
+                self.assertEqual(result["sync"]["status"], "SKIPPED")
+                self.assertEqual(calls, [])

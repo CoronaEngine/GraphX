@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
@@ -109,13 +110,26 @@ def _marker_path(repo: Path, descriptor: dict[str, Any]) -> Path | None:
     return repo / marker_path
 
 
+def _validated_timeout(timeout_seconds: Any) -> float:
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+        raise ValueError("CodeGraph timeout must be a positive finite number")
+    try:
+        timeout = float(timeout_seconds)
+    except OverflowError as error:
+        raise ValueError("CodeGraph timeout must be a positive finite number") from error
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("CodeGraph timeout must be a positive finite number")
+    return timeout
+
+
 def _run_cli(
     repo: Path,
     descriptor: dict[str, Any],
     args_key: str,
-    timeout_seconds: int,
+    timeout_seconds: float,
     runner: Runner,
 ) -> subprocess.CompletedProcess[str]:
+    timeout = _validated_timeout(timeout_seconds)
     command = [descriptor["cli"]["executable"], *descriptor["cli"][args_key]]
     return runner(
         command,
@@ -124,7 +138,7 @@ def _run_cli(
         text=True,
         encoding="utf-8",
         capture_output=True,
-        timeout=timeout_seconds,
+        timeout=timeout,
     )
 
 
@@ -230,17 +244,21 @@ def inspect_status(
     descriptor: dict[str, Any],
     *,
     runner: Runner = subprocess.run,
-    timeout_seconds: int = 15,
+    timeout_seconds: float = 15,
 ) -> dict[str, Any]:
     """Inspect one CodeGraph status response without changing the graph."""
     checked_at = _checked_at()
+    try:
+        timeout = _validated_timeout(timeout_seconds)
+    except ValueError as error:
+        return _not_verified(checked_at, error)
     marker = _marker_path(repo, descriptor)
     if marker is None:
         return _not_verified(checked_at, "CodeGraph descriptor has an unsafe project marker")
     if not marker.is_dir() or marker.is_symlink():
         return _unavailable(checked_at, "CodeGraph project marker is unavailable")
     try:
-        completed = _run_cli(repo, descriptor, "status_args", timeout_seconds, runner)
+        completed = _run_cli(repo, descriptor, "status_args", timeout, runner)
         raw, response_sha256 = _stdout_and_hash(completed)
     except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
         return _not_verified(checked_at, error)
@@ -288,19 +306,25 @@ def sync_if_needed(
     descriptor: dict[str, Any],
     *,
     runner: Runner = subprocess.run,
-    status_timeout_seconds: int = 15,
-    sync_timeout_seconds: int = 120,
+    status_timeout_seconds: float = 15,
+    sync_timeout_seconds: float = 120,
 ) -> dict[str, Any]:
     """Synchronize at most once, then inspect status at most once more."""
+    try:
+        status_timeout = _validated_timeout(status_timeout_seconds)
+        sync_timeout = _validated_timeout(sync_timeout_seconds)
+    except ValueError as error:
+        freshness = _not_verified(_checked_at(), error)
+        return {"freshness": freshness, "sync": _sync_result("SKIPPED", None, None)}
     initial = inspect_status(
-        repo, descriptor, runner=runner, timeout_seconds=status_timeout_seconds
+        repo, descriptor, runner=runner, timeout_seconds=status_timeout
     )
     skipped = _sync_result("SKIPPED", None, None)
     if not initial["needs_sync"]:
         return {"freshness": initial, "sync": skipped}
 
     try:
-        completed = _run_cli(repo, descriptor, "sync_args", sync_timeout_seconds, runner)
+        completed = _run_cli(repo, descriptor, "sync_args", sync_timeout, runner)
         _, response_sha256 = _stdout_and_hash(completed)
     except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
         return _sync_failed(initial, _sync_result("FAILED", None, _error_summary(error)))
@@ -318,7 +342,7 @@ def sync_if_needed(
 
     sync = _sync_result("SUCCESS", response_sha256, None)
     rechecked = inspect_status(
-        repo, descriptor, runner=runner, timeout_seconds=status_timeout_seconds
+        repo, descriptor, runner=runner, timeout_seconds=status_timeout
     )
     if rechecked["status"] != "CURRENT_AT_CHECK" or rechecked["needs_sync"]:
         return _sync_failed(rechecked, sync)
