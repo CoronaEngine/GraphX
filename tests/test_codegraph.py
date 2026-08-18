@@ -850,6 +850,18 @@ class CodeGraphTests(unittest.TestCase):
             "directly read",
             "never run `codegraph init`",
         )
+        partial_stale_branches = (
+            "current confined regular file",
+            "READ_SOURCE",
+            "current SHA-256",
+            "missing/deleted",
+            "INSPECT_GIT_DIFF",
+            "null observed SHA-256",
+            "base/head/diff evidence",
+            "unsafe paths",
+            "NOT_VERIFIED",
+            "source search",
+        )
         retired_operations = (
             "symbol" + "_search",
             "call" + "_graph",
@@ -875,7 +887,10 @@ class CodeGraphTests(unittest.TestCase):
                 )
                 for fragment in required_fragments:
                     self.assertIn(fragment, rendered, f"{adapter['host_id']}:{skill_name}")
+                for fragment in partial_stale_branches:
+                    self.assertIn(fragment, rendered, f"{adapter['host_id']}:{skill_name}")
                 self.assertIn("v2", rendered, f"{adapter['host_id']}:{skill_name}")
+                self.assertNotIn("directly read every listed stale file", rendered)
                 for retired in retired_operations:
                     self.assertNotIn(retired, rendered, f"{adapter['host_id']}:{skill_name}")
 
@@ -887,6 +902,9 @@ class CodeGraphTests(unittest.TestCase):
         agents = (ROOT / "templates" / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("stop CodeGraph calls for this session", agents)
         self.assertIn("installer-managed marker block", agents)
+        for fragment in partial_stale_branches:
+            self.assertIn(fragment, agents)
+        self.assertNotIn("directly read every listed stale file", agents)
 
     def test_provider_requires_marker_and_accepts_mcp_or_cli(self) -> None:
         self.assertIsNone(

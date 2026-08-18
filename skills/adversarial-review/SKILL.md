@@ -22,4 +22,4 @@ Return a concise structured result to the dispatcher with verdict, Review attemp
 
 Only the Reviewer context may write `ACCEPT`.
 
-CodeGraph fallback contract: never run `codegraph init` or manage the Provider. Save and classify each response. For `PARTIAL_STALE`, directly read each listed file and record its SHA-256. For `INDEX_STALE` or `NOT_VERIFIED`, use source search and Git evidence, then stop graph calls for this stage. Graph evidence cannot determine the Review verdict.
+CodeGraph fallback contract: never run `codegraph init` or manage the Provider. Save and classify each response. For `PARTIAL_STALE`, if a named path is a current confined regular file, directly read it and record `READ_SOURCE` with its current SHA-256; if a safe path is missing/deleted, inspect the registered subject Git diff and record `INSPECT_GIT_DIFF` with null observed SHA-256 and bound base/head/diff evidence; for unsafe paths, record `NOT_VERIFIED` and use source search. For `INDEX_STALE` or `NOT_VERIFIED`, use source search and Git evidence, then stop graph calls for this stage. Graph evidence cannot determine the Review verdict.
