@@ -58,6 +58,24 @@ def healthy_status(project: Path) -> str:
     )
 
 
+def validated_disposable_codegraph_repo(repo: Path, fixture_root: str) -> Path:
+    """Return only the resolved unittest fixture repo outside this workspace."""
+    temporary_repo = repo.resolve()
+    if temporary_repo != Path(fixture_root).resolve():
+        raise AssertionError("real CLI target must exactly match the temporary fixture repo")
+    try:
+        temporary_repo.relative_to(ROOT.resolve())
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("real CLI target must not be inside the workspace")
+    try:
+        temporary_repo.relative_to(Path(tempfile.gettempdir()).resolve())
+    except ValueError as error:
+        raise AssertionError("real CLI target must be inside the system temporary directory") from error
+    return temporary_repo
+
+
 class CodeGraphTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="polaris-codegraph-")
@@ -1806,10 +1824,7 @@ For accurate content of those specific files, Read them directly.
     @unittest.skipUnless(shutil.which("codegraph"), "codegraph CLI is not installed")
     def test_real_codegraph_status_shape_when_cli_is_available(self) -> None:
         """The optional CLI smoke test may initialize only its disposable repository."""
-        temporary_repo = Path(self.temp.name).resolve()
-        self.assertEqual(self.repo.resolve(), temporary_repo)
-        self.assertNotEqual(temporary_repo, ROOT.resolve())
-        self.assertTrue(temporary_repo.is_relative_to(Path(tempfile.gettempdir()).resolve()))
+        temporary_repo = validated_disposable_codegraph_repo(self.repo, self.temp.name)
 
         source = self.repo / "sample.py"
         source.write_text("def sample():\n    return 1\n", encoding="utf-8")
@@ -1829,3 +1844,20 @@ For accurate content of those specific files, Read them directly.
             temporary_repo, descriptor, timeout_seconds=30
         )
         self.assertEqual(result["status"], "CURRENT_AT_CHECK")
+
+    def test_real_cli_fixture_rejects_temporary_paths_nested_in_workspace(self) -> None:
+        """A hostile TMPDIR beneath the workspace must never become an init target."""
+        nested_workspace_temp = ROOT / "nested-temporary-repository"
+
+        with self.assertRaisesRegex(AssertionError, "must not be inside the workspace"):
+            validated_disposable_codegraph_repo(
+                nested_workspace_temp, nested_workspace_temp
+            )
+
+        workspace_alias = self.repo / "workspace-alias"
+        try:
+            workspace_alias.symlink_to(ROOT, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"symlinks are not available: {error}")
+        with self.assertRaisesRegex(AssertionError, "must not be inside the workspace"):
+            validated_disposable_codegraph_repo(workspace_alias, workspace_alias)
