@@ -39,7 +39,8 @@
         {
             "event": "START_IMPLEMENTATION",
             "from": [
-                "PLANNED"
+                "PLANNED",
+                "IMPLEMENTING"
             ],
             "to": "IMPLEMENTING",
             "gate": "implementation_start_ready"

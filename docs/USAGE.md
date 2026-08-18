@@ -457,6 +457,8 @@ Polaris 根据风险选择严谨度：
 5. 续接同一个 Implementer 任务，在 `IMPLEMENTING` 内完成 Documentation Sync；
 6. 主任务构建 Review handoff，并用一次 `START_REVIEW` 注册 Implementation、Knowledge Delta、handoff 和最终 subject。
 
+首次执行时，`START_IMPLEMENTATION` 完成 `PLANNED → IMPLEMENTING`；Review 或 Validation 返工时，它作为 `IMPLEMENTING → IMPLEMENTING` 自转换注册下一 attempt 的新 handoff，避免恢复已失效的旧实施交接。
+
 自动 Implementer 标题固定为：
 
 ```text

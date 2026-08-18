@@ -93,6 +93,7 @@ def build(
     knowledge_path: Path | None = None,
     subject_base: str | None = None,
     subject_head: str | None = None,
+    review_response_path: Path | None = None,
 ) -> dict[str, Any]:
     root = protocol_root(repo)
     directory = task_dir(repo, task_id)
@@ -133,6 +134,20 @@ def build(
             "base_commit": base,
             "head_commit": head,
             "diff_hash": subject_diff_hash(repo, base, head),
+        }
+    if review_response_path is not None:
+        resolved_response = review_response_path.resolve()
+        try:
+            relative_response = resolved_response.relative_to(directory.resolve())
+        except ValueError as exc:
+            raise RuleFailure(
+                f"review response must be inside the task directory: {resolved_response}"
+            ) from exc
+        if not resolved_response.is_file():
+            raise RuleFailure(f"review response does not exist: {resolved_response}")
+        state["artifacts"]["review_response"] = {
+            "path": relative_response.as_posix(),
+            "sha256": file_sha256(resolved_response),
         }
     implementation_reference = normalized_reference(
         directory, state["artifacts"].get("implementation")
@@ -286,6 +301,7 @@ def main() -> int:
     parser.add_argument("--knowledge-delta", type=Path)
     parser.add_argument("--subject-base")
     parser.add_argument("--subject-head")
+    parser.add_argument("--review-response", type=Path)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -299,6 +315,7 @@ def main() -> int:
             args.knowledge_delta,
             args.subject_base,
             args.subject_head,
+            args.review_response,
         ),
         args.json,
     )

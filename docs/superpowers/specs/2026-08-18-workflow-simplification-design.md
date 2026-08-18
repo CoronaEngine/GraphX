@@ -94,7 +94,7 @@ BLOCKED -- RESOLVE_BLOCK --> blocked_from
 
 ### 开始 Implementation
 
-`START_IMPLEMENTATION` 执行 `PLANNED → IMPLEMENTING`，并要求在同一次转换中提交 Implementation handoff。门禁合并检查：
+`START_IMPLEMENTATION` 首次执行 `PLANNED → IMPLEMENTING`；Review 或 Validation 返工时执行 `IMPLEMENTING → IMPLEMENTING` 自转换。两种情况都要求在同一次转换中提交当前 attempt 的 Implementation handoff。门禁合并检查：
 
 - R2 实施前批准；
 - handoff 的身份、revision、attempt、Plan、Working Set 和 package。

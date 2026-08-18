@@ -444,7 +444,7 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 |---|---|---|
 | `QUALIFIED` | 用户确认的冻结 Work Item revision | 必填字段通过；AC statement/evidence 非空且非 `TODO`；Human-owned 未决项为零 |
 | `PLANNED` | Plan + Plan Decision Register + Working Set | 每个 AC 有验证映射；风险与受影响文档已列出；Human-owned Plan 决策均绑定 CD 且无未决项 |
-| `IMPLEMENTING` | Plan + Working Set + Implementation handoff | `START_IMPLEMENTATION` 原子注册 handoff；R2 已获得实施前 Human approval；handoff 与当前 revision/attempt/Plan/Working Set 绑定 |
+| `IMPLEMENTING` | Plan + Working Set + Implementation handoff | `START_IMPLEMENTATION` 原子注册 handoff；首次执行为 `PLANNED → IMPLEMENTING`，Review/Validation 返工时以 `IMPLEMENTING → IMPLEMENTING` 自转换注册下一 attempt；R2 已获得实施前 Human approval；handoff 与当前 revision/attempt/Plan/Working Set 绑定 |
 | `REVIEWING` | Implementation + Knowledge Delta + Review handoff + 冻结 subject | `START_REVIEW` 组合门禁校验实现、文档、handoff、session、commit/diff；无未处置 STALE |
 | `VALIDATING` | 当前 revision/subject 对应的 accepted Review | 所需 Reviewer 数量满足；blocking findings 为零；Review 直接通过 `ACCEPT_REVIEW` 进入本状态 |
 | `VERIFIED` | 当前 subject 对应的 PASS Validation | 仅 R2 使用；所有 AC 为 PASS，等待最终 Human approval |
@@ -538,7 +538,7 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 ### Independent Implementation
 
 1. 主任务是唯一用户入口和状态机所有者；自动路径中不修改 subject，只负责生成/注册 handoff、派发或续接 Worker、等待、读取进度、校验产物和执行转换。
-2. 先生成 `implementations/rNNN/handoff-NNN.json`，再由 `START_IMPLEMENTATION` 原子校验和注册。handoff 冻结 Work Item、Plan、Working Set、项目规则、subject base、prior Review（返工时）、确定性输出路径和可选实时进度路径。
+2. 先生成 `implementations/rNNN/handoff-NNN.json`，再由 `START_IMPLEMENTATION` 原子校验和注册。首次执行为 `PLANNED → IMPLEMENTING`；Review 或 Validation 返工时使用 `IMPLEMENTING → IMPLEMENTING` 自转换注册下一 attempt 的 handoff。handoff 冻结 Work Item、Plan、Working Set、项目规则、subject base、prior Review（返工时）、确定性输出路径和可选实时进度路径。
 3. Work Item 的 `implementation_dispatch.authorized=true` 是“确认并执行”对当前 revision 全部 Implementer attempts 的显式授权。宿主按自身执行附录在同一本地项目和 checkout 创建隔离 worker；worker 不继承主聊天，也不默认使用 worktree。Codex 的 worker 是可见新任务，Claude Code 的 worker 是保留 agent ID 的非 fork `polaris-implementer` subagent。
 4. Implementer 标题固定为 `Polaris Implement · <TASK> · <REVISION> · attempt <N>`。创建前先复用与 handoff 绑定的有效 Implementation artifact，其次只按适配器声明的稳定身份复用唯一 worker。多条或不明确记录时不得猜测，回退同会话执行。
 5. Implementer 只接收 task ID 与已注册 handoff，不接收主聊天、实现建议或预期结果。它拥有本轮代码、测试、构建文件和项目文档的单写者权限，但不执行 Graph 转换、Review、Validation 或关闭。
