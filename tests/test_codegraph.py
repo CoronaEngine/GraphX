@@ -384,7 +384,10 @@ class CodeGraphTests(unittest.TestCase):
         current = self.v2_record()
         current.update({"stage": "IMPLEMENTATION", "artifact_attempt": 1})
         result = record(self.repo, "TASK-0001", current, ROOT)
-        self.assertTrue(result["path"].endswith("code-intelligence/r001/implementation-001.json"))
+        self.assertEqual(
+            Path(result["path"]).parts[-3:],
+            ("code-intelligence", "r001", "implementation-001.json"),
+        )
 
     def test_migration_rejects_noncanonical_v2_record_paths(self) -> None:
         """Migration scans only the canonical Code Intelligence record layout."""
