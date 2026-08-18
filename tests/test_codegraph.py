@@ -84,6 +84,16 @@ class CodeGraphTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="polaris-codegraph-")
         self.repo = Path(self.temp.name)
         subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "polaris@test.local"],
+            cwd=self.repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Polaris Test"],
+            cwd=self.repo,
+            check=True,
+        )
         init_project(self.repo, "codegraph-test")
         subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
         subprocess.run(
