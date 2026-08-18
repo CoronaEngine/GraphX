@@ -8,10 +8,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from internal.code_intelligence_protocol import load_config, load_providers
+from internal.code_intelligence_protocol import (
+    _project_marker_path,
+    load_config,
+    load_providers,
+)
 from internal.codegraph_adapter import classify_response, inspect_status, sync_if_needed
 from internal.polaris_core import (
     InputFailure,
+    RuleFailure,
     protocol_root,
     require_protocol_compatible,
     run_main,
@@ -54,18 +59,27 @@ def _runtime_input(repo: Path, task_id: str, value: Path) -> Path:
     return candidate
 
 
-def _disabled_freshness() -> dict[str, Any]:
-    """Return the provider-neutral result for an explicitly disabled project."""
+def _unavailable_freshness(error: str) -> dict[str, Any]:
+    """Return a provider-neutral result without using CodeGraph."""
     return {
         "status": "UNAVAILABLE",
         "checked_at": utc_now(),
         "basis": ["NONE"],
         "stale_points": [],
         "status_response_sha256": None,
-        "error": "Code Intelligence is disabled by project configuration",
+        "error": error,
         "needs_sync": False,
         "pending_changes": None,
     }
+
+
+def _initialized_marker(repo: Path) -> bool:
+    """Check the fixed official CodeGraph marker before loading its descriptor."""
+    try:
+        marker = _project_marker_path(repo, ".codegraph")
+    except RuleFailure:
+        return False
+    return marker.is_dir() and not marker.is_symlink()
 
 
 def main() -> int:
@@ -84,17 +98,14 @@ def main() -> int:
 
     def execute() -> dict[str, Any]:
         require_protocol_compatible(repo)
-        if args.command == "classify-response":
-            input_path = _runtime_input(repo, args.task_id, args.input)
-            try:
-                response = input_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError as error:
-                raise InputFailure("CodeGraph response input is not UTF-8") from error
-            return classify_response(repo, response)
         root = protocol_root(repo)
         if load_config(repo, root)["mode"] == "disabled":
-            freshness = _disabled_freshness()
+            freshness = _unavailable_freshness(
+                "Code Intelligence is disabled by project configuration"
+            )
             if args.command == "status":
+                return freshness
+            if args.command == "classify-response":
                 return freshness
             return {
                 "freshness": freshness,
@@ -104,6 +115,27 @@ def main() -> int:
                     "error": None,
                 },
             }
+        if not _initialized_marker(repo):
+            freshness = _unavailable_freshness(
+                "CodeGraph project marker is unavailable"
+            )
+            if args.command in {"status", "classify-response"}:
+                return freshness
+            return {
+                "freshness": freshness,
+                "sync": {
+                    "status": "UNAVAILABLE",
+                    "response_sha256": None,
+                    "error": None,
+                },
+            }
+        if args.command == "classify-response":
+            input_path = _runtime_input(repo, args.task_id, args.input)
+            try:
+                response = input_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError as error:
+                raise InputFailure("CodeGraph response input is not UTF-8") from error
+            return classify_response(repo, response)
         descriptor = load_providers(root)["codegraph"]
         if args.command == "status":
             return inspect_status(repo, descriptor)

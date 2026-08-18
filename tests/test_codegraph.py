@@ -1916,6 +1916,7 @@ For accurate content of those specific files, Read them directly.
         self.assertEqual(result["status"], "NOT_VERIFIED")
 
     def test_runtime_classify_response_confines_input_and_emits_json(self) -> None:
+        (self.repo / ".codegraph").mkdir()
         (self.repo / "README.md").write_text("test repository\n", encoding="utf-8")
         subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
         subprocess.run(
@@ -2028,7 +2029,133 @@ For accurate content of those specific files, Read them directly.
                 status.assert_not_called()
                 sync.assert_not_called()
 
+    def test_runtime_classify_disabled_skips_input_descriptor_and_classifier(self) -> None:
+        """A disabled project does not inspect a raw CodeGraph response."""
+        (self.repo / ".codegraph").mkdir()
+        write_json_atomic(
+            self.repo / ".polaris" / "code-intelligence.json",
+            {
+                "config_version": 1,
+                "mode": "disabled",
+                "provider_priority": [],
+                "include": [],
+                "exclude": [],
+            },
+        )
+        runtime = importlib.import_module("code_intelligence_runtime")
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "code_intelligence_runtime.py",
+                    "classify-response",
+                    "TASK-0001",
+                    "--input",
+                    "must-not-be-read.txt",
+                    "--repo",
+                    str(self.repo),
+                    "--json",
+                ],
+            ),
+            mock.patch.object(
+                runtime,
+                "_runtime_input",
+                side_effect=AssertionError("response input must not be read"),
+            ) as input_path,
+            mock.patch.object(
+                runtime,
+                "load_providers",
+                side_effect=AssertionError("descriptor must not be loaded"),
+            ) as providers,
+            mock.patch.object(
+                runtime,
+                "classify_response",
+                side_effect=AssertionError("response must not be classified"),
+            ) as classifier,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(runtime.main(), 0)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["status"], "UNAVAILABLE")
+        self.assertEqual(payload["basis"], ["NONE"])
+        self.assertEqual(payload["stale_points"], [])
+        self.assertEqual(payload["status_response_sha256"], None)
+        self.assertEqual(
+            payload["error"], "Code Intelligence is disabled by project configuration"
+        )
+        self.assertFalse(payload["needs_sync"])
+        self.assertIsNone(payload["pending_changes"])
+        input_path.assert_not_called()
+        providers.assert_not_called()
+        classifier.assert_not_called()
+
+    def test_runtime_classify_without_safe_marker_skips_input_descriptor_and_classifier(self) -> None:
+        """An absent or symlinked marker never authorizes response parsing."""
+        runtime = importlib.import_module("code_intelligence_runtime")
+        marker = self.repo / ".codegraph"
+        target = self.repo / "marker-target"
+        target.mkdir()
+
+        for unsafe_marker in (False, True):
+            with self.subTest(unsafe_marker=unsafe_marker):
+                if marker.exists() or marker.is_symlink():
+                    marker.unlink()
+                if unsafe_marker:
+                    marker.symlink_to(target, target_is_directory=True)
+                output = io.StringIO()
+                with (
+                    mock.patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "code_intelligence_runtime.py",
+                            "classify-response",
+                            "TASK-0001",
+                            "--input",
+                            "must-not-be-read.txt",
+                            "--repo",
+                            str(self.repo),
+                            "--json",
+                        ],
+                    ),
+                    mock.patch.object(
+                        runtime,
+                        "_runtime_input",
+                        side_effect=AssertionError("response input must not be read"),
+                    ) as input_path,
+                    mock.patch.object(
+                        runtime,
+                        "load_providers",
+                        side_effect=AssertionError("descriptor must not be loaded"),
+                    ) as providers,
+                    mock.patch.object(
+                        runtime,
+                        "classify_response",
+                        side_effect=AssertionError("response must not be classified"),
+                    ) as classifier,
+                    redirect_stdout(output),
+                ):
+                    self.assertEqual(runtime.main(), 0)
+
+                payload = json.loads(output.getvalue())
+                self.assertEqual(payload["status"], "UNAVAILABLE")
+                self.assertEqual(payload["basis"], ["NONE"])
+                self.assertEqual(payload["stale_points"], [])
+                self.assertEqual(payload["status_response_sha256"], None)
+                self.assertEqual(
+                    payload["error"], "CodeGraph project marker is unavailable"
+                )
+                self.assertFalse(payload["needs_sync"])
+                self.assertIsNone(payload["pending_changes"])
+                input_path.assert_not_called()
+                providers.assert_not_called()
+                classifier.assert_not_called()
+
     def test_runtime_rejects_symlinked_runtime_directory_before_reading(self) -> None:
+        (self.repo / ".codegraph").mkdir()
         (self.repo / "README.md").write_text("test repository\n", encoding="utf-8")
         subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
         subprocess.run(
