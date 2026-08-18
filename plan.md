@@ -2,6 +2,7 @@
 
 > 状态：Implementation underway
 > 目标版本：v0.1
+> 当前协议：`0.1.20`；Workflow：`0.1.3`
 > 产品形态：Repo-native Skill System
 > 宿主 Runtime：声明式可扩展；v0.1 内置 Codex、Claude Code
 >
@@ -416,12 +417,12 @@ Work Item 确认与 Plan 决策是两个独立 Human gate。前者冻结目标�
 默认主路径：
 
 ```text
-DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → IMPLEMENTED
-      → DOCS_SYNCED → REVIEWING → REVIEWED
-      → VALIDATING → VERIFIED → CLOSED
+DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → REVIEWING → VALIDATING
+                                                     ├─ R0/R1 → CLOSED
+                                                     └─ R2 → VERIFIED → CLOSED
 ```
 
-文档同步在独立 Review 之前完成，使 Reviewer 审查的 subject commit 同时包含代码、测试和项目文档，并让 Review Package 包含对应的 Knowledge Delta。Review 或 Validation 引发返工时，旧 Documentation Sync、Review 和 Validation 均失效，并按 Graph 回到相应节点重新执行。
+Implementation 与 Documentation Sync 在同一个 `IMPLEMENTING` 节点内完成。`START_REVIEW` 一次性校验并注册 Implementation、Knowledge Delta、Review handoff 和最终 subject，使 Reviewer 审查的 commit 同时包含代码、测试和项目文档。Review 或 Validation 引发返工时，下游 Review 和 Validation 证据失效，并按 Graph 回到相应治理节点重新执行。
 
 必须支持以下治理回路：
 
@@ -443,18 +444,15 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 |---|---|---|
 | `QUALIFIED` | 用户确认的冻结 Work Item revision | 必填字段通过；AC statement/evidence 非空且非 `TODO`；Human-owned 未决项为零 |
 | `PLANNED` | Plan + Plan Decision Register + Working Set | 每个 AC 有验证映射；风险与受影响文档已列出；Human-owned Plan 决策均绑定 CD 且无未决项 |
-| `IMPLEMENTING` | `PLANNED`；随后注册 Implementation handoff | R2 已获得实施前 Human approval；`DISPATCH_IMPLEMENTATION` 校验 handoff 与当前 revision/attempt/Plan/Working Set 绑定 |
-| `IMPLEMENTED` | 绑定 handoff 的 Implementation record + checkpoint commit | 实现者检查通过；session、handoff hash、所有偏离、subject commit 和 diff hash 已冻结；只有主任务执行转换 |
-| `DOCS_SYNCED` | Knowledge Delta + docs checkpoint commit | 无未处置 STALE；必要 Decision/Exploration 已落盘；最终 Review subject 已冻结 |
-| `REVIEWING` | 冻结 revision + subject base/head commit + subject diff hash + evidence | R1/R2 Reviewer session 与 implementer session 独立；R0 可使用隔离式同会话 Review |
-| `REVIEWED` | 当前 revision/subject 对应的 Review JSON | verdict=`ACCEPT`；所需 Reviewer 数量满足；blocking findings 为零 |
-| `VALIDATING` | Validation plan | Review 针对当前 revision、subject head commit 和 subject diff hash |
-| `VERIFIED` | 当前 subject 对应的 Validation JSON | 所有 AC 为 PASS；验证命令退出码有效 |
-| `CLOSED` | Result JSON | `validate_task.py` 全 PASS；R2 已获最终 Human approval |
+| `IMPLEMENTING` | Plan + Working Set + Implementation handoff | `START_IMPLEMENTATION` 原子注册 handoff；R2 已获得实施前 Human approval；handoff 与当前 revision/attempt/Plan/Working Set 绑定 |
+| `REVIEWING` | Implementation + Knowledge Delta + Review handoff + 冻结 subject | `START_REVIEW` 组合门禁校验实现、文档、handoff、session、commit/diff；无未处置 STALE |
+| `VALIDATING` | 当前 revision/subject 对应的 accepted Review | 所需 Reviewer 数量满足；blocking findings 为零；Review 直接通过 `ACCEPT_REVIEW` 进入本状态 |
+| `VERIFIED` | 当前 subject 对应的 PASS Validation | 仅 R2 使用；所有 AC 为 PASS，等待最终 Human approval |
+| `CLOSED` | PASS Validation + Result | R0/R1 通过 `PASS_AND_CLOSE` 原子校验候选投影；R2 另需最终 Human approval 后 `CLOSE` |
 
 `.polaris/workflow.json` 保存当前项目实际使用且版本锁定的节点、边、依赖和门禁 ID；`tools/polaris/workflow/default-workflow.json` 只用于初始化。`transition_task.py` 只接受图中边并先运行对应 validators，Skill 不直接编辑 `state` 字段。v0.1 遇到 `polaris_version` 或 `workflow_version` 不匹配时拒绝正常执行，不做隐式迁移。
 
-版本升级必须先 vendoring 目标协议，再显式运行 vendored `migrate_project.py`。`workflow/migrations.json` 是迁移路径唯一且 append-only 的注册表，一次只执行一个从当前版本到目标版本的相邻步骤；历史步骤必须保留以校验已提交记录。v1 支持 `replace_version` 项目策略和 `append_version_event` 任务策略：后者为每个任务追加保持原状态的 `MIGRATE_POLARIS` 事件，不改写 append-only 历史。迁移以 `.polaris/migrations/MIG-*.json` 记录 `IN_PROGRESS/COMPLETED` 和各任务前后 sequence；重跑必须可恢复且不得重复事件。未知路径、跨版本跳跃、冻结 workflow 变化、任务集合并发变化和不完整记录都必须机械拒绝。改变 workflow 或数据形态的新迁移，必须先增加新的声明式策略和针对性测试。
+版本升级必须先 vendoring 目标协议，再显式运行 vendored `migrate_project.py`。`workflow/migrations.json` 是迁移路径唯一且 append-only 的注册表，一次只执行一个从当前版本到目标版本的相邻步骤；历史步骤必须保留以校验已提交记录。Migration protocol v2 保留 `replace_version` / `append_version_event`，并增加 `replace_version_and_workflow` / `append_mapped_workflow_event`。`0.1.19 → 0.1.20` 原子替换冻结 workflow 为 `0.1.3`，追加带源/目标状态及旧版本字段的迁移事件；旧 `IMPLEMENTED`、`DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`，其余治理状态保持含义。迁移以 `.polaris/migrations/MIG-*.json` 记录 `IN_PROGRESS/COMPLETED`、各任务 sequence 和状态映射；重跑必须可恢复且不得重复事件。未知路径、跨版本跳跃、未声明的 workflow 变化、任务集合并发变化和不完整记录都必须机械拒绝。
 
 迁移占用任务转换锁时必须写入结构化 owner：迁移 ID、任务 ID、主机名、PID 和创建时间。重跑只允许接管同一迁移在同一主机上、且原 PID 已确认不存在的锁；活跃 PID、其他迁移、其他主机、空锁或损坏锁一律拒绝。这样既能从进程崩溃或机器重启恢复，又不把真实并发误判为遗留锁。
 
@@ -489,11 +487,11 @@ AGENTS.md
 ### 可选 Code Intelligence 协议
 
 - v0.1 的唯一正式 Provider 是 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)。`providers/code-intelligence/codegraph.json` 声明其 MCP `codegraph_explore` 和 CLI `status`、`explore`、`sync` 能力；核心 record 使用 Provider-neutral 的新鲜度和回退字段。
-- `.codegraph/` 由用户创建和维护。Polaris 允许用户显式运行 `polaris code-intelligence add codegraph --repo .`，但绝不安装、初始化、启动或配置 Provider、watcher、daemon、锁或 MCP；缺少 marker 时记录 `UNAVAILABLE` 并直接回退源码。
+- `.codegraph/` 由用户创建和维护。Polaris 允许用户显式运行 `polaris code-intelligence add codegraph --repo .`，但绝不安装、初始化、启动或配置 Provider、watcher、daemon、锁或 MCP；缺少 marker 或策略禁用时直接回退源码，不生成新的阶段 record。
 - Provider 原生 watcher 与连接时 reconciliation 是保持索引接近工作树的主机制。Polaris 只在阶段入口、已知索引冻结或最终 Documentation Sync 的有界点读取 status；仅在 status 表示 pending 时至多执行一次 `codegraph sync`，随后至多复查一次，绝不等待或轮询。
 - 记录的结论限定为检查时：`CURRENT_AT_CHECK`、`PARTIAL_STALE`、`INDEX_STALE`、`NOT_VERIFIED` 或 `UNAVAILABLE`，不得宣称与某个 Git commit 严格一致。逐文件 stale point 必须记录路径和原因；文件仍存在时 Agent 直接读取源码并记录 `READ_SOURCE`，已删除时检查注册 subject 的 Git diff 并记录 `INSPECT_GIT_DIFF`；索引级失效使用 `SEARCH_SOURCE` 和 Git 证据。
 - Planning、Implementation 与 Reviewer 只在冻结范围内使用图关系；返回路径必须经源码确认才可进入 Working Set，Reviewer 必须独立查询。响应的局部 stale 不会丢弃其余图线索，但 stale 路径不能直接作为编辑或 Review 结论。
-- Provider 不可用、能力缺失、超时、错误响应或同步失败都必须记录准确的新鲜度并继续既有流程。图不扩展 scope，也不是 Workflow gate；Validation 完全不调用 CodeGraph，仍只依赖源码、Git、构建、测试、静态检查和 Human Check。
+- 只有阶段实际执行 Provider `status`、`sync` 或 `explore` 操作时才写耐久 record，并准确记录成功、失败和新鲜度；未执行操作时省略 artifact 引用。图不扩展 scope，也不是 Workflow gate；Validation 完全不调用 CodeGraph，仍只依赖源码、Git、构建、测试、静态检查和 Human Check。
 - Git 只保存绑定 Provider、阶段、subject、目的、有限摘要、响应哈希、新鲜度、stale point 与源码回退证据；原始响应只进入 ignored runtime。已提交 v1 record 是不可变历史证据，迁移后标为 `retired_provider_evidence`，不能支持新的新鲜度结论。
 
 ## 9. 确定性脚本
@@ -540,16 +538,16 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 ### Independent Implementation
 
 1. 主任务是唯一用户入口和状态机所有者；自动路径中不修改 subject，只负责生成/注册 handoff、派发或续接 Worker、等待、读取进度、校验产物和执行转换。
-2. `START_IMPLEMENTATION` 后生成 `implementations/rNNN/handoff-NNN.json`，再通过 `DISPATCH_IMPLEMENTATION` 自转换注册。handoff 冻结 Work Item、Plan、Working Set、项目规则、subject base、prior Review（返工时）、确定性输出路径和实时进度路径。
+2. 先生成 `implementations/rNNN/handoff-NNN.json`，再由 `START_IMPLEMENTATION` 原子校验和注册。handoff 冻结 Work Item、Plan、Working Set、项目规则、subject base、prior Review（返工时）、确定性输出路径和可选实时进度路径。
 3. Work Item 的 `implementation_dispatch.authorized=true` 是“确认并执行”对当前 revision 全部 Implementer attempts 的显式授权。宿主按自身执行附录在同一本地项目和 checkout 创建隔离 worker；worker 不继承主聊天，也不默认使用 worktree。Codex 的 worker 是可见新任务，Claude Code 的 worker 是保留 agent ID 的非 fork `polaris-implementer` subagent。
 4. Implementer 标题固定为 `Polaris Implement · <TASK> · <REVISION> · attempt <N>`。创建前先复用与 handoff 绑定的有效 Implementation artifact，其次只按适配器声明的稳定身份复用唯一 worker。多条或不明确记录时不得猜测，回退同会话执行。
 5. Implementer 只接收 task ID 与已注册 handoff，不接收主聊天、实现建议或预期结果。它拥有本轮代码、测试、构建文件和项目文档的单写者权限，但不执行 Graph 转换、Review、Validation 或关闭。
-6. 主任务先用 `INITIALIZE` 创建空的 `QUEUED` 快照；Implementer 在改代码前用 `DEFINE_STEPS` 建立有序、非空且绑定 Work Item 验收 ID 的 `implementation_steps`。每步使用稳定 `STEP-NNN`，只能通过 `START_STEP / COMPLETE_STEP / BLOCK_STEP / RESUME_STEP / SKIP_STEP` 线性推进；新发现工作只能用 `APPEND_STEP` 加到末尾，不能重排、删除、改名或回退。测试证据用 `ADD_CHECK` 追加，阶段用 `SET_PHASE` 更新。
-7. `.polaris/tasks/<TASK>/runtime/progress.json` 只保留一份有序步骤权威；current、completed 和 remaining 均由步骤状态推导。所有步骤终态后才能进入 `CHECKPOINTING`，Implementation artifact 必须复制完全一致的 `step_results`。主任务按需格式化展示，不生成 Markdown 副本、Task DAG 或主观百分比。
+6. `implementation_steps` 在 Implementation artifact 中形成耐久终态证据。宿主需要实时报告时可用 `INITIALIZE / DEFINE_STEPS / START_STEP / COMPLETE_STEP / BLOCK_STEP / RESUME_STEP / SKIP_STEP / APPEND_STEP` 维护 ignored 快照；不能重排、删除、改名或回退。
+7. `.polaris/tasks/<TASK>/runtime/progress.json` 是可选本机遥测；存在时 current、completed 和 remaining 由步骤状态推导，主任务按需格式化展示。门禁不得要求该 ignored 文件存在，也不得要求它与耐久 `step_results` 完全相等；不生成 Markdown 副本、Task DAG 或主观百分比。
 8. 每个任务的 `runtime/` 子目录默认 Git ignored，不影响工作树 checkpoint，也不承诺跨电脑恢复。正式 Implementation、Knowledge Delta、commit/diff 和 event 继续写入耐久 Authority。主任务可随时读取进度；若整个宿主停止运行，快照只代表最后一次成功更新。
-9. Implementation artifact 必须绑定 handoff path/hash、Implementer session 和终态 `step_results`。主任务验证后执行 `FINISH_IMPLEMENTATION`，再按适配器声明的稳定身份续接同一个 Implementer worker 执行渲染后的 `documentation-sync` Skill；Worker 写回 Knowledge Delta 和最终 subject checkpoint，主任务执行 `SYNC_DOCS`。
+9. Implementation artifact 必须绑定 handoff path/hash、Implementer session 和终态 `step_results`。同一个 Implementer worker 随后在 `IMPLEMENTING` 内执行 `documentation-sync`，写回 Knowledge Delta 和最终 subject checkpoint。主任务构建 Review handoff，并用一次 `START_REVIEW` 组合校验和注册全部产物。
 10. Review 或 Validation 返工生成新 attempt、新 handoff 和新的 Implementer 任务；prior Review 通过 handoff 传递，Implementer 写 Review Response。不同 attempt 不复用 Implementer session。
-11. 宿主缺少创建、查找、等待或续接能力时，主任务使用同一 handoff 执行 `same_session` fallback，仍更新进度文件并明确提示即时状态响应可能延迟；不得仅因宿主能力不足把业务任务置为 `BLOCKED`。
+11. 宿主缺少创建、查找、等待或续接能力时，主任务使用同一 handoff 执行 `same_session` fallback；已有进度文件可继续更新，但不得为了门禁新建它。需明确提示即时状态响应可能延迟；不得仅因宿主能力不足把业务任务置为 `BLOCKED`。
 
 ### Independent Review
 
@@ -584,7 +582,7 @@ Validation evidence 至少记录 `acceptance_id / command_or_check / cwd / envir
 ### Durability checkpoint
 
 - Vendored Skills、`tools/polaris/`、`.polaris/` 的耐久状态和任务代码均纳入 Git；`.polaris/tasks/<TASK>/runtime/` 是明确忽略的本机瞬时例外。
-- `IMPLEMENTED`、`DOCS_SYNCED`、`REVIEWED`、`VERIFIED` 必须引用一个本地 checkpoint commit；Polaris 不自动 push、merge 或发布。
+- `REVIEWING`、`VALIDATING`、`VERIFIED` 和 `CLOSED` 的 subject 证据必须绑定本地 checkpoint commit；Polaris 不自动 push、merge 或发布。
 - Fresh-session 可以继续当前工作树；Fresh-clone 只保证恢复到最近一次已提交的阶段边界，不承诺恢复尚未保存或尚未提交的编辑器内容。
 - Review 和 Validation 只接受 Git commit SHA，不接受 working-tree marker。创建 checkpoint 前必须识别并保护用户已有的无关改动，不能把不属于 Task scope 的变化混入证据 commit。
 

@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> Current protocol version: `0.1.19` (in development); workflow version: `0.1.2`
+> Current protocol version: `0.1.20` (in development); workflow version: `0.1.3`
 
 Polaris is a repo-native engineering workflow for coding agent hosts. It stores requirements, plans, implementation results, independent reviews, validation evidence, and task state in Git, then uses deterministic gates to prevent requirement drift, stale evidence, and agents declaring their own work complete.
 
@@ -11,17 +11,19 @@ Polaris currently supports Codex and Claude Code. [plan.md](plan.md) is the v0.1
 ## Core workflow
 
 ```text
-DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → IMPLEMENTED
-      → DOCS_SYNCED → REVIEWING → REVIEWED
-      → VALIDATING → VERIFIED → CLOSED
+DRAFT → QUALIFIED → PLANNED → IMPLEMENTING → REVIEWING → VALIDATING
+                                                     ├─ R0/R1 → CLOSED
+                                                     └─ R2 → VERIFIED → CLOSED
 ```
 
 - A Work Item freezes the goal, scope, and acceptance criteria.
-- An independent Implementer works from an immutable handoff and updates code, tests, and documentation.
+- An independent Implementer works from an immutable handoff and updates code, tests, and documentation inside one `IMPLEMENTING` stage.
 - An independent Reviewer checks specification compliance and engineering quality.
 - Validation binds every acceptance criterion to reproducible evidence.
 - `events.jsonl` records state changes; `state.json` is a rebuildable projection.
 - Reviews and validations bind to the current revision, Git commits, and diff hash. Content changes invalidate stale evidence.
+- R0/R1 atomically validate and close with `PASS_AND_CLOSE`; R2 retains `VERIFIED` for final Human approval.
+- Live implementation progress is optional ignored telemetry and is never a durable gate.
 - Only `transition_task.py` can write `VERIFIED` or `CLOSED` after its gates pass.
 
 Tasks use `R1` by default. Low-risk mechanical changes may use `R0`; public APIs, persistent formats, architecture boundaries, concurrency, security, and resource-lifetime changes require `R2`.
@@ -87,7 +89,7 @@ codegraph init
 polaris code-intelligence add codegraph --repo .
 ```
 
-Run these commands from the target repository as appropriate. `codegraph init` creates the `.codegraph/` marker; without it Polaris records `UNAVAILABLE` and uses source and Git directly. Polaris can only read CodeGraph status, explore indexed relationships, and perform one bounded `codegraph sync` at a declared stage boundary. It never installs, initializes, starts, configures, reconfigures, waits for, or manages CodeGraph or its watcher/daemon/MCP configuration.
+Run these commands from the target repository as appropriate. `codegraph init` creates the `.codegraph/` marker; without it Polaris uses source and Git directly and creates no stage record. Polaris writes a Code Intelligence record only when it actually performs a Provider status, sync, or explore operation. Polaris can only read CodeGraph status, explore indexed relationships, and perform one bounded `codegraph sync` at a declared stage boundary. It never installs, initializes, starts, configures, reconfigures, waits for, or manages CodeGraph or its watcher/daemon/MCP configuration.
 
 CodeGraph's watcher and connection reconciliation are the primary freshness mechanisms. Polaris records a limited conclusion at the time it checks: `CURRENT_AT_CHECK`, `PARTIAL_STALE`, `INDEX_STALE`, `NOT_VERIFIED`, or `UNAVAILABLE`; it never claims commit-exact graph freshness. A `PARTIAL_STALE` response names specific files: read each current file directly (`READ_SOURCE`), or inspect the registered Git diff if it was deleted (`INSPECT_GIT_DIFF`). For `INDEX_STALE` or `NOT_VERIFIED`, treat the graph only as a lead and search the repository plus Git (`SEARCH_SOURCE`). Validation remains graph-free and relies on source, Git, builds, tests, static checks, and Human Checks.
 

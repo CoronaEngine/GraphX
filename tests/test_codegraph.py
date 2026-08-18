@@ -148,8 +148,19 @@ class CodeGraphTests(unittest.TestCase):
             self.assertIn(official, path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
         for path in [ROOT / "README.md", ROOT / "README.zh-CN.md"]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.19", text, path.relative_to(ROOT).as_posix())
-            self.assertIn("0.1.2", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.20", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
+
+    def test_authority_surfaces_publish_workflow_013(self) -> None:
+        for path in [
+            ROOT / "README.md",
+            ROOT / "README.zh-CN.md",
+            ROOT / "docs" / "USAGE.md",
+            ROOT / "plan.md",
+        ]:
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("0.1.20", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
 
     def test_readmes_keep_codegraph_operational_boundaries(self) -> None:
         """User-facing authorities retain the source-fallback and ownership boundaries."""
