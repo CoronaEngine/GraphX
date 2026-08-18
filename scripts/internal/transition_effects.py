@@ -152,14 +152,21 @@ def apply_event_effects(
         max_attempts = transition_rule.get("max_attempts", MAX_REVIEW_ATTEMPTS)
         if review["artifact_attempt"] >= max_attempts:
             destination = transition_rule.get("on_max_attempts_to", "BLOCKED")
-            next_state["blocked_from"] = state["status"]
+            next_state["blocked_from"] = transition_rule["to"]
             next_state["blocker"] = {
                 "type": "review_dispute",
                 "reason": f"Review remained rejected after {max_attempts} attempts",
                 "decision_owner": "human",
             }
 
-    if event_name == "REJECT_REVIEW" and destination == "IMPLEMENTING":
+    review_rework_boundary = event_name == "REJECT_REVIEW" and (
+        destination == "IMPLEMENTING"
+        or (
+            destination == "BLOCKED"
+            and next_state.get("blocker", {}).get("type") == "review_dispute"
+        )
+    )
+    if review_rework_boundary:
         _discard_artifacts(next_state, IMPLEMENTATION_DOWNSTREAM_ARTIFACTS)
         next_state["subject"] = None
     elif event_name == "REJECT_REVIEW":

@@ -24,6 +24,14 @@ NEXT_ACTIONS = {
 
 
 def recommended_action(state: dict[str, Any]) -> str:
+    if (
+        state["status"] == "IMPLEMENTING"
+        and "implementation_handoff" not in state["artifacts"]
+    ):
+        return (
+            "build the next Implementer handoff and register it atomically with "
+            "START_IMPLEMENTATION"
+        )
     return NEXT_ACTIONS.get(state["status"], "inspect the workflow before acting")
 
 

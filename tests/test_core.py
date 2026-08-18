@@ -4622,6 +4622,10 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(failed["to"], "IMPLEMENTING")
         state = read_json(self.task / "state.json")
         self.assertEqual(state["artifacts"]["prior_review"]["path"], "reviews/r001/review-001.json")
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "IMPLEMENTING")
+        recovered = recover(self.repo, "TASK-0001")
+        self.assertEqual(recovered["state"]["status"], "IMPLEMENTING")
+        self.assertIn("START_IMPLEMENTATION", recovered["recommended_next_action"])
         self.register_implementation_handoff()
 
         base = subject_1["base_commit"]
@@ -4688,6 +4692,10 @@ class PolarisCoreTests(unittest.TestCase):
             None,
         )
         self.assertEqual(rejected["to"], "IMPLEMENTING")
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "IMPLEMENTING")
+        recovered = recover(self.repo, "TASK-0001")
+        self.assertEqual(recovered["state"]["status"], "IMPLEMENTING")
+        self.assertIn("START_IMPLEMENTATION", recovered["recommended_next_action"])
         self.register_implementation_handoff()
 
         base = handoff_1["subject_base_commit"]
@@ -4838,6 +4846,25 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(result["to"], "BLOCKED")
         state = read_json(self.task / "state.json")
         self.assertEqual(state["blocker"]["type"], "review_dispute")
+        self.assertEqual(state["blocked_from"], "IMPLEMENTING")
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "BLOCKED")
+        self.assertEqual(recover(self.repo, "TASK-0001")["state"]["status"], "BLOCKED")
+
+        transition(
+            self.repo,
+            "TASK-0001",
+            "RESOLVE_BLOCK",
+            [],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "IMPLEMENTING")
+        recovered = recover(self.repo, "TASK-0001")
+        self.assertIn("START_IMPLEMENTATION", recovered["recommended_next_action"])
 
     def test_recovery_working_set_and_exploration_promotion(self) -> None:
         """Fresh-session Recovery 只输出四类最小信息，并检索匹配模块的失败探索。"""

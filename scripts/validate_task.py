@@ -119,13 +119,19 @@ def validate_projection(
         ):
             raise RuleFailure(f"invalid task exploration scope: {exploration_path}")
 
+    prior_review = None
     if "prior_review" in state["artifacts"]:
         prior_reference = normalized_reference(
             directory, state["artifacts"]["prior_review"]
         )
-        validate_json_file(
+        prior_review = validate_json_file(
             directory / prior_reference["path"], root / "schemas" / "review.schema.json"
         )
+        if (
+            prior_review["task_id"] != task_id
+            or prior_review["work_item_revision"] != state["current_revision"]
+        ):
+            raise RuleFailure("prior Review targets the wrong task revision")
 
     projected_status = state["status"]
     status = authority_status(state)
@@ -137,7 +143,29 @@ def validate_projection(
             require_artifact(state, directory, "plan_decisions")
             validate_plan_decisions(repo, root, directory, state, True)
     if at_least(status, "IMPLEMENTING"):
-        validate_implementation_handoff(repo, root, directory, state)
+        if "implementation_handoff" in state["artifacts"]:
+            validate_implementation_handoff(repo, root, directory, state)
+        else:
+            stale_names = {
+                "implementation",
+                "knowledge_delta",
+                "review",
+                "review_2",
+                "review_handoff",
+                "review_response",
+                "validation",
+                "result",
+                "final_approval",
+            }
+            if (
+                status != "IMPLEMENTING"
+                or prior_review is None
+                or state["subject"] is not None
+                or stale_names.intersection(state["artifacts"])
+            ):
+                raise RuleFailure(
+                    f"state {projected_status} requires an Implementation handoff"
+                )
         if state["rigor"] == "R2":
             require_artifact(state, directory, "pre_approval")
     if at_least(status, "REVIEWING"):
