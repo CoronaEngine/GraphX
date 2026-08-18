@@ -612,22 +612,33 @@ def _validate_v2_record_value(
             raise RuleFailure("failed Code Intelligence sync lacks error")
     freshness = value["freshness"]
     status_check_success = status_check is not None and status_check["status"] == "SUCCESS"
+    status_check_evidence = status_check is not None and status_check["status"] in {
+        "SUCCESS", "FAILED"
+    }
     if freshness["status"] != "UNAVAILABLE" and "NONE" in freshness["basis"]:
         raise RuleFailure("freshness basis NONE is reserved for UNAVAILABLE")
-    if "STATUS_JSON" in freshness["basis"] and not status_check_success:
-        raise RuleFailure("STATUS_JSON basis requires a successful status check")
+    if "STATUS_JSON" in freshness["basis"] and not status_check_evidence:
+        raise RuleFailure("STATUS_JSON basis requires structured status check evidence")
     if freshness["status"] == "CURRENT_AT_CHECK":
         if not status_check_success:
             raise RuleFailure("CURRENT_AT_CHECK requires a successful status check")
-        if sync is not None and sync["status"] == "SUCCESS" and status_check["phase"] != "POST_SYNC":
-            raise RuleFailure("successful sync currentness requires a POST_SYNC status check")
+    if sync is not None and sync["status"] == "SUCCESS":
+        if not status_check_success or status_check["phase"] != "POST_SYNC":
+            raise RuleFailure("successful sync requires a successful POST_SYNC status check")
+    elif status_check is not None and status_check["phase"] == "POST_SYNC":
+        raise RuleFailure("POST_SYNC status check requires successful sync")
     if value["status"] == "UNAVAILABLE" and status_check_success:
         raise RuleFailure("unavailable Code Intelligence record cannot claim a successful status check")
     _validate_source_fallbacks(repo, value, base, head)
     _validate_v2_freshness(repo, value, base, head)
     observed_statuses = {item["status"] for item in value["queries"]}
     sync_status = sync["status"] if sync is not None else None
-    if value["status"] == "FAILED" and "FAILED" not in observed_statuses and sync_status != "FAILED":
+    if (
+        value["status"] == "FAILED"
+        and "FAILED" not in observed_statuses
+        and sync_status != "FAILED"
+        and (status_check is None or status_check["status"] != "FAILED")
+    ):
         raise RuleFailure("failed Code Intelligence record lacks a failed operation")
     if value["status"] == "USED" and not observed_statuses.intersection({"SUCCESS", "EMPTY"}) and sync_status != "SUCCESS":
         raise RuleFailure("used Code Intelligence record lacks a successful operation")

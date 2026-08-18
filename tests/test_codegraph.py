@@ -422,7 +422,7 @@ class CodeGraphTests(unittest.TestCase):
                 "stale_points": [],
             },
         })
-        with self.assertRaisesRegex(RuleFailure, "successful status check"):
+        with self.assertRaisesRegex(RuleFailure, "structured status check evidence"):
             validate_record_value(self.repo, "TASK-0001", value, ROOT)
         value["status_check"] = {
             "status": "SUCCESS", "phase": "STAGE_ENTRY",
@@ -467,6 +467,113 @@ class CodeGraphTests(unittest.TestCase):
         self.assertEqual(
             validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
         )
+
+    def test_failed_status_check_records_adapter_not_verified_results(self) -> None:
+        self.initialize_task()
+        (self.repo / ".codegraph").mkdir()
+        inspect_status, _ = self.adapter_functions()
+        descriptor = load_providers(ROOT)["codegraph"]
+        for raw, returncode in (("{not json", 0), ("status failed", 3)):
+            with self.subTest(returncode=returncode):
+                result = inspect_status(
+                    self.repo,
+                    descriptor,
+                    runner=lambda *args, **kwargs: completed(raw, returncode),
+                )
+                self.assertEqual(result["status"], "NOT_VERIFIED")
+                self.assertEqual(result["basis"], ["STATUS_JSON"])
+                self.assertEqual(result["stale_points"][0]["reason"], "STATUS_UNREADABLE")
+                self.assertTrue(result["error"])
+                self.assertIsNotNone(result["status_response_sha256"])
+                value = self.v2_record()
+                value.update({
+                    "status": "FAILED",
+                    "provider": {
+                        "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                        "available_operations": ["status"],
+                    },
+                    "status_check": {
+                        "status": "FAILED", "phase": "STAGE_ENTRY",
+                        "response_sha256": result["status_response_sha256"],
+                        "error": result["error"],
+                    },
+                    "freshness": {
+                        "status": result["status"], "checked_at": result["checked_at"],
+                        "basis": result["basis"], "stale_points": result["stale_points"],
+                    },
+                    "source_fallbacks": [{
+                        "action": "SEARCH_SOURCE", "path": None,
+                        "observed_sha256": None, "base_commit": None,
+                        "head_commit": None, "diff_hash": None,
+                        "purpose": "recover unreadable CodeGraph status",
+                    }],
+                })
+                self.assertEqual(
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+                )
+
+    def test_sync_success_requires_post_sync_check_for_every_freshness_status(self) -> None:
+        self.initialize_task()
+        fallback = {
+            "action": "SEARCH_SOURCE", "path": None, "observed_sha256": None,
+            "base_commit": None, "head_commit": None, "diff_hash": None,
+            "purpose": "recover stale CodeGraph index",
+        }
+        for status, reason in (("INDEX_STALE", "INDEX_FAILED"), ("NOT_VERIFIED", "STATUS_UNREADABLE")):
+            with self.subTest(status=status):
+                value = self.v2_record()
+                value.update({
+                    "status": "USED",
+                    "provider": {
+                        "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                        "available_operations": ["sync", "status"],
+                    },
+                    "status_check": {
+                        "status": "SUCCESS", "phase": "STAGE_ENTRY",
+                        "response_sha256": "1" * 64, "error": None,
+                    },
+                    "sync": {
+                        "status": "SUCCESS", "response_sha256": "0" * 64, "error": None,
+                    },
+                    "freshness": {
+                        "status": status, "checked_at": "2026-08-18T00:00:00Z",
+                        "basis": ["STATUS_JSON", "SYNC_ACKNOWLEDGED"],
+                        "stale_points": [{
+                            "scope": "INDEX", "path": None, "reason": reason,
+                            "fallback": "SEARCH_SOURCE", "observed_sha256": None,
+                        }],
+                    },
+                    "source_fallbacks": [fallback],
+                })
+                with self.assertRaisesRegex(RuleFailure, "POST_SYNC status check"):
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)
+                value["status_check"]["phase"] = "POST_SYNC"
+                self.assertEqual(
+                    validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"], 2
+                )
+
+        value = self.v2_record()
+        value.update({
+            "status": "SKIPPED",
+            "provider": {
+                "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+                "available_operations": ["status"],
+            },
+            "status_check": {
+                "status": "SUCCESS", "phase": "POST_SYNC",
+                "response_sha256": "0" * 64, "error": None,
+            },
+            "freshness": {
+                "status": "INDEX_STALE", "checked_at": "2026-08-18T00:00:00Z",
+                "basis": ["STATUS_JSON"], "stale_points": [{
+                    "scope": "INDEX", "path": None, "reason": "INDEX_FAILED",
+                    "fallback": "SEARCH_SOURCE", "observed_sha256": None,
+                }],
+            },
+            "source_fallbacks": [fallback],
+        })
+        with self.assertRaisesRegex(RuleFailure, "POST_SYNC status check requires successful sync"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
 
     def test_official_descriptor_uses_explore_status_and_sync(self) -> None:
         descriptor = load_providers(ROOT)["codegraph"]
