@@ -21,6 +21,7 @@ from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
 from migrate_project import migrate as migrate_project  # noqa: E402
 from new_revision import create as new_revision  # noqa: E402
+from transition_task import transition  # noqa: E402
 from internal.code_intelligence_protocol import (  # noqa: E402
     _project_marker_path,
     load_providers,
@@ -281,6 +282,462 @@ class CodeGraphTests(unittest.TestCase):
 
     def initialize_task(self) -> None:
         init_task(self.repo, "TASK-0001", "R1")
+
+    def qualify_task(self) -> None:
+        self.initialize_task()
+        path = self.repo / ".polaris/tasks/TASK-0001/revisions/work-item-r001.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value.update({
+            "title": "CodeGraph proxy task",
+            "goal": "Exercise the bounded proxy",
+            "motivation": "Keep graph evidence freshness-aware",
+        })
+        value["scope"]["in"] = ["scripts"]
+        value["acceptance"][0].update({
+            "statement": "The proxy emits a freshness envelope",
+            "evidence": "proxy bundle",
+        })
+        value["implementation_dispatch"]["authorized"] = True
+        value["review_dispatch"]["authorized"] = True
+        write_json_atomic(path, value)
+        transition(
+            self.repo,
+            "TASK-0001",
+            "QUALIFY",
+            [],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+    def proxy_module(self) -> object:
+        return importlib.import_module("internal.code_intelligence_proxy")
+
+    def test_proxy_stage_context_uses_record_name_and_sequential_query_ids(self) -> None:
+        self.qualify_task()
+        proxy = self.proxy_module()
+
+        context = proxy.resolve_stage_context(self.repo, "TASK-0001", "PLANNING")
+
+        self.assertEqual(context["work_item_revision"], 1)
+        self.assertEqual(context["artifact_attempt"], None)
+        self.assertEqual(context["reviewer_slot"], None)
+        self.assertEqual(context["record_name"], "planning")
+        expected = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/runtime/code-intelligence/planning/CIQ-001.json"
+        )
+        self.assertEqual(
+            proxy.proxy_bundle_path(self.repo, "TASK-0001", context, "CIQ-001"),
+            expected,
+        )
+        with self.assertRaisesRegex(InputFailure, "next sequential"):
+            proxy.proxy_bundle_path(self.repo, "TASK-0001", context, "CIQ-002")
+        with self.assertRaisesRegex(InputFailure, "invalid CodeGraph query id"):
+            proxy.proxy_bundle_path(self.repo, "TASK-0001", context, "CIQ-000")
+
+    def test_proxy_stage_context_binds_attempt_subject_and_review_slot(self) -> None:
+        self.qualify_task()
+        proxy = self.proxy_module()
+        task = self.repo / ".polaris/tasks/TASK-0001"
+        state_path = task / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.repo,
+            capture_output=True,
+            check=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout.strip()
+        implementation_handoff = {
+            "artifact_attempt": 2,
+            "subject_base_commit": base,
+        }
+        state["status"] = "IMPLEMENTING"
+        write_json_atomic(state_path, state)
+        with mock.patch(
+            "internal.code_intelligence_proxy.validate_implementation_handoff",
+            return_value=(implementation_handoff, {"path": "handoff.json", "sha256": "0" * 64}),
+        ):
+            implementation = proxy.resolve_stage_context(
+                self.repo, "TASK-0001", "IMPLEMENTATION"
+            )
+            documentation = proxy.resolve_stage_context(
+                self.repo, "TASK-0001", "DOCUMENTATION_SYNC"
+            )
+        self.assertEqual(implementation["record_name"], "implementation-002")
+        self.assertEqual(documentation["record_name"], "documentation-sync-002")
+        self.assertEqual(implementation["target"], {
+            "base_commit": base,
+            "head_commit": None,
+            "diff_hash": None,
+        })
+
+        state["status"] = "REVIEWING"
+        write_json_atomic(state_path, state)
+        review_handoff = {
+            "artifact_attempt": 2,
+            "subject_base_commit": base,
+            "subject_head_commit": base,
+            "subject_diff_hash": subject_diff_hash(self.repo, base, base),
+        }
+        with mock.patch(
+            "internal.code_intelligence_proxy.validate_review_handoff",
+            return_value=review_handoff,
+        ):
+            review = proxy.resolve_stage_context(self.repo, "TASK-0001", "REVIEW")
+        self.assertEqual(review["record_name"], "review-002-slot-1")
+        state["artifacts"]["review"] = {"path": "review.json", "sha256": "0" * 64}
+        write_json_atomic(state_path, state)
+        with mock.patch(
+            "internal.code_intelligence_proxy.validate_review_handoff",
+            return_value=review_handoff,
+        ):
+            review_2 = proxy.resolve_stage_context(self.repo, "TASK-0001", "REVIEW")
+        self.assertEqual(review_2["record_name"], "review-002-slot-2")
+
+        with self.assertRaisesRegex(RuleFailure, "inconsistent with task status"):
+            proxy.resolve_stage_context(self.repo, "TASK-0001", "PLANNING")
+
+    def test_proxy_window_requires_clean_pre_and_post_status_for_current(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        proxy = self.proxy_module()
+        calls: list[tuple[list[str], dict[str, object]]] = []
+        responses = [
+            completed(healthy_status(self.repo)),
+            completed("graph bytes\n"),
+            completed(healthy_status(self.repo)),
+        ]
+
+        def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append((command, kwargs))
+            if not responses:
+                raise AssertionError(f"unexpected extra CodeGraph call: {command}")
+            return responses.pop(0)
+
+        with mock.patch("internal.code_intelligence_proxy.shutil.which", return_value="/bin/codegraph"):
+            result = proxy.execute_proxy_query(
+                self.repo,
+                "TASK-0001",
+                "PLANNING",
+                "CIQ-001",
+                "locate affected symbols",
+                "symbol A",
+                False,
+                runner=runner,
+            )
+
+        bundle = result["bundle"]
+        self.assertEqual(bundle["delivery"]["state"], "CURRENT")
+        self.assertEqual(bundle["delivery"]["usage"], "NON_AUTHORITATIVE_CONTEXT")
+        self.assertEqual(bundle["delivery"]["record_status"], "CURRENT_AT_CHECK")
+        self.assertEqual([call[0][1] for call in calls], ["status", "explore", "status"])
+        self.assertTrue(all(Path(call[1]["cwd"]).resolve() == self.repo.resolve() for call in calls))
+        self.assertEqual(result["response"], "graph bytes\n")
+        self.assertTrue(result["envelope"].startswith("[POLARIS_CODEGRAPH_FRESHNESS]\n"))
+        self.assertEqual(
+            hashlib.sha256(
+                (self.repo / ".polaris/tasks/TASK-0001/runtime/code-intelligence/planning/CIQ-001.response.txt").read_bytes()
+            ).hexdigest(),
+            bundle["query"]["response_sha256"],
+        )
+
+    def test_proxy_window_downgrades_pending_unknown_and_unavailable_states(self) -> None:
+        cases = [
+            ("pending", "STALE", 3),
+            ("malformed", "UNKNOWN", 1),
+            ("missing_marker", "UNAVAILABLE", 0),
+        ]
+        for index, (case, expected_state, expected_calls) in enumerate(cases, start=1):
+            with self.subTest(case=case):
+                if index > 1:
+                    self.tearDown()
+                    self.setUp()
+                self.qualify_task()
+                proxy = self.proxy_module()
+                query_id = "CIQ-001"
+                calls: list[list[str]] = []
+                status = json.loads(healthy_status(self.repo))
+                if case == "pending":
+                    status["pendingChanges"]["modified"] = 1
+                    responses = [
+                        completed(json.dumps(status)),
+                        completed("graph bytes\n"),
+                        completed(json.dumps(status)),
+                    ]
+                else:
+                    responses = [completed("not-json\n")]
+                if case != "missing_marker":
+                    (self.repo / ".codegraph").mkdir()
+
+                def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                    calls.append(command)
+                    return responses.pop(0)
+
+                with mock.patch("internal.code_intelligence_proxy.shutil.which", return_value="/bin/codegraph"):
+                    result = proxy.execute_proxy_query(
+                        self.repo,
+                        "TASK-0001",
+                        "PLANNING",
+                        query_id,
+                        "inspect freshness",
+                        "symbol A",
+                        False,
+                        runner=runner,
+                    )
+                self.assertEqual(result["bundle"]["delivery"]["state"], expected_state)
+                self.assertEqual(len(calls), expected_calls)
+                if expected_state == "UNAVAILABLE":
+                    self.assertIsNone(result["response"])
+
+    def test_proxy_window_syncs_once_and_rechecks_after_the_query(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        proxy = self.proxy_module()
+        pending = json.loads(healthy_status(self.repo))
+        pending["pendingChanges"]["modified"] = 1
+        responses = [
+            completed(json.dumps(pending)),
+            completed("synced\n"),
+            completed(healthy_status(self.repo)),
+            completed("graph bytes\n"),
+            completed(healthy_status(self.repo)),
+        ]
+        calls: list[list[str]] = []
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch("internal.code_intelligence_proxy.shutil.which", return_value="/bin/codegraph"):
+            result = proxy.execute_proxy_query(
+                self.repo,
+                "TASK-0001",
+                "PLANNING",
+                "CIQ-001",
+                "refresh one query window",
+                "symbol A",
+                True,
+                runner=runner,
+            )
+
+        self.assertEqual(
+            [command[1] for command in calls],
+            ["status", "sync", "status", "explore", "status"],
+        )
+        self.assertEqual(result["bundle"]["sync"]["status"], "SUCCESS")
+        self.assertEqual(result["bundle"]["delivery"]["state"], "CURRENT")
+        self.assertEqual(
+            result["bundle"]["delivery"]["pending_changes"],
+            {"added": 0, "modified": 0, "removed": 0},
+        )
+
+    def test_proxy_window_never_promotes_failed_or_post_stale_queries(self) -> None:
+        cases = [
+            ("explore_failed", "UNKNOWN", ["status", "explore"]),
+            ("post_pending", "STALE", ["status", "explore", "status"]),
+        ]
+        for index, (case, expected_state, expected_calls) in enumerate(cases, start=1):
+            with self.subTest(case=case):
+                if index > 1:
+                    self.tearDown()
+                    self.setUp()
+                self.qualify_task()
+                (self.repo / ".codegraph").mkdir()
+                proxy = self.proxy_module()
+                post = json.loads(healthy_status(self.repo))
+                post["pendingChanges"]["added"] = 1
+                responses = (
+                    [completed(healthy_status(self.repo)), completed("", 1, "failed")]
+                    if case == "explore_failed"
+                    else [
+                        completed(healthy_status(self.repo)),
+                        completed("graph bytes\n"),
+                        completed(json.dumps(post)),
+                    ]
+                )
+                calls: list[list[str]] = []
+
+                def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                    calls.append(command)
+                    return responses.pop(0)
+
+                with mock.patch("internal.code_intelligence_proxy.shutil.which", return_value="/bin/codegraph"):
+                    result = proxy.execute_proxy_query(
+                        self.repo,
+                        "TASK-0001",
+                        "PLANNING",
+                        "CIQ-001",
+                        "verify failure handling",
+                        "symbol A",
+                        False,
+                        runner=runner,
+                    )
+                self.assertEqual(result["bundle"]["delivery"]["state"], expected_state)
+                self.assertEqual([command[1] for command in calls], expected_calls)
+                if case == "explore_failed":
+                    self.assertIsNone(result["response"])
+                else:
+                    self.assertEqual(
+                        result["bundle"]["delivery"]["reason"], "PENDING_CHANGES"
+                    )
+
+    def test_proxy_window_classifies_banners_and_discards_unsafe_paths(self) -> None:
+        partial = """⚠️ Some files referenced below were edited since the last index sync —
+their codegraph entries may be stale:
+  - src/widget.py (edited 800ms ago, pending sync)
+For accurate content of those specific files, Read them directly.
+"""
+        cases = [
+            ("partial", partial, "STALE", True),
+            ("suspicious", "warning: graph may be stale\n", "UNKNOWN", True),
+            ("unsafe", partial.replace("src/widget.py", "../escape.py"), "UNKNOWN", False),
+        ]
+        for index, (case, response, expected_state, retained) in enumerate(cases, start=1):
+            with self.subTest(case=case):
+                if index > 1:
+                    self.tearDown()
+                    self.setUp()
+                self.qualify_task()
+                (self.repo / ".codegraph").mkdir()
+                source = self.repo / "src/widget.py"
+                source.parent.mkdir()
+                source.write_text("value = 1\n", encoding="utf-8")
+                proxy = self.proxy_module()
+                responses = [
+                    completed(healthy_status(self.repo)),
+                    completed(response),
+                    completed(healthy_status(self.repo)),
+                ]
+
+                def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                    return responses.pop(0)
+
+                with mock.patch("internal.code_intelligence_proxy.shutil.which", return_value="/bin/codegraph"):
+                    result = proxy.execute_proxy_query(
+                        self.repo,
+                        "TASK-0001",
+                        "PLANNING",
+                        "CIQ-001",
+                        "classify response",
+                        "symbol A",
+                        False,
+                        runner=runner,
+                    )
+                self.assertEqual(result["bundle"]["delivery"]["state"], expected_state)
+                self.assertEqual(result["response"] is not None, retained)
+                self.assertEqual(result["bundle"]["response_path"] is not None, retained)
+
+    def test_proxy_window_rejects_cross_project_and_runtime_symlink_evidence(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        proxy = self.proxy_module()
+        other = self.repo / "other"
+        other.mkdir()
+        wrong = json.loads(healthy_status(self.repo))
+        wrong["projectPath"] = str(other)
+        calls: list[list[str]] = []
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return completed(json.dumps(wrong))
+
+        with mock.patch("internal.code_intelligence_proxy.shutil.which", return_value="/bin/codegraph"):
+            result = proxy.execute_proxy_query(
+                self.repo,
+                "TASK-0001",
+                "PLANNING",
+                "CIQ-001",
+                "reject cross-project status",
+                "symbol A",
+                False,
+                runner=runner,
+            )
+        self.assertEqual([command[1] for command in calls], ["status"])
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(result["bundle"]["delivery"]["reason"], "PROJECT_MISMATCH")
+
+        self.tearDown()
+        self.setUp()
+        self.qualify_task()
+        runtime = self.repo / ".polaris/tasks/TASK-0001/runtime"
+        shutil.rmtree(runtime)
+        runtime.symlink_to(self.repo / "escaped-runtime", target_is_directory=True)
+        context = proxy.resolve_stage_context(self.repo, "TASK-0001", "PLANNING")
+        with self.assertRaisesRegex(RuleFailure, "crosses a symlink"):
+            proxy.proxy_bundle_path(self.repo, "TASK-0001", context, "CIQ-001")
+
+    def test_proxy_window_disabled_policy_or_missing_cli_never_calls_provider(self) -> None:
+        for index, case in enumerate(("disabled", "missing_cli"), start=1):
+            with self.subTest(case=case):
+                if index > 1:
+                    self.tearDown()
+                    self.setUp()
+                self.qualify_task()
+                (self.repo / ".codegraph").mkdir()
+                if case == "disabled":
+                    config_path = self.repo / ".polaris/code-intelligence.json"
+                    config = json.loads(
+                        (ROOT / "templates/code-intelligence.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    config["mode"] = "disabled"
+                    write_json_atomic(config_path, config)
+                proxy = self.proxy_module()
+
+                def runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                    raise AssertionError("disabled or unavailable CodeGraph must not run")
+
+                executable = "/bin/codegraph" if case == "disabled" else None
+                with mock.patch(
+                    "internal.code_intelligence_proxy.shutil.which",
+                    return_value=executable,
+                ):
+                    result = proxy.execute_proxy_query(
+                        self.repo,
+                        "TASK-0001",
+                        "PLANNING",
+                        "CIQ-001",
+                        "verify activation gate",
+                        "symbol A",
+                        True,
+                        runner=runner,
+                    )
+                self.assertEqual(result["bundle"]["delivery"]["state"], "UNAVAILABLE")
+                self.assertEqual(result["bundle"]["query"]["status"], "UNAVAILABLE")
+                self.assertIsNone(result["response"])
+
+    def test_proxy_envelope_is_finite_and_truncates_diagnostics(self) -> None:
+        self.qualify_task()
+        proxy = self.proxy_module()
+        context = proxy.resolve_stage_context(self.repo, "TASK-0001", "PLANNING")
+        bundle = {
+            "task_context": context,
+            "query": {"id": "CIQ-001"},
+            "delivery": {
+                "state": "UNKNOWN",
+                "record_status": "NOT_VERIFIED",
+                "reason": "STATUS_UNREADABLE",
+                "checked_at": "2026-08-19T00:00:00Z",
+                "pending_changes": {"added": 0, "modified": 0, "removed": 0},
+                "usage": "NAVIGATION_ONLY",
+                "required_fallback": "SEARCH_SOURCE",
+                "error": "x" * 300,
+            },
+        }
+
+        envelope = proxy.render_freshness_envelope(bundle)
+
+        self.assertTrue(envelope.startswith("[POLARIS_CODEGRAPH_FRESHNESS]\n"))
+        self.assertTrue(envelope.endswith("[/POLARIS_CODEGRAPH_FRESHNESS]\n"))
+        error_line = next(line for line in envelope.splitlines() if line.startswith("error: "))
+        self.assertEqual(len(error_line.removeprefix("error: ")), 240)
 
     def set_protocol_version(self, version: str) -> None:
         project_path = self.repo / ".polaris/project.json"
