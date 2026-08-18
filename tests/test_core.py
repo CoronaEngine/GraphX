@@ -3671,6 +3671,24 @@ enabled_tools = ["polaris_codegraph_explore"]
         with self.assertRaisesRegex(RuleFailure, "unrelated TOML"):
             merge_project_mcp(self.repo, adapter, source_text=source)
 
+    def test_project_mcp_registration_preserves_unrelated_toml_nan_values(
+        self,
+    ) -> None:
+        """TOML NaN values remain equivalent across insert and managed updates."""
+        from internal.project_mcp_registration import merge_project_mcp
+
+        adapter = {item["host_id"]: item for item in load_host_adapters(ROOT)}[
+            "codex"
+        ]
+        source = 'metric = nan\n[mcp_servers.other]\ncommand = "other"\n'
+        inserted = merge_project_mcp(self.repo, adapter, source_text=source)
+        self.assertTrue(inserted.startswith(source))
+        stale = inserted.replace("enabled = true", "enabled = false")
+        self.assertEqual(
+            merge_project_mcp(self.repo, adapter, source_text=stale),
+            inserted,
+        )
+
     def test_host_adapter_hardening_rejects_entry_overlay_and_capability_errors(self) -> None:
         """入口必须存在，overlay 不得覆写 Skill，worker 能力依赖必须自洽。"""
         cases = {

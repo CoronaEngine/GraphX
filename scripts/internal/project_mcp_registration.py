@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,23 @@ def _without_managed_server(value: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+def _toml_values_equal(left: Any, right: Any) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, float) and math.isnan(left) and math.isnan(right):
+        return True
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _toml_values_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _toml_values_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right)
+        )
+    return left == right
+
+
 def _merge_codex(adapter: dict[str, Any], source: str) -> str:
     parsed = _parse_toml(source)
     starts = source.count(CODEX_START)
@@ -117,7 +135,9 @@ def _merge_codex(adapter: dict[str, Any], source: str) -> str:
         separator = "" if not source else ("\n" if source.endswith("\n") else "\n\n")
         rendered = source + separator + block
     final = _parse_toml(rendered)
-    if _without_managed_server(parsed) != _without_managed_server(final):
+    if not _toml_values_equal(
+        _without_managed_server(parsed), _without_managed_server(final)
+    ):
         raise RuleFailure("project MCP markers would rewrite unrelated TOML")
     servers = final.get("mcp_servers")
     if not isinstance(servers, dict) or servers.get(SERVER_ID) != _codex_definition(
