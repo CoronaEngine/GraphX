@@ -8,9 +8,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from internal.code_intelligence_protocol import load_providers
+from internal.code_intelligence_protocol import load_config, load_providers
 from internal.codegraph_adapter import classify_response, inspect_status, sync_if_needed
-from internal.polaris_core import InputFailure, protocol_root, require_protocol_compatible, run_main, task_dir
+from internal.polaris_core import (
+    InputFailure,
+    protocol_root,
+    require_protocol_compatible,
+    run_main,
+    task_dir,
+    utc_now,
+)
 from internal.task_layout import code_intelligence_runtime_dir
 
 
@@ -47,6 +54,20 @@ def _runtime_input(repo: Path, task_id: str, value: Path) -> Path:
     return candidate
 
 
+def _disabled_freshness() -> dict[str, Any]:
+    """Return the provider-neutral result for an explicitly disabled project."""
+    return {
+        "status": "UNAVAILABLE",
+        "checked_at": utc_now(),
+        "basis": ["NONE"],
+        "stale_points": [],
+        "status_response_sha256": None,
+        "error": "Code Intelligence is disabled by project configuration",
+        "needs_sync": False,
+        "pending_changes": None,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -70,7 +91,20 @@ def main() -> int:
             except UnicodeDecodeError as error:
                 raise InputFailure("CodeGraph response input is not UTF-8") from error
             return classify_response(repo, response)
-        descriptor = load_providers(protocol_root(repo))["codegraph"]
+        root = protocol_root(repo)
+        if load_config(repo, root)["mode"] == "disabled":
+            freshness = _disabled_freshness()
+            if args.command == "status":
+                return freshness
+            return {
+                "freshness": freshness,
+                "sync": {
+                    "status": "UNAVAILABLE",
+                    "response_sha256": None,
+                    "error": None,
+                },
+            }
+        descriptor = load_providers(root)["codegraph"]
         if args.command == "status":
             return inspect_status(repo, descriptor)
         return sync_if_needed(repo, descriptor)

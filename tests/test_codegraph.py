@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import importlib
+import io
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -1770,6 +1773,57 @@ For accurate content of those specific files, Read them directly.
         rejected_payload = json.loads(rejected.stdout)
         self.assertEqual(rejected_payload["status"], "ERROR")
         self.assertIn("runtime", rejected_payload["message"])
+
+    def test_runtime_disabled_mode_skips_status_and_sync_without_calling_codegraph(self) -> None:
+        """Disabled projects never load or invoke the optional provider runtime."""
+        (self.repo / ".codegraph").mkdir()
+        write_json_atomic(
+            self.repo / ".polaris" / "code-intelligence.json",
+            {
+                "config_version": 1,
+                "mode": "disabled",
+                "provider_priority": [],
+                "include": [],
+                "exclude": [],
+            },
+        )
+        runtime = importlib.import_module("code_intelligence_runtime")
+        expected_freshness = {
+            "status": "UNAVAILABLE",
+            "basis": ["NONE"],
+            "stale_points": [],
+            "status_response_sha256": None,
+            "error": "Code Intelligence is disabled by project configuration",
+            "needs_sync": False,
+            "pending_changes": None,
+        }
+        for command in ("status", "sync-if-needed"):
+            with self.subTest(command=command):
+                output = io.StringIO()
+                with (
+                    mock.patch.object(sys, "argv", ["code_intelligence_runtime.py", command, "--repo", str(self.repo), "--json"]),
+                    mock.patch.object(runtime, "load_providers", side_effect=AssertionError("descriptor must not be loaded")) as providers,
+                    mock.patch.object(runtime, "inspect_status", side_effect=AssertionError("CodeGraph status must not run")) as status,
+                    mock.patch.object(runtime, "sync_if_needed", side_effect=AssertionError("CodeGraph sync must not run")) as sync,
+                    redirect_stdout(output),
+                ):
+                    self.assertEqual(runtime.main(), 0)
+
+                payload = json.loads(output.getvalue())
+                freshness = payload if command == "status" else payload["freshness"]
+                self.assertEqual(
+                    {key: freshness[key] for key in expected_freshness},
+                    expected_freshness,
+                )
+                if command == "sync-if-needed":
+                    self.assertEqual(payload["status"], "PASS")
+                    self.assertEqual(
+                        payload["sync"],
+                        {"status": "UNAVAILABLE", "response_sha256": None, "error": None},
+                    )
+                providers.assert_not_called()
+                status.assert_not_called()
+                sync.assert_not_called()
 
     def test_runtime_rejects_symlinked_runtime_directory_before_reading(self) -> None:
         (self.repo / "README.md").write_text("test repository\n", encoding="utf-8")
