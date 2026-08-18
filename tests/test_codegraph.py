@@ -1814,6 +1814,65 @@ For accurate content of those specific files, Read them directly.
         self.assertEqual(result["stale_points"][0]["fallback"], "INSPECT_GIT_DIFF")
         self.assertIsNone(result["stale_points"][0]["observed_sha256"])
 
+    def test_response_banner_normalizes_safe_windows_relative_paths(self) -> None:
+        source = self.repo / "src/nested/widget.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("def widget():\n    return 1\n", encoding="utf-8")
+        prefix = """⚠️ Some files referenced below were edited since the last index sync —
+their codegraph entries may be stale:
+"""
+        suffix = "For accurate content of those specific files, Read them directly.\n"
+        cases = [
+            ("src\\nested\\widget.py", "READ_SOURCE", file_sha256(source)),
+            ("src\\nested/deleted.py", "INSPECT_GIT_DIFF", None),
+        ]
+
+        for listed_path, fallback, digest in cases:
+            with self.subTest(listed_path=listed_path):
+                result = self.classify_response(
+                    f"{prefix}  - {listed_path} (edited 800ms ago, pending sync)\n{suffix}"
+                )
+
+                self.assertEqual(result["classification"], "PARTIAL_STALE")
+                point = result["stale_points"][0]
+                self.assertEqual(
+                    point["path"],
+                    "src/nested/widget.py"
+                    if fallback == "READ_SOURCE"
+                    else "src/nested/deleted.py",
+                )
+                self.assertEqual(point["fallback"], fallback)
+                self.assertEqual(point["observed_sha256"], digest)
+
+    def test_response_banner_rejects_unsafe_windows_style_paths(self) -> None:
+        prefix = """⚠️ Some files referenced below were edited since the last index sync —
+their codegraph entries may be stale:
+"""
+        suffix = "For accurate content of those specific files, Read them directly.\n"
+        unsafe_paths = (
+            "C:\\src\\widget.py",
+            "C:/src/widget.py",
+            "\\\\server\\share\\widget.py",
+            "\\\\?\\C:\\src\\widget.py",
+            "\\\\.\\PhysicalDrive0",
+            "\\src\\widget.py",
+            "/src/widget.py",
+            "src\\\\widget.py",
+            "src\\.\\widget.py",
+            "src\\..\\outside.py",
+        )
+
+        for listed_path in unsafe_paths:
+            with self.subTest(listed_path=listed_path):
+                result = self.classify_response(
+                    f"{prefix}  - {listed_path} (edited 800ms ago, pending sync)\n{suffix}"
+                )
+
+                self.assertEqual(result["classification"], "NOT_VERIFIED")
+                self.assertEqual(
+                    result["stale_points"][0]["reason"], "STATUS_UNREADABLE"
+                )
+
     def test_arbitrary_warning_is_not_a_codegraph_banner(self) -> None:
         result = self.classify_response("⚠️ maybe stale: src/widget.py\n")
 

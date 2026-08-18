@@ -145,8 +145,23 @@ def _response_not_verified(checked_at: str, error: BaseException | str) -> dict[
     )
 
 
+def _normalize_banner_path(raw_path: str) -> str:
+    """Translate a safe Windows-relative banner path to portable POSIX form."""
+    if (
+        not raw_path
+        or raw_path.startswith(("/", "\\"))
+        or re.match(r"^[A-Za-z]:", raw_path) is not None
+    ):
+        raise ValueError(f"invalid CodeGraph stale path: {raw_path}")
+    normalized = raw_path.replace("\\", "/")
+    if any(part in {"", ".", ".."} for part in normalized.split("/")):
+        raise ValueError(f"invalid CodeGraph stale path: {raw_path}")
+    return normalized
+
+
 def _response_file_point(repo: Path, raw_path: str) -> dict[str, Any]:
-    target = resolve_repo_reference(repo, raw_path)
+    path = _normalize_banner_path(raw_path)
+    target = resolve_repo_reference(repo, path)
     if target.exists():
         if target.is_symlink() or not target.is_file():
             raise ValueError(f"CodeGraph stale path is not a regular file: {raw_path}")
@@ -157,7 +172,7 @@ def _response_file_point(repo: Path, raw_path: str) -> dict[str, Any]:
         observed_sha256 = None
     return {
         "scope": "FILE",
-        "path": raw_path,
+        "path": path,
         "reason": "PENDING_SYNC",
         "fallback": fallback,
         "observed_sha256": observed_sha256,
