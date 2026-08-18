@@ -1011,8 +1011,8 @@ def _validate_v3_record_value(
     )
     if sync is None and post_sync is not None:
         raise RuleFailure("post-sync status requires one sync attempt")
-    if sync is not None and post_sync is None:
-        raise RuleFailure("attempted sync requires post-sync status evidence")
+    if sync is not None and sync["status"] == "SUCCESS" and post_sync is None:
+        raise RuleFailure("successful sync requires post-sync status evidence")
     if sync is not None and sync["status"] == "SUCCESS" and (
         post_sync["status"] != "CURRENT_AT_CHECK" or post_sync["needs_sync"]
     ):
@@ -1029,12 +1029,24 @@ def _validate_v3_record_value(
     delivery = value["delivery"]
     for point in delivery["stale_points"]:
         _validate_v3_stale_point(repo, point)
-    effective = post_sync if sync is not None else pre
+    effective = post_sync if post_sync is not None else pre
     observed_points: list[dict[str, Any]] = []
     for observation in (effective, post):
         if observation is None:
             continue
         observed_points.extend(observation["stale_points"])
+        if (
+            observation is effective
+            and sync is not None
+            and sync["status"] == "FAILED"
+        ):
+            observed_points.append({
+                "scope": "INDEX",
+                "path": None,
+                "reason": "SYNC_FAILED",
+                "fallback": "SEARCH_SOURCE",
+                "observed_sha256": None,
+            })
         pending = observation["pending_changes"]
         if isinstance(pending, dict) and any(pending.values()):
             pending_point = {
@@ -1068,7 +1080,11 @@ def _validate_v3_record_value(
     state = delivery["state"]
     expected_record_status = {
         "CURRENT": "CURRENT_AT_CHECK",
-        "STALE": delivery["record_status"],
+        "STALE": (
+            "INDEX_STALE"
+            if any(point["scope"] == "INDEX" for point in delivery["stale_points"])
+            else "PARTIAL_STALE"
+        ),
         "UNKNOWN": "NOT_VERIFIED",
         "UNAVAILABLE": "UNAVAILABLE",
     }[state]

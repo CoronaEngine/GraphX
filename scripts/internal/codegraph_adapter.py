@@ -438,7 +438,7 @@ def _status_result(
             stale_points=[_index_point(reason) for reason in stale_reasons],
             status_response_sha256=response_sha256,
             error=None,
-            needs_sync=False,
+            needs_sync=any(pending.values()),
             pending_changes=pending,
         )
 
@@ -562,6 +562,8 @@ def _sync_result(status: str, response_sha256: str | None, error: str | None) ->
 def _sync_failed(
     freshness: dict[str, Any],
     sync: dict[str, Any],
+    *,
+    post_sync_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     points = [*freshness["stale_points"], _index_point("SYNC_FAILED")]
     return {
@@ -573,6 +575,7 @@ def _sync_failed(
             "error": sync["error"] or freshness["error"],
         },
         "sync": sync,
+        "post_sync_status": post_sync_status,
     }
 
 
@@ -591,13 +594,17 @@ def synchronize_observed_status(
         sync_timeout = _validated_timeout(sync_timeout_seconds)
     except ValueError as error:
         freshness = _not_verified(_checked_at(), error)
-        return {"freshness": freshness, "sync": _sync_result("SKIPPED", None, None)}
+        return {
+            "freshness": freshness,
+            "sync": _sync_result("SKIPPED", None, None),
+            "post_sync_status": None,
+        }
     skipped = _sync_result("SKIPPED", None, None)
     unavailable = _sync_result("UNAVAILABLE", None, None)
     if initial["status"] == "UNAVAILABLE" or _marker_path(repo, descriptor) is None:
-        return {"freshness": initial, "sync": unavailable}
+        return {"freshness": initial, "sync": unavailable, "post_sync_status": None}
     if not initial["needs_sync"]:
-        return {"freshness": initial, "sync": skipped}
+        return {"freshness": initial, "sync": skipped, "post_sync_status": None}
 
     try:
         completed = _run_cli(repo, descriptor, "sync_args", sync_timeout, runner)
@@ -628,9 +635,10 @@ def synchronize_observed_status(
                 response_sha256,
                 "CodeGraph post-sync status is not current",
             ),
+            post_sync_status=rechecked,
         )
     rechecked["basis"] = [*rechecked["basis"], "SYNC_ACKNOWLEDGED"]
-    return {"freshness": rechecked, "sync": sync}
+    return {"freshness": rechecked, "sync": sync, "post_sync_status": rechecked}
 
 
 def sync_if_needed(
@@ -651,7 +659,7 @@ def sync_if_needed(
     initial = inspect_status(
         repo, descriptor, runner=runner, timeout_seconds=status_timeout
     )
-    return synchronize_observed_status(
+    result = synchronize_observed_status(
         repo,
         descriptor,
         initial,
@@ -659,3 +667,4 @@ def sync_if_needed(
         status_timeout_seconds=status_timeout,
         sync_timeout_seconds=sync_timeout,
     )
+    return {"freshness": result["freshness"], "sync": result["sync"]}

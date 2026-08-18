@@ -336,8 +336,6 @@ def _delivery(
     elif unknown:
         state = "UNKNOWN"
         record_status = "NOT_VERIFIED"
-        if not any(point.get("reason") == "STATUS_UNREADABLE" for point in points):
-            points.append(dict(_INDEX_FALLBACK))
         if forced_unknown:
             reason = "RESPONSE_INTEGRITY_UNVERIFIED"
         elif _is_unknown(effective_pre):
@@ -497,7 +495,7 @@ def execute_proxy_query(
         )
         bundle["sync"] = synchronized["sync"]
         effective_pre = synchronized["freshness"]
-        bundle["post_sync_status"] = effective_pre
+        bundle["post_sync_status"] = synchronized["post_sync_status"]
 
     if effective_pre["status"] in {"UNAVAILABLE", "NOT_VERIFIED"}:
         bundle["query"]["status"] = (
@@ -534,7 +532,11 @@ def execute_proxy_query(
     query_result = run_explore(repo, descriptor, query, runner=runner)
     bundle["query"].update({
         "status": query_result["status"],
-        "response_sha256": query_result["response_sha256"],
+        "response_sha256": (
+            query_result["response_sha256"]
+            if query_result["status"] == "SUCCESS"
+            else None
+        ),
         "error": query_result["error"],
     })
     response: str | None = query_result.get("response")

@@ -21,6 +21,7 @@ from internal.polaris_core import (
 
 PROTOCOL_VERSION = "2025-11-25"
 TOOL_NAME = "polaris_codegraph_explore"
+SERVER_ROOT = Path(__file__).resolve().parent.parent
 TOOL = {
     "name": TOOL_NAME,
     "description": "Run one bounded Polaris CodeGraph freshness window.",
@@ -130,6 +131,10 @@ class McpServer:
         if raw_repo.is_symlink() or not raw_repo.is_dir():
             raise InputFailure("MCP repository root must be a fixed real directory")
         self.repo = raw_repo.resolve()
+        if protocol_root(self.repo).resolve() != SERVER_ROOT:
+            raise RuleFailure(
+                "MCP repository does not match the executing vendored protocol root"
+            )
         require_regular_file(
             self.repo / ".polaris/project.json", "Polaris project configuration"
         )
@@ -240,6 +245,8 @@ def _write_message(value: dict[str, Any]) -> None:
 
 
 def serve(repo: Path) -> int:
+    if repo.absolute().resolve() != Path.cwd().resolve():
+        raise InputFailure("MCP repository must match the process working directory")
     server = McpServer(repo)
     for line in sys.stdin:
         try:

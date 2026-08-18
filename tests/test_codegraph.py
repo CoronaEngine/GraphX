@@ -818,8 +818,9 @@ For accurate content of those specific files, Read them directly.
                 sys.executable,
                 SCRIPTS / "code_intelligence_mcp.py",
                 "--repo",
-                self.repo,
+                ".",
             ],
+            cwd=self.repo,
             input="".join(json.dumps(item) + "\n" for item in messages),
             text=True,
             capture_output=True,
@@ -951,7 +952,8 @@ For accurate content of those specific files, Read them directly.
             json.dumps({"jsonrpc": "2.0", "id": 2, "method": "unknown", "params": {}}),
         ]) + "\n"
         completed_process = subprocess.run(
-            [sys.executable, SCRIPTS / "code_intelligence_mcp.py", "--repo", self.repo],
+            [sys.executable, SCRIPTS / "code_intelligence_mcp.py", "--repo", "."],
+            cwd=self.repo,
             input=transcript,
             text=True,
             capture_output=True,
@@ -961,6 +963,40 @@ For accurate content of those specific files, Read them directly.
         responses = [json.loads(line) for line in completed_process.stdout.splitlines()]
         self.assertEqual([item["error"]["code"] for item in responses], [-32700, -32602, -32601])
         self.assertTrue(all("\n" not in line for line in completed_process.stdout.splitlines()))
+
+    def test_mcp_server_rejects_cwd_and_vendored_launcher_project_mismatch(self) -> None:
+        mismatched_cwd = subprocess.run(
+            [sys.executable, SCRIPTS / "code_intelligence_mcp.py", "--repo", self.repo],
+            cwd=ROOT,
+            input="",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(mismatched_cwd.returncode, 2)
+        self.assertIn("working directory", mismatched_cwd.stderr)
+
+        with tempfile.TemporaryDirectory(prefix="polaris-codegraph-launcher-") as temporary:
+            fixture = Path(temporary)
+            projects = [fixture / "project-a", fixture / "project-b"]
+            for index, project in enumerate(projects, start=1):
+                project.mkdir()
+                subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+                vendor(ROOT, project, False)
+                init_project(project, f"launcher-{index}")
+            foreign_launcher = (
+                projects[0] / "tools/polaris/scripts/code_intelligence_mcp.py"
+            )
+            mismatched_launcher = subprocess.run(
+                [sys.executable, foreign_launcher, "--repo", "."],
+                cwd=projects[1],
+                input="",
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(mismatched_launcher.returncode, 2)
+            self.assertIn("vendored protocol root", mismatched_launcher.stderr)
 
     def test_vendored_mcp_proxy_runs_one_auditable_fake_cli_window(self) -> None:
         """Registered MCP, fake CLI, v3 projection, and Validation compose end to end."""
@@ -1330,6 +1366,26 @@ else:
                 self.repo, "TASK-0001", unconfirmed_symbol, ROOT
             )
 
+        contradictory_status = copy.deepcopy(stale_without_fallback)
+        contradictory_status["source_fallbacks"] = [{
+            "action": "SEARCH_SOURCE",
+            "path": None,
+            "observed_sha256": None,
+            "base_commit": None,
+            "head_commit": None,
+            "diff_hash": None,
+            "purpose": "inspect current repository source",
+            "result_paths": [{
+                "path": "src/a.py",
+                "observed_sha256": file_sha256(self.repo / "src/a.py"),
+            }],
+        }]
+        contradictory_status["delivery"]["record_status"] = "CURRENT_AT_CHECK"
+        with self.assertRaisesRegex(RuleFailure, "record freshness status"):
+            protocol.validate_record_value(
+                self.repo, "TASK-0001", contradictory_status, ROOT
+            )
+
         unsafe_fallback = copy.deepcopy(stale_without_fallback)
         unsafe_fallback["source_fallbacks"] = [{
             "action": "SEARCH_SOURCE",
@@ -1351,6 +1407,129 @@ else:
 
         with self.assertRaisesRegex(InputFailure, "record_version 3"):
             record(self.repo, "TASK-0001", self.v2_record(), ROOT)
+
+    def test_failed_explore_proxy_bundle_projects_to_unknown_v3(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        source = self.repo / "src/a.py"
+        source.parent.mkdir()
+        source.write_text("class A:\n    pass\n", encoding="utf-8")
+        responses = [
+            completed(healthy_status(self.repo)),
+            completed("failed explore output\n", returncode=1),
+        ]
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return responses.pop(0)
+
+        proxy = self.proxy_module()
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            query = proxy.execute_proxy_query(
+                self.repo,
+                "TASK-0001",
+                "PLANNING",
+                "CIQ-001",
+                "locate A",
+                "symbol A",
+                False,
+                runner=runner,
+            )
+        protocol = importlib.import_module("internal.code_intelligence_protocol")
+        result = protocol.record_proxy_bundle(
+            self.repo,
+            "TASK-0001",
+            query["bundle_path"],
+            {
+                "summary": "Explore failed; verified current source instead.",
+                "symbols": [],
+                "source_fallbacks": [{
+                    "action": "SEARCH_SOURCE",
+                    "path": None,
+                    "observed_sha256": None,
+                    "base_commit": None,
+                    "head_commit": None,
+                    "diff_hash": None,
+                    "purpose": "locate A in current source",
+                    "result_paths": [{
+                        "path": "src/a.py",
+                        "observed_sha256": file_sha256(source),
+                    }],
+                }],
+            },
+            ROOT,
+        )
+        recorded = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+        self.assertEqual(recorded["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(recorded["query"]["response_sha256"], None)
+        self.assertEqual(recorded["delivery"]["stale_points"], [])
+
+    def test_failed_sync_proxy_bundle_preserves_only_observed_post_status(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        source = self.repo / "src/a.py"
+        source.parent.mkdir()
+        source.write_text("class A:\n    pass\n", encoding="utf-8")
+        pending = json.loads(healthy_status(self.repo))
+        pending["pendingChanges"]["modified"] = 1
+        responses = [
+            completed(json.dumps(pending)),
+            completed("sync failed\n", returncode=1),
+            completed("A is defined in src/a.py\n"),
+            completed(healthy_status(self.repo)),
+        ]
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return responses.pop(0)
+
+        proxy = self.proxy_module()
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            query = proxy.execute_proxy_query(
+                self.repo,
+                "TASK-0001",
+                "PLANNING",
+                "CIQ-001",
+                "locate A after one sync attempt",
+                "symbol A",
+                True,
+                runner=runner,
+            )
+        self.assertIsNone(query["bundle"]["post_sync_status"])
+        protocol = importlib.import_module("internal.code_intelligence_protocol")
+        result = protocol.record_proxy_bundle(
+            self.repo,
+            "TASK-0001",
+            query["bundle_path"],
+            {
+                "summary": "Sync failed; verified current source instead.",
+                "symbols": [{"path": "src/a.py", "line": 1, "name": "A"}],
+                "source_fallbacks": [{
+                    "action": "SEARCH_SOURCE",
+                    "path": None,
+                    "observed_sha256": None,
+                    "base_commit": None,
+                    "head_commit": None,
+                    "diff_hash": None,
+                    "purpose": "verify A in current source",
+                    "result_paths": [{
+                        "path": "src/a.py",
+                        "observed_sha256": file_sha256(source),
+                    }],
+                }],
+            },
+            ROOT,
+        )
+        recorded = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+        self.assertEqual(recorded["delivery"]["state"], "STALE")
+        self.assertIn(
+            "SYNC_FAILED",
+            [point["reason"] for point in recorded["delivery"]["stale_points"]],
+        )
 
     def test_v3_record_preserves_stale_unknown_and_unavailable_restrictions(self) -> None:
         cases = [
@@ -2977,6 +3156,33 @@ else:
         self.assertEqual(result["sync"]["status"], "SUCCESS")
         self.assertEqual(result["freshness"]["status"], "CURRENT_AT_CHECK")
         self.assertIn("SYNC_ACKNOWLEDGED", result["freshness"]["basis"])
+
+    def test_pending_changes_still_sync_once_with_an_index_stale_reason(self) -> None:
+        _, sync_if_needed = self.adapter_functions()
+        (self.repo / ".codegraph").mkdir()
+        pending = json.loads(healthy_status(self.repo))
+        pending["pendingChanges"]["modified"] = 1
+        pending["index"]["state"] = "partial"
+        responses = iter([
+            completed(json.dumps(pending)),
+            completed("Synced 1 changed file\n"),
+            completed(healthy_status(self.repo)),
+        ])
+        calls: list[list[str]] = []
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return next(responses)
+
+        result = sync_if_needed(
+            self.repo, load_providers(ROOT)["codegraph"], runner=runner
+        )
+
+        self.assertEqual([call[1] for call in calls], ["status", "sync", "status"])
+        self.assertEqual(result["sync"]["status"], "SUCCESS")
+        self.assertEqual(result["freshness"]["status"], "CURRENT_AT_CHECK")
 
     def test_explore_and_observed_sync_are_bounded_to_one_repo(self) -> None:
         adapter = self.adapter_module()
