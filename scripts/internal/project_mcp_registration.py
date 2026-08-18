@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from pathlib import Path
@@ -80,6 +81,16 @@ def _parse_toml(source: str) -> dict[str, Any]:
     return value
 
 
+def _without_managed_server(value: dict[str, Any]) -> dict[str, Any]:
+    cleaned = copy.deepcopy(value)
+    servers = cleaned.get("mcp_servers")
+    if isinstance(servers, dict):
+        servers.pop(SERVER_ID, None)
+        if not servers:
+            cleaned.pop("mcp_servers", None)
+    return cleaned
+
+
 def _merge_codex(adapter: dict[str, Any], source: str) -> str:
     parsed = _parse_toml(source)
     starts = source.count(CODEX_START)
@@ -106,6 +117,8 @@ def _merge_codex(adapter: dict[str, Any], source: str) -> str:
         separator = "" if not source else ("\n" if source.endswith("\n") else "\n\n")
         rendered = source + separator + block
     final = _parse_toml(rendered)
+    if _without_managed_server(parsed) != _without_managed_server(final):
+        raise RuleFailure("project MCP markers would rewrite unrelated TOML")
     servers = final.get("mcp_servers")
     if not isinstance(servers, dict) or servers.get(SERVER_ID) != _codex_definition(
         adapter

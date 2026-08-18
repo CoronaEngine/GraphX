@@ -3644,6 +3644,33 @@ else:
         with self.assertRaisesRegex(RuleFailure, "symlink"):
             merge_project_mcp(self.repo, adapters["claude-code"])
 
+    def test_project_mcp_registration_rejects_markers_inside_toml_strings(
+        self,
+    ) -> None:
+        """Managed markers cannot claim or rewrite unrelated multiline strings."""
+        from internal.project_mcp_registration import merge_project_mcp
+
+        adapter = {item["host_id"]: item for item in load_host_adapters(ROOT)}[
+            "codex"
+        ]
+        source = '''
+description = """
+# POLARIS_MCP_START polaris-codegraph
+This text belongs to the user.
+# POLARIS_MCP_END polaris-codegraph
+"""
+
+[mcp_servers.polaris-codegraph]
+command = "python3"
+args = ["tools/polaris/scripts/code_intelligence_mcp.py", "--repo", "."]
+cwd = "."
+enabled = true
+required = false
+enabled_tools = ["polaris_codegraph_explore"]
+'''
+        with self.assertRaisesRegex(RuleFailure, "unrelated TOML"):
+            merge_project_mcp(self.repo, adapter, source_text=source)
+
     def test_host_adapter_hardening_rejects_entry_overlay_and_capability_errors(self) -> None:
         """入口必须存在，overlay 不得覆写 Skill，worker 能力依赖必须自洽。"""
         cases = {
