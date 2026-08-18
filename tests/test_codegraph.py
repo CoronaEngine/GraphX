@@ -17,9 +17,11 @@ from init_task import initialize as init_task  # noqa: E402
 from internal.code_intelligence_protocol import (  # noqa: E402
     _project_marker_path,
     load_providers,
+    record,
     select_provider,
+    validate_record_value,
 )
-from internal.polaris_core import RuleFailure, file_sha256  # noqa: E402
+from internal.polaris_core import InputFailure, RuleFailure, file_sha256  # noqa: E402
 
 
 def completed(
@@ -50,6 +52,12 @@ class CodeGraphTests(unittest.TestCase):
         self.repo = Path(self.temp.name)
         subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
         init_project(self.repo, "codegraph-test")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "initialize test project"],
+            cwd=self.repo,
+            check=True,
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -72,6 +80,193 @@ class CodeGraphTests(unittest.TestCase):
         classifier = getattr(self.adapter_module(), "classify_response", None)
         self.assertTrue(callable(classifier), "CodeGraph response classifier must exist")
         return classifier(self.repo, response, checked_at=checked_at)
+
+    def v2_record(self) -> dict[str, object]:
+        value = json.loads(
+            (ROOT / "templates" / "task-sources" / "code-intelligence-record.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        value["target"]["base_commit"] = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.repo,
+            capture_output=True,
+            check=True,
+            encoding="utf-8",
+            text=True,
+        ).stdout.strip()
+        return value
+
+    def initialize_task(self) -> None:
+        init_task(self.repo, "TASK-0001", "R1")
+
+    def test_legacy_v1_records_remain_readable_but_cannot_be_written(self) -> None:
+        self.initialize_task()
+        protocol = importlib.import_module("internal.code_intelligence_protocol")
+        legacy_validator = getattr(protocol, "validate_legacy_record_value", None)
+        self.assertTrue(callable(legacy_validator))
+        legacy = json.loads(
+            (ROOT / "schemas" / "code-intelligence-record-v1.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(legacy["properties"]["record_version"]["const"], 1)
+        value = {
+            "record_version": 1,
+            "task_id": "TASK-0001",
+            "work_item_revision": 1,
+            "stage": "PLANNING",
+            "artifact_attempt": None,
+            "reviewer_slot": None,
+            "provider": None,
+            "target": {
+                "base_commit": subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=self.repo,
+                    capture_output=True,
+                    check=True,
+                    encoding="utf-8",
+                    text=True,
+                ).stdout.strip(),
+                "head_commit": None,
+                "diff_hash": None,
+            },
+            "status": "UNAVAILABLE",
+            "queries": [],
+            "refresh": None,
+            "recorded_at": "1970-01-01T00:00:00Z",
+        }
+        self.assertEqual(legacy_validator(self.repo, "TASK-0001", value, ROOT)["record_version"], 1)
+        with self.assertRaisesRegex(
+            InputFailure, "new Code Intelligence records must use record_version 2"
+        ):
+            record(self.repo, "TASK-0001", value, ROOT)
+
+    def test_partial_stale_record_requires_matching_source_fallback(self) -> None:
+        self.initialize_task()
+        source = self.repo / "src/widget.py"
+        source.parent.mkdir()
+        source.write_text("value = 1\n", encoding="utf-8")
+        value = self.v2_record()
+        digest = file_sha256(source)
+        value["freshness"] = {
+            "status": "PARTIAL_STALE",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["RESPONSE_BANNER"],
+            "stale_points": [{
+                "scope": "FILE",
+                "path": "src/widget.py",
+                "reason": "PENDING_SYNC",
+                "fallback": "READ_SOURCE",
+                "observed_sha256": digest,
+            }],
+        }
+        with self.assertRaisesRegex(RuleFailure, "matching source fallback"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["source_fallbacks"] = [{
+            "action": "READ_SOURCE",
+            "path": "src/widget.py",
+            "observed_sha256": digest,
+            "base_commit": None,
+            "head_commit": None,
+            "diff_hash": None,
+            "purpose": "confirm pending CodeGraph content",
+        }]
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"],
+            2,
+        )
+
+    def test_v2_freshness_statuses_require_consistent_stale_points(self) -> None:
+        self.initialize_task()
+        value = self.v2_record()
+        index_point = {
+            "scope": "INDEX",
+            "path": None,
+            "reason": "INDEX_FAILED",
+            "fallback": "SEARCH_SOURCE",
+            "observed_sha256": None,
+        }
+        search = {
+            "action": "SEARCH_SOURCE",
+            "path": None,
+            "observed_sha256": None,
+            "base_commit": None,
+            "head_commit": None,
+            "diff_hash": None,
+            "purpose": "find affected source",
+        }
+        value["status"] = "SKIPPED"
+        value["freshness"] = {
+            "status": "CURRENT_AT_CHECK",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["STATUS_JSON"],
+            "stale_points": [index_point],
+        }
+        value["source_fallbacks"] = [search]
+        with self.assertRaisesRegex(RuleFailure, "CURRENT_AT_CHECK"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["freshness"]["status"] = "PARTIAL_STALE"
+        with self.assertRaisesRegex(RuleFailure, "PARTIAL_STALE"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["freshness"]["status"] = "INDEX_STALE"
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["record_version"],
+            2,
+        )
+
+    def test_v2_fallback_and_sync_rules_are_auditable(self) -> None:
+        self.initialize_task()
+        source = self.repo / "src/widget.py"
+        source.parent.mkdir()
+        source.write_text("value = 1\n", encoding="utf-8")
+        value = self.v2_record()
+        digest = file_sha256(source)
+        value["status"] = "SKIPPED"
+        value["freshness"] = {
+            "status": "PARTIAL_STALE",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["RESPONSE_BANNER"],
+            "stale_points": [{
+                "scope": "FILE", "path": "src/widget.py", "reason": "PENDING_SYNC",
+                "fallback": "READ_SOURCE", "observed_sha256": digest,
+            }],
+        }
+        value["source_fallbacks"] = [{
+            "action": "READ_SOURCE", "path": "src/widget.py", "observed_sha256": "0" * 64,
+            "base_commit": None, "head_commit": None, "diff_hash": None, "purpose": "read source",
+        }]
+        with self.assertRaisesRegex(RuleFailure, "READ_SOURCE fallback hash is stale"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["source_fallbacks"][0]["observed_sha256"] = digest
+        value["source_fallbacks"][0]["action"] = "INSPECT_GIT_DIFF"
+        value["source_fallbacks"][0]["observed_sha256"] = None
+        with self.assertRaisesRegex(RuleFailure, "INSPECT_GIT_DIFF fallback requires"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value = self.v2_record()
+        value["sync"] = {"status": "SUCCESS", "response_sha256": None, "error": None}
+        with self.assertRaisesRegex(RuleFailure, "successful Code Intelligence sync requires"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value["sync"]["response_sha256"] = "0" * 64
+        with self.assertRaisesRegex(RuleFailure, "SYNC_ACKNOWLEDGED"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+
+    def test_v2_unavailable_and_provider_capabilities_are_restricted(self) -> None:
+        self.initialize_task()
+        value = self.v2_record()
+        value["queries"] = [{
+            "id": "CIQ-001", "operation": "explore", "purpose": "query", "status": "SUCCESS",
+            "summary": "result", "symbols": [], "response_sha256": "0" * 64, "error": None,
+        }]
+        with self.assertRaisesRegex(RuleFailure, "UNAVAILABLE record contains"):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
+        value = self.v2_record()
+        value["provider"] = {
+            "id": "codegraph", "descriptor_version": 2, "transport": "mcp",
+            "available_operations": ["symbol_search"],
+        }
+        with self.assertRaises(RuleFailure):
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)
 
     def test_official_descriptor_uses_explore_status_and_sync(self) -> None:
         descriptor = load_providers(ROOT)["codegraph"]

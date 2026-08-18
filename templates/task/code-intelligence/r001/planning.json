@@ -1,5 +1,5 @@
 {
-    "record_version": 1,
+    "record_version": 2,
     "task_id": "TASK-0001",
     "work_item_revision": 1,
     "stage": "PLANNING",
@@ -13,6 +13,13 @@
     },
     "status": "UNAVAILABLE",
     "queries": [],
-    "refresh": null,
+    "sync": null,
+    "freshness": {
+        "status": "UNAVAILABLE",
+        "checked_at": "1970-01-01T00:00:00Z",
+        "basis": ["NONE"],
+        "stale_points": []
+    },
+    "source_fallbacks": [],
     "recorded_at": "1970-01-01T00:00:00Z"
 }

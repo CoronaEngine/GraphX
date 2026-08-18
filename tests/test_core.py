@@ -1568,19 +1568,23 @@ class PolarisCoreTests(unittest.TestCase):
             validate_static_configuration(self.repo, ROOT)["mode"], "disabled"
         )
 
-    def test_code_intelligence_v1_record_is_compact_safe_and_immutable(self) -> None:
+    def test_code_intelligence_v1_record_is_read_only_historical_evidence(self) -> None:
         """v1 精简记录升级后仍可读取，并绑定任务、提交和安全路径。"""
         base = run_git(self.repo, "rev-parse", "HEAD")
         value = read_json(
             ROOT / "templates" / "task-sources" / "code-intelligence-record.json"
         )
+        value["record_version"] = 1
+        value.pop("sync")
+        value.pop("freshness")
+        value.pop("source_fallbacks")
+        value["refresh"] = None
         value["target"]["base_commit"] = base
-        result = record_code_intelligence(
-            self.repo, "TASK-0001", value, ROOT
+        self.assertEqual(
+            validate_record_value(self.repo, "TASK-0001", value, ROOT)["status"],
+            "UNAVAILABLE",
         )
-        self.assertEqual(result["status"], "UNAVAILABLE")
-        self.assertTrue(Path(result["path"]).is_file())
-        with self.assertRaises(InputFailure):
+        with self.assertRaisesRegex(InputFailure, "record_version 2"):
             record_code_intelligence(self.repo, "TASK-0001", value, ROOT)
 
         invalid = copy.deepcopy(value)

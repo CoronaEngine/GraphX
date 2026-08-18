@@ -1,6 +1,6 @@
 {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "Polaris Code Intelligence record",
+    "title": "Polaris Code Intelligence record v2",
     "type": "object",
     "required": [
         "record_version",
@@ -13,104 +13,408 @@
         "target",
         "status",
         "queries",
-        "refresh",
+        "sync",
+        "freshness",
+        "source_fallbacks",
         "recorded_at"
     ],
     "additionalProperties": false,
     "properties": {
-        "record_version": {"const": 1},
-        "task_id": {"type": "string", "pattern": "^TASK-[0-9]{4}$"},
-        "work_item_revision": {"type": "integer", "minimum": 1},
+        "record_version": {
+            "const": 2
+        },
+        "task_id": {
+            "type": "string",
+            "pattern": "^TASK-[0-9]{4}$"
+        },
+        "work_item_revision": {
+            "type": "integer",
+            "minimum": 1
+        },
         "stage": {
             "type": "string",
-            "enum": ["PLANNING", "IMPLEMENTATION", "DOCUMENTATION_SYNC", "REVIEW"]
+            "enum": [
+                "PLANNING",
+                "IMPLEMENTATION",
+                "DOCUMENTATION_SYNC",
+                "REVIEW"
+            ]
         },
-        "artifact_attempt": {"type": ["integer", "null"], "minimum": 1},
-        "reviewer_slot": {"type": ["integer", "null"], "minimum": 1},
+        "artifact_attempt": {
+            "type": [
+                "integer",
+                "null"
+            ],
+            "minimum": 1
+        },
+        "reviewer_slot": {
+            "type": [
+                "integer",
+                "null"
+            ],
+            "minimum": 1
+        },
         "provider": {
-            "type": ["object", "null"],
-            "required": ["id", "descriptor_version", "transport", "available_operations"],
+            "type": [
+                "object",
+                "null"
+            ],
+            "required": [
+                "id",
+                "descriptor_version",
+                "transport",
+                "available_operations"
+            ],
             "additionalProperties": false,
             "properties": {
-                "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
-                "descriptor_version": {"const": 1},
-                "transport": {"const": "mcp"},
+                "id": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "descriptor_version": {
+                    "const": 2
+                },
+                "transport": {
+                    "const": "mcp"
+                },
                 "available_operations": {
                     "type": "array",
                     "uniqueItems": true,
-                    "items": {"type": "string", "enum": ["symbol_search", "context", "dependencies", "call_graph", "impact", "review_context", "refresh_files", "refresh_workspace"]}
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "explore",
+                            "status",
+                            "sync"
+                        ]
+                    }
                 }
             }
         },
         "target": {
             "type": "object",
-            "required": ["base_commit", "head_commit", "diff_hash"],
+            "required": [
+                "base_commit",
+                "head_commit",
+                "diff_hash"
+            ],
             "additionalProperties": false,
             "properties": {
-                "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-                "head_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
-                "diff_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+                "base_commit": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{40}$"
+                },
+                "head_commit": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "pattern": "^[0-9a-f]{40}$"
+                },
+                "diff_hash": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "pattern": "^[0-9a-f]{64}$"
+                }
             }
         },
         "status": {
             "type": "string",
-            "enum": ["USED", "UNAVAILABLE", "FAILED", "SKIPPED"]
+            "enum": [
+                "USED",
+                "UNAVAILABLE",
+                "FAILED",
+                "SKIPPED"
+            ]
         },
         "queries": {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["id", "operation", "purpose", "status", "summary", "symbols", "response_sha256", "error"],
+                "required": [
+                    "id",
+                    "operation",
+                    "purpose",
+                    "status",
+                    "summary",
+                    "symbols",
+                    "response_sha256",
+                    "error"
+                ],
                 "additionalProperties": false,
                 "properties": {
-                    "id": {"type": "string", "pattern": "^CIQ-[0-9]{3}$"},
-                    "operation": {"type": "string", "enum": ["symbol_search", "context", "dependencies", "call_graph", "impact", "review_context", "refresh_files", "refresh_workspace"]},
-                    "purpose": {"type": "string", "minLength": 1},
-                    "status": {"type": "string", "enum": ["SUCCESS", "EMPTY", "FAILED", "UNAVAILABLE"]},
-                    "summary": {"type": "string"},
+                    "id": {
+                        "type": "string",
+                        "pattern": "^CIQ-[0-9]{3}$"
+                    },
+                    "operation": {
+                        "const": "explore"
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "SUCCESS",
+                            "EMPTY",
+                            "FAILED",
+                            "UNAVAILABLE"
+                        ]
+                    },
+                    "summary": {
+                        "type": "string"
+                    },
                     "symbols": {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "required": ["path", "line", "name"],
+                            "required": [
+                                "path",
+                                "line",
+                                "name"
+                            ],
                             "additionalProperties": false,
                             "properties": {
-                                "path": {"type": "string", "minLength": 1},
-                                "line": {"type": ["integer", "null"], "minimum": 1},
-                                "name": {"type": "string", "minLength": 1}
+                                "path": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "line": {
+                                    "type": [
+                                        "integer",
+                                        "null"
+                                    ],
+                                    "minimum": 1
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "minLength": 1
+                                }
                             }
                         }
                     },
-                    "response_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-                    "error": {"type": ["string", "null"]}
+                    "response_sha256": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "error": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
                 }
             }
         },
-        "refresh": {
-            "type": ["object", "null"],
-            "required": ["operation", "paths", "status", "freshness", "response_sha256", "error"],
+        "sync": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "required": [
+                "status",
+                "response_sha256",
+                "error"
+            ],
             "additionalProperties": false,
             "properties": {
-                "operation": {"type": "string", "enum": ["refresh_files", "refresh_workspace"]},
-                "paths": {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "SUCCESS",
+                        "FAILED",
+                        "SKIPPED",
+                        "UNAVAILABLE"
+                    ]
+                },
+                "response_sha256": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "error": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            }
+        },
+        "freshness": {
+            "type": "object",
+            "required": [
+                "status",
+                "checked_at",
+                "basis",
+                "stale_points"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "CURRENT_AT_CHECK",
+                        "PARTIAL_STALE",
+                        "INDEX_STALE",
+                        "NOT_VERIFIED",
+                        "UNAVAILABLE"
+                    ]
+                },
+                "checked_at": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "basis": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "CONNECT_RECONCILIATION",
+                            "STATUS_JSON",
+                            "SYNC_ACKNOWLEDGED",
+                            "RESPONSE_BANNER",
+                            "NONE"
+                        ]
+                    }
+                },
+                "stale_points": {
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "required": ["path", "change", "sha256"],
+                        "required": [
+                            "scope",
+                            "path",
+                            "reason",
+                            "fallback",
+                            "observed_sha256"
+                        ],
                         "additionalProperties": false,
                         "properties": {
-                            "path": {"type": "string", "minLength": 1},
-                            "change": {"type": "string", "enum": ["ADDED", "MODIFIED", "DELETED", "RENAMED"]},
-                            "sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+                            "scope": {
+                                "type": "string",
+                                "enum": [
+                                    "FILE",
+                                    "INDEX"
+                                ]
+                            },
+                            "path": {
+                                "type": [
+                                    "string",
+                                    "null"
+                                ]
+                            },
+                            "reason": {
+                                "type": "string",
+                                "enum": [
+                                    "PENDING_SYNC",
+                                    "AUTO_SYNC_DISABLED",
+                                    "WORKTREE_MISMATCH",
+                                    "INDEX_PARTIAL",
+                                    "INDEX_INDEXING",
+                                    "INDEX_FAILED",
+                                    "PENDING_REFERENCES",
+                                    "REINDEX_RECOMMENDED",
+                                    "SYNC_FAILED",
+                                    "STATUS_UNREADABLE"
+                                ]
+                            },
+                            "fallback": {
+                                "type": "string",
+                                "enum": [
+                                    "READ_SOURCE",
+                                    "INSPECT_GIT_DIFF",
+                                    "SEARCH_SOURCE"
+                                ]
+                            },
+                            "observed_sha256": {
+                                "type": [
+                                    "string",
+                                    "null"
+                                ],
+                                "pattern": "^[0-9a-f]{64}$"
+                            }
                         }
                     }
-                },
-                "status": {"type": "string", "enum": ["SUCCESS", "FAILED", "SKIPPED", "UNAVAILABLE"]},
-                "freshness": {"type": "string", "enum": ["refresh_acknowledged", "spot_checked", "not_verified"]},
-                "response_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-                "error": {"type": ["string", "null"]}
+                }
             }
         },
-        "recorded_at": {"type": "string", "minLength": 1}
+        "source_fallbacks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "action",
+                    "path",
+                    "observed_sha256",
+                    "base_commit",
+                    "head_commit",
+                    "diff_hash",
+                    "purpose"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "READ_SOURCE",
+                            "INSPECT_GIT_DIFF",
+                            "SEARCH_SOURCE"
+                        ]
+                    },
+                    "path": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "observed_sha256": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "base_commit": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "pattern": "^[0-9a-f]{40}$"
+                    },
+                    "head_commit": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "pattern": "^[0-9a-f]{40}$"
+                    },
+                    "diff_hash": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "purpose": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "recorded_at": {
+            "type": "string",
+            "minLength": 1
+        }
     }
 }

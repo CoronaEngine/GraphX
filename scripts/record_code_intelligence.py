@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record compact optional Code Intelligence evidence or plan an index refresh."""
+"""Record compact optional Code Intelligence evidence."""
 
 from __future__ import annotations
 

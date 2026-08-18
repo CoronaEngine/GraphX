@@ -304,14 +304,14 @@ def _record_name(value: dict[str, Any]) -> str:
     )
 
 
-def validate_record_value(
+def validate_legacy_record_value(
     repo: Path,
     task_id: str,
     value: dict[str, Any],
     root: Path | None = None,
 ) -> dict[str, Any]:
     root = protocol_root(repo) if root is None else root
-    schema = read_json(root / "schemas" / "code-intelligence-record.schema.json")
+    schema = read_json(root / "schemas" / "code-intelligence-record-v1.schema.json")
     errors = validate_schema(value, schema)
     if errors:
         raise RuleFailure(
@@ -335,23 +335,6 @@ def validate_record_value(
     if value["status"] in {"USED", "FAILED"} and value["provider"] is None:
         raise RuleFailure("used or failed Code Intelligence record requires a provider")
     provider = value["provider"]
-    if provider is not None:
-        descriptors = load_providers(root)
-        descriptor = descriptors.get(provider["id"])
-        if (
-            descriptor is None
-            or (
-                value["record_version"] != 1
-                and (
-                    provider["descriptor_version"] != descriptor["provider_version"]
-                    or provider["transport"] != descriptor["transport"]
-                    or not set(provider["available_operations"]).issubset(
-                        descriptor["operations"]
-                    )
-                )
-            )
-        ):
-            raise RuleFailure("Code Intelligence record names an invalid provider capability set")
     query_ids = [item["id"] for item in value["queries"]]
     expected_ids = [f"CIQ-{index:03d}" for index in range(1, len(query_ids) + 1)]
     if query_ids != expected_ids:
@@ -422,6 +405,198 @@ def validate_record_value(
     return value
 
 
+def _validate_record_identity(
+    repo: Path, task_id: str, value: dict[str, Any]
+) -> tuple[Path, str, str | None]:
+    directory = task_dir(repo, task_id)
+    state = read_json(state_path(directory))
+    if value["task_id"] != task_id or value["work_item_revision"] != state["current_revision"]:
+        raise RuleFailure("Code Intelligence record targets the wrong task revision")
+    _record_name(value)
+    target = value["target"]
+    base = full_commit(repo, target["base_commit"])
+    head = target["head_commit"]
+    if head is None:
+        if target["diff_hash"] is not None:
+            raise RuleFailure("base-only Code Intelligence target cannot have a diff hash")
+    else:
+        head = full_commit(repo, head)
+        if target["diff_hash"] != subject_diff_hash(repo, base, head):
+            raise RuleFailure("Code Intelligence target diff hash is stale")
+    return directory, base, head
+
+
+def _matching_fallback(
+    fallbacks: list[dict[str, Any]], action: str, path: str | None, digest: str | None
+) -> dict[str, Any] | None:
+    for fallback in fallbacks:
+        if (
+            fallback["action"] == action
+            and fallback["path"] == path
+            and fallback["observed_sha256"] == digest
+        ):
+            return fallback
+    return None
+
+
+def _validate_source_fallbacks(
+    repo: Path,
+    value: dict[str, Any],
+    base: str,
+    head: str | None,
+) -> None:
+    target = value["target"]
+    for fallback in value["source_fallbacks"]:
+        action = fallback["action"]
+        path = fallback["path"]
+        digest = fallback["observed_sha256"]
+        if not fallback["purpose"]:
+            raise RuleFailure("source fallback requires a non-empty purpose")
+        if action == "READ_SOURCE":
+            if not isinstance(path, str) or digest is None:
+                raise RuleFailure("READ_SOURCE fallback requires a current SHA")
+            resolved = resolve_repo_reference(repo, path)
+            if not resolved.is_file() or file_sha256(resolved) != digest:
+                raise RuleFailure(f"READ_SOURCE fallback hash is stale: {path}")
+            if any(item is not None for item in (fallback["base_commit"], fallback["head_commit"], fallback["diff_hash"])):
+                raise RuleFailure("READ_SOURCE fallback cannot claim a Git diff target")
+        elif action == "INSPECT_GIT_DIFF":
+            if not isinstance(path, str) or digest is not None:
+                raise RuleFailure("INSPECT_GIT_DIFF fallback requires a null SHA")
+            resolve_repo_reference(repo, path)
+            if head is None or (
+                fallback["base_commit"] != base
+                or fallback["head_commit"] != head
+                or fallback["diff_hash"] != target["diff_hash"]
+            ):
+                raise RuleFailure("INSPECT_GIT_DIFF fallback requires the target base/head/diff hash")
+        else:
+            if path is not None or digest is not None:
+                raise RuleFailure("SEARCH_SOURCE fallback cannot name a path or SHA")
+            if any(item is not None for item in (fallback["base_commit"], fallback["head_commit"], fallback["diff_hash"])):
+                raise RuleFailure("SEARCH_SOURCE fallback cannot claim a Git diff target")
+
+
+def _validate_v2_freshness(
+    repo: Path, value: dict[str, Any], base: str, head: str | None
+) -> None:
+    freshness = value["freshness"]
+    points = freshness["stale_points"]
+    fallbacks = value["source_fallbacks"]
+    file_points = [point for point in points if point["scope"] == "FILE"]
+    index_points = [point for point in points if point["scope"] == "INDEX"]
+    for point in file_points:
+        if (
+            not isinstance(point["path"], str)
+            or point["reason"] != "PENDING_SYNC"
+            or point["fallback"] not in {"READ_SOURCE", "INSPECT_GIT_DIFF"}
+        ):
+            raise RuleFailure("file stale point is invalid")
+        if point["fallback"] == "READ_SOURCE":
+            if point["observed_sha256"] is None:
+                raise RuleFailure("READ_SOURCE stale point requires a current SHA")
+            resolved = resolve_repo_reference(repo, point["path"])
+            if not resolved.is_file() or file_sha256(resolved) != point["observed_sha256"]:
+                raise RuleFailure(f"stale file hash is stale: {point['path']}")
+        elif point["observed_sha256"] is not None:
+            raise RuleFailure("INSPECT_GIT_DIFF stale point requires a null SHA")
+        if _matching_fallback(
+            fallbacks, point["fallback"], point["path"], point["observed_sha256"]
+        ) is None:
+            raise RuleFailure("stale point requires a matching source fallback")
+    for point in index_points:
+        if (
+            point["path"] is not None
+            or point["fallback"] != "SEARCH_SOURCE"
+            or point["observed_sha256"] is not None
+            or point["reason"] == "PENDING_SYNC"
+        ):
+            raise RuleFailure("index stale point is invalid")
+        if _matching_fallback(fallbacks, "SEARCH_SOURCE", None, None) is None:
+            raise RuleFailure("stale point requires a matching source fallback")
+    status = freshness["status"]
+    if status == "CURRENT_AT_CHECK" and points:
+        raise RuleFailure("CURRENT_AT_CHECK cannot contain stale points")
+    if status == "PARTIAL_STALE" and (not file_points or index_points):
+        raise RuleFailure("PARTIAL_STALE requires only file stale points")
+    if status == "INDEX_STALE" and not index_points:
+        raise RuleFailure("INDEX_STALE requires an index stale point")
+    if status == "NOT_VERIFIED" and not any(
+        point["reason"] == "STATUS_UNREADABLE" for point in index_points
+    ):
+        raise RuleFailure("NOT_VERIFIED requires STATUS_UNREADABLE")
+    if status == "UNAVAILABLE":
+        if freshness["basis"] != ["NONE"] or points:
+            raise RuleFailure("UNAVAILABLE freshness must use NONE with no stale points")
+        if value["sync"] is not None or any(
+            item["status"] != "UNAVAILABLE" for item in value["queries"]
+        ):
+            raise RuleFailure("UNAVAILABLE record contains an attempted query or sync")
+
+
+def _validate_v2_record_value(
+    repo: Path, task_id: str, value: dict[str, Any], root: Path
+) -> dict[str, Any]:
+    errors = validate_schema(
+        value, read_json(root / "schemas" / "code-intelligence-record.schema.json")
+    )
+    if errors:
+        raise RuleFailure("Code Intelligence record failed schema validation:\n- " + "\n- ".join(errors))
+    _, base, head = _validate_record_identity(repo, task_id, value)
+    provider = value["provider"]
+    if value["status"] in {"USED", "FAILED"} and provider is None:
+        raise RuleFailure("used or failed Code Intelligence record requires a provider")
+    if provider is not None:
+        descriptor = load_providers(root).get(provider["id"])
+        if (
+            descriptor is None
+            or provider["descriptor_version"] != descriptor["provider_version"]
+            or provider["transport"] != descriptor["transport"]
+            or not set(provider["available_operations"]).issubset(OPERATIONS)
+        ):
+            raise RuleFailure("Code Intelligence record names an invalid provider capability set")
+    query_ids = [item["id"] for item in value["queries"]]
+    expected_ids = [f"CIQ-{index:03d}" for index in range(1, len(query_ids) + 1)]
+    if query_ids != expected_ids:
+        raise RuleFailure("Code Intelligence query IDs must be sequential")
+    for query in value["queries"]:
+        if provider is not None and query["status"] != "UNAVAILABLE" and "explore" not in provider["available_operations"]:
+            raise RuleFailure(f"query used an unavailable provider operation: {query['id']}")
+        if query["status"] == "SUCCESS" and query["response_sha256"] is None:
+            raise RuleFailure(f"successful query lacks response hash: {query['id']}")
+        if query["status"] == "FAILED" and not query["error"]:
+            raise RuleFailure(f"failed query lacks error: {query['id']}")
+        for symbol in query["symbols"]:
+            path = resolve_repo_reference(repo, symbol["path"])
+            if not path.is_file():
+                raise RuleFailure(f"Code Intelligence symbol path is not a file: {symbol['path']}")
+    sync = value["sync"]
+    if sync is not None:
+        if sync["status"] == "SUCCESS":
+            if sync["response_sha256"] is None or "SYNC_ACKNOWLEDGED" not in value["freshness"]["basis"]:
+                raise RuleFailure("successful Code Intelligence sync requires a response hash and SYNC_ACKNOWLEDGED basis")
+        if sync["status"] == "FAILED" and not sync["error"]:
+            raise RuleFailure("failed Code Intelligence sync lacks error")
+    _validate_source_fallbacks(repo, value, base, head)
+    _validate_v2_freshness(repo, value, base, head)
+    observed_statuses = {item["status"] for item in value["queries"]}
+    sync_status = sync["status"] if sync is not None else None
+    if value["status"] == "FAILED" and "FAILED" not in observed_statuses and sync_status != "FAILED":
+        raise RuleFailure("failed Code Intelligence record lacks a failed operation")
+    if value["status"] == "USED" and not observed_statuses.intersection({"SUCCESS", "EMPTY"}) and sync_status != "SUCCESS":
+        raise RuleFailure("used Code Intelligence record lacks a successful operation")
+    return value
+
+
+def validate_record_value(
+    repo: Path, task_id: str, value: dict[str, Any], root: Path | None = None
+) -> dict[str, Any]:
+    root = protocol_root(repo) if root is None else root
+    if value.get("record_version") == 1:
+        return validate_legacy_record_value(repo, task_id, value, root)
+    return _validate_v2_record_value(repo, task_id, value, root)
+
+
 def record(
     repo: Path,
     task_id: str,
@@ -429,6 +604,8 @@ def record(
     root: Path | None = None,
 ) -> dict[str, Any]:
     root = protocol_root(repo) if root is None else root
+    if value.get("record_version") == 1:
+        raise InputFailure("new Code Intelligence records must use record_version 2")
     value = validate_record_value(repo, task_id, value, root)
     directory = task_dir(repo, task_id)
     destination = code_intelligence_record_path(
