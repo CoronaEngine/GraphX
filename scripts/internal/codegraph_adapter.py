@@ -1,0 +1,326 @@
+"""Normalize CodeGraph CLI status and perform one bounded synchronization."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+_PENDING_KEYS = ("added", "modified", "removed")
+_INDEX_REASONS = {
+    "partial": "INDEX_PARTIAL",
+    "indexing": "INDEX_INDEXING",
+    "failed": "INDEX_FAILED",
+}
+
+
+def _checked_at() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _index_point(reason: str) -> dict[str, Any]:
+    return {
+        "scope": "INDEX",
+        "path": None,
+        "reason": reason,
+        "fallback": "SEARCH_SOURCE",
+        "observed_sha256": None,
+    }
+
+
+def _error_summary(error: BaseException | str) -> str:
+    message = str(error).strip()
+    return message[:240] if message else type(error).__name__
+
+
+def _freshness(
+    status: str,
+    checked_at: str,
+    *,
+    basis: list[str],
+    stale_points: list[dict[str, Any]],
+    status_response_sha256: str | None,
+    error: str | None,
+    needs_sync: bool,
+    pending_changes: dict[str, int] | None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "checked_at": checked_at,
+        "basis": basis,
+        "stale_points": stale_points,
+        "status_response_sha256": status_response_sha256,
+        "error": error,
+        "needs_sync": needs_sync,
+        "pending_changes": pending_changes,
+    }
+
+
+def _not_verified(
+    checked_at: str,
+    error: BaseException | str,
+    response_sha256: str | None = None,
+) -> dict[str, Any]:
+    return _freshness(
+        "NOT_VERIFIED",
+        checked_at,
+        basis=["STATUS_JSON"],
+        stale_points=[_index_point("STATUS_UNREADABLE")],
+        status_response_sha256=response_sha256,
+        error=_error_summary(error),
+        needs_sync=False,
+        pending_changes=None,
+    )
+
+
+def _unavailable(checked_at: str, error: str) -> dict[str, Any]:
+    return _freshness(
+        "UNAVAILABLE",
+        checked_at,
+        basis=["NONE"],
+        stale_points=[],
+        status_response_sha256=None,
+        error=error,
+        needs_sync=False,
+        pending_changes=None,
+    )
+
+
+def _marker_path(repo: Path, descriptor: dict[str, Any]) -> Path | None:
+    marker = descriptor.get("project_marker")
+    if not isinstance(marker, str):
+        return None
+    marker_path = Path(marker)
+    if (
+        marker_path.is_absolute()
+        or len(marker_path.parts) != 1
+        or marker_path.parts[0] in {".", ".."}
+    ):
+        return None
+    return repo / marker_path
+
+
+def _run_cli(
+    repo: Path,
+    descriptor: dict[str, Any],
+    args_key: str,
+    timeout_seconds: int,
+    runner: Runner,
+) -> subprocess.CompletedProcess[str]:
+    command = [descriptor["cli"]["executable"], *descriptor["cli"][args_key]]
+    return runner(
+        command,
+        cwd=repo,
+        check=False,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        timeout=timeout_seconds,
+    )
+
+
+def _stdout_and_hash(completed: subprocess.CompletedProcess[str]) -> tuple[str, str]:
+    raw = completed.stdout
+    if not isinstance(raw, str):
+        raise UnicodeError("CodeGraph status output was not UTF-8 text")
+    return raw, hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _pending_changes(value: Any) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        raise ValueError("pendingChanges must be an object")
+    result: dict[str, int] = {}
+    for key in _PENDING_KEYS:
+        count = value.get(key)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError(f"pendingChanges.{key} must be a non-negative integer")
+        result[key] = count
+    return result
+
+
+def _status_result(
+    repo: Path,
+    payload: Any,
+    checked_at: str,
+    response_sha256: str,
+) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise ValueError("CodeGraph status JSON must be an object")
+    if payload.get("initialized") is not True:
+        raise ValueError("CodeGraph status is not initialized")
+
+    project_path = payload.get("projectPath")
+    if not isinstance(project_path, str) or not project_path:
+        raise ValueError("CodeGraph status projectPath must be a path")
+    try:
+        if Path(project_path).resolve() != repo.resolve():
+            raise ValueError("CodeGraph status belongs to a different project")
+    except (OSError, RuntimeError) as error:
+        raise ValueError("CodeGraph status projectPath could not be resolved") from error
+
+    pending = _pending_changes(payload.get("pendingChanges"))
+    worktree_mismatch = payload.get("worktreeMismatch")
+    if worktree_mismatch is not None and not isinstance(worktree_mismatch, Mapping):
+        raise ValueError("worktreeMismatch must be null or an object")
+
+    index = payload.get("index")
+    if not isinstance(index, Mapping):
+        raise ValueError("index must be an object")
+    state = index.get("state")
+    if state is not None and not isinstance(state, str):
+        raise ValueError("index.state must be a string or null")
+    pending_refs = index.get("pendingRefs")
+    if (
+        isinstance(pending_refs, bool)
+        or not isinstance(pending_refs, int)
+        or pending_refs < 0
+    ):
+        raise ValueError("index.pendingRefs must be a non-negative integer")
+    reindex_recommended = index.get("reindexRecommended")
+    if not isinstance(reindex_recommended, bool):
+        raise ValueError("index.reindexRecommended must be a boolean")
+
+    stale_reasons: list[str] = []
+    if worktree_mismatch is not None:
+        stale_reasons.append("WORKTREE_MISMATCH")
+    if state in _INDEX_REASONS:
+        stale_reasons.append(_INDEX_REASONS[state])
+    elif state not in {None, "complete"}:
+        raise ValueError("index.state is not recognized")
+    if pending_refs:
+        stale_reasons.append("PENDING_REFERENCES")
+    if reindex_recommended:
+        stale_reasons.append("REINDEX_RECOMMENDED")
+
+    if stale_reasons:
+        return _freshness(
+            "INDEX_STALE",
+            checked_at,
+            basis=["STATUS_JSON"],
+            stale_points=[_index_point(reason) for reason in stale_reasons],
+            status_response_sha256=response_sha256,
+            error=None,
+            needs_sync=False,
+            pending_changes=pending,
+        )
+
+    return _freshness(
+        "CURRENT_AT_CHECK",
+        checked_at,
+        basis=["STATUS_JSON"],
+        stale_points=[],
+        status_response_sha256=response_sha256,
+        error=None,
+        needs_sync=any(pending.values()),
+        pending_changes=pending,
+    )
+
+
+def inspect_status(
+    repo: Path,
+    descriptor: dict[str, Any],
+    *,
+    runner: Runner = subprocess.run,
+    timeout_seconds: int = 15,
+) -> dict[str, Any]:
+    """Inspect one CodeGraph status response without changing the graph."""
+    checked_at = _checked_at()
+    marker = _marker_path(repo, descriptor)
+    if marker is None:
+        return _not_verified(checked_at, "CodeGraph descriptor has an unsafe project marker")
+    if not marker.is_dir() or marker.is_symlink():
+        return _unavailable(checked_at, "CodeGraph project marker is unavailable")
+    try:
+        completed = _run_cli(repo, descriptor, "status_args", timeout_seconds, runner)
+        raw, response_sha256 = _stdout_and_hash(completed)
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
+        return _not_verified(checked_at, error)
+    except (KeyError, TypeError, ValueError) as error:
+        return _not_verified(checked_at, error)
+    if completed.returncode != 0:
+        return _not_verified(
+            checked_at,
+            f"CodeGraph status exited with {completed.returncode}",
+            response_sha256,
+        )
+    try:
+        return _status_result(repo, json.loads(raw), checked_at, response_sha256)
+    except (json.JSONDecodeError, OSError, RuntimeError, TypeError, ValueError) as error:
+        return _not_verified(checked_at, error, response_sha256)
+
+
+def _sync_result(status: str, response_sha256: str | None, error: str | None) -> dict[str, Any]:
+    return {
+        "status": status,
+        "response_sha256": response_sha256,
+        "error": error,
+    }
+
+
+def _sync_failed(
+    freshness: dict[str, Any],
+    sync: dict[str, Any],
+) -> dict[str, Any]:
+    points = [*freshness["stale_points"], _index_point("SYNC_FAILED")]
+    return {
+        "freshness": {
+            **freshness,
+            "status": "INDEX_STALE",
+            "stale_points": points,
+            "needs_sync": False,
+            "error": freshness["error"] or sync["error"],
+        },
+        "sync": sync,
+    }
+
+
+def sync_if_needed(
+    repo: Path,
+    descriptor: dict[str, Any],
+    *,
+    runner: Runner = subprocess.run,
+    status_timeout_seconds: int = 15,
+    sync_timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    """Synchronize at most once, then inspect status at most once more."""
+    initial = inspect_status(
+        repo, descriptor, runner=runner, timeout_seconds=status_timeout_seconds
+    )
+    skipped = _sync_result("SKIPPED", None, None)
+    if not initial["needs_sync"]:
+        return {"freshness": initial, "sync": skipped}
+
+    try:
+        completed = _run_cli(repo, descriptor, "sync_args", sync_timeout_seconds, runner)
+        _, response_sha256 = _stdout_and_hash(completed)
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
+        return _sync_failed(initial, _sync_result("FAILED", None, _error_summary(error)))
+    except (KeyError, TypeError, ValueError) as error:
+        return _sync_failed(initial, _sync_result("FAILED", None, _error_summary(error)))
+    if completed.returncode != 0:
+        return _sync_failed(
+            initial,
+            _sync_result(
+                "FAILED",
+                response_sha256,
+                f"CodeGraph sync exited with {completed.returncode}",
+            ),
+        )
+
+    sync = _sync_result("SUCCESS", response_sha256, None)
+    rechecked = inspect_status(
+        repo, descriptor, runner=runner, timeout_seconds=status_timeout_seconds
+    )
+    if rechecked["status"] != "CURRENT_AT_CHECK" or rechecked["needs_sync"]:
+        return _sync_failed(rechecked, sync)
+    rechecked["basis"] = [*rechecked["basis"], "SYNC_ACKNOWLEDGED"]
+    return {"freshness": rechecked, "sync": sync}
