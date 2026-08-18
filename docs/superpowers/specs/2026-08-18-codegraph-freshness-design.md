@@ -257,7 +257,7 @@ vendored `AGENTS.md` 和宿主 worker 指令必须包含同一组条件规则：
 
 ## 版本和迁移
 
-本改动升级 Polaris 协议版本和 workflow 版本，因为 descriptor、record Schema 和阶段行为均改变。
+本改动升级 Polaris 协议版本，但 workflow 版本继续保持 `0.1.2`。descriptor、record Schema 和阶段 Skill 行为属于 Polaris 协议资产；节点、边、gate ID 和 rigor 图均未改变，因此不应扩展冻结 workflow 的迁移策略。
 
 迁移规则：
 
@@ -298,7 +298,7 @@ vendored `AGENTS.md` 和宿主 worker 指令必须包含同一组条件规则：
 - `docs/USAGE.md`
 - `plan.md`
 - `VERSION`
-- workflow version、migration 声明与对应模板
+- Polaris version、相邻 migration 声明与对应模板；workflow version 保持 `0.1.2`
 - `tests/test_core.py`，或按现有测试组织拆出的聚焦测试文件
 
 预计新增：
