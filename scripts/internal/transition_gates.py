@@ -211,10 +211,9 @@ def check_gate(
         artifact_file(directory, state, "knowledge_delta")
         check_subject(repo, state.get("subject"))
         validate_handoff(repo, root, directory, state)
-    elif gate in {"review_accepted", "review_rejected"}:
-        expected = "ACCEPT" if gate == "review_accepted" else "REJECT"
+    elif gate == "review_accepted":
         names = ["review"]
-        if expected == "ACCEPT" and any(
+        if any(
             work_item["risk_flags"].get(flag, False)
             for flag in workflow.get("two_reviewer_risk_flags", [])
         ):
@@ -222,12 +221,38 @@ def check_gate(
         reviews = [load_review(root, directory, state, name) for name in names]
         reviewer_ids: set[str] = set()
         for review in reviews:
-            if review["verdict"] != expected:
-                raise RuleFailure(f"Review verdict must be {expected}")
+            if review["verdict"] != "ACCEPT":
+                raise RuleFailure("Review verdict must be ACCEPT")
             validate_review(repo, root, directory, state, review, work_item)
             if review["reviewer_session_id"] in reviewer_ids:
                 raise RuleFailure("required Reviews must come from distinct Reviewer sessions")
             reviewer_ids.add(review["reviewer_session_id"])
+    elif gate == "review_rejected":
+        requires_two = any(
+            work_item["risk_flags"].get(flag, False)
+            for flag in workflow.get("two_reviewer_risk_flags", [])
+        )
+        names = ["review"]
+        if requires_two and "review_2" in state["artifacts"]:
+            names.append("review_2")
+        elif not requires_two and "review_2" in state["artifacts"]:
+            raise RuleFailure("review_2 is reserved for high-risk two-Reviewer flow")
+        reviews = [load_review(root, directory, state, name) for name in names]
+        reviewer_ids: set[str] = set()
+        for review in reviews:
+            validate_review(repo, root, directory, state, review, work_item)
+            if review["reviewer_session_id"] in reviewer_ids:
+                raise RuleFailure("required Reviews must come from distinct Reviewer sessions")
+            reviewer_ids.add(review["reviewer_session_id"])
+        verdicts = [review["verdict"] for review in reviews]
+        allowed = [["REJECT"]]
+        if requires_two:
+            allowed.append(["ACCEPT", "REJECT"])
+        if verdicts not in allowed:
+            raise RuleFailure(
+                "Review rejection requires slot 1 REJECT or slot 1 ACCEPT followed by "
+                "slot 2 REJECT"
+            )
     elif gate == "validation_ready":
         names = ["review"]
         if any(

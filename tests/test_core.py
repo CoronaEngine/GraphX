@@ -4831,6 +4831,71 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(accepted["to"], "VALIDATING")
         self.assertEqual(validate(self.repo, "TASK-0001")["state"], "VALIDATING")
 
+    def test_high_risk_second_reviewer_can_reject_into_rework(self) -> None:
+        """高风险 R2 的第二位 Reviewer 可独立拒绝并成为返工 Authority。"""
+        self.set_task_rigor("R2")
+        work_item_path = self.task / "revisions" / "work-item-r001.json"
+        work_item = read_json(work_item_path)
+        work_item["risk_flags"]["security"] = True
+        write_json_atomic(work_item_path, work_item)
+        handoff, state = self.enter_reviewing_without_progress()
+
+        accepted_path = self.task / "reviews" / "r001" / "review-001.json"
+        write_json_atomic(
+            accepted_path,
+            self.review_value(handoff, state, "review-session-1", "ACCEPT"),
+        )
+        finding = {
+            "id": "F-001",
+            "introduced_in_attempt": 1,
+            "category": "engineering",
+            "acceptance_id": None,
+            "scope_violation": False,
+            "blocking": True,
+            "severity": "high",
+            "location": "subject.txt:1",
+            "claim": "The security boundary remains unsafe",
+            "evidence": "The frozen subject admits a counterexample",
+            "required_action": "Harden the security boundary",
+            "status": "open",
+            "reviewer_resolution": None,
+        }
+        rejected_path = self.task / "reviews" / "r001" / "review-002.json"
+        write_json_atomic(
+            rejected_path,
+            self.review_value(
+                handoff, state, "review-session-2", "REJECT", [finding]
+            ),
+        )
+
+        rejected = transition(
+            self.repo,
+            "TASK-0001",
+            "REJECT_REVIEW",
+            [
+                "review=reviews/r001/review-001.json",
+                "review_2=reviews/r001/review-002.json",
+            ],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+        self.assertEqual(rejected["to"], "IMPLEMENTING")
+        state = read_json(self.task / "state.json")
+        self.assertEqual(
+            state["artifacts"]["prior_review"]["path"],
+            "reviews/r001/review-002.json",
+        )
+        self.assertEqual(validate(self.repo, "TASK-0001")["state"], "IMPLEMENTING")
+        self.assertIn(
+            "START_IMPLEMENTATION",
+            recover(self.repo, "TASK-0001")["recommended_next_action"],
+        )
+
     def test_third_rejected_review_enters_human_blocked_state(self) -> None:
         """第三次 Review 仍 REJECT 时不再自动返工，而是进入 Human-owned BLOCKED。"""
         self.freeze_work_item()

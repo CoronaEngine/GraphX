@@ -133,6 +133,23 @@ def _discard_artifacts(state: dict[str, Any], names: frozenset[str]) -> None:
         state["artifacts"].pop(name, None)
 
 
+def _rejecting_review(
+    root: Path, directory: Path, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    matches: list[tuple[str, dict[str, Any]]] = []
+    for name in ("review", "review_2"):
+        if name not in state["artifacts"]:
+            continue
+        review, _ = load_registered(
+            root, directory, state, name, "review.schema.json"
+        )
+        if review["verdict"] == "REJECT":
+            matches.append((name, review))
+    if len(matches) != 1:
+        raise RuleFailure("REJECT_REVIEW requires exactly one rejecting Review")
+    return matches[0]
+
+
 def apply_event_effects(
     root: Path,
     directory: Path,
@@ -143,11 +160,9 @@ def apply_event_effects(
     transition_rule: dict[str, Any],
 ) -> str:
     if event_name == "REJECT_REVIEW":
-        review, _ = load_registered(
-            root, directory, next_state, "review", "review.schema.json"
-        )
+        review_name, review = _rejecting_review(root, directory, next_state)
         next_state["artifacts"]["prior_review"] = normalized_reference(
-            directory, next_state["artifacts"]["review"]
+            directory, next_state["artifacts"][review_name]
         )
         max_attempts = transition_rule.get("max_attempts", MAX_REVIEW_ATTEMPTS)
         if review["artifact_attempt"] >= max_attempts:
