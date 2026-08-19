@@ -1447,8 +1447,11 @@ else:
             self.assertEqual([response["id"] for response in responses], [1, 2])
             tool_result = responses[1]["result"]
             self.assertFalse(tool_result["isError"])
+            first_content = tool_result["content"][0]["text"]
+            self.assertTrue(first_content.startswith("[POLARIS_CODEGRAPH_FRESHNESS]\n"))
+            self.assertIn("freshness: VERIFIED_AT_CHECK", first_content)
             self.assertTrue(
-                tool_result["content"][0]["text"].startswith(
+                first_content.startswith(
                     "[POLARIS_CODEGRAPH_FRESHNESS]\nstate: CURRENT\n"
                 )
             )
@@ -1488,7 +1491,14 @@ else:
                     ["status", "--json"],
                 ],
             )
-            self.assertTrue(all(entry["cwd"] == str(repo.resolve()) for entry in calls))
+            self.assertEqual(
+                [entry["argv"][0] for entry in calls],
+                ["status", "sync", "status", "explore", "status"],
+            )
+            self.assertTrue(
+                all(Path(entry["cwd"]).resolve() == repo.resolve() for entry in calls)
+            )
+            self.assertNotIn("index", [arg for entry in calls for arg in entry["argv"]])
 
             annotations_path = fixture_root / "annotations.json"
             write_json_atomic(
@@ -1522,6 +1532,7 @@ else:
             record_value = json.loads(
                 Path(record_result["path"]).read_text(encoding="utf-8")
             )
+            self.assertEqual(record_value["record_version"], 3)
             self.assertEqual(
                 record_value["proxy"]["evidence_bundle_sha256"],
                 file_sha256(bundle_path),
