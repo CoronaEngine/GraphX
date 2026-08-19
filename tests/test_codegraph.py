@@ -556,6 +556,96 @@ class CodeGraphTests(unittest.TestCase):
             "full_rebuild": "USER_ONLY",
         })
 
+    def test_proxy_blocks_post_sync_project_mismatch_before_explore(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        pending = json.loads(healthy_status(self.repo))
+        pending["pendingChanges"]["modified"] = 1
+        wrong = json.loads(healthy_status(self.repo))
+        wrong["projectPath"] = str(self.repo / "other-checkout")
+        responses = [
+            completed(json.dumps(pending)),
+            completed("synced\n"),
+            completed(json.dumps(wrong)),
+            completed("graph bytes must not be queried\n"),
+            completed(healthy_status(self.repo)),
+        ]
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual(
+            [item[1] for item in calls], ["status", "sync", "status"]
+        )
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["bundle"]["response_path"])
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(
+            result["bundle"]["delivery"]["reason"], "PROJECT_MISMATCH"
+        )
+        self.assertIn(
+            "different project", result["bundle"]["post_sync_status"]["error"]
+        )
+        self.assertEqual(
+            [
+                point["reason"]
+                for point in result["bundle"]["delivery"]["stale_points"]
+            ],
+            ["STATUS_UNREADABLE", "SYNC_FAILED"],
+        )
+
+    def test_proxy_discards_response_after_post_query_project_mismatch(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        wrong = json.loads(healthy_status(self.repo))
+        wrong["projectPath"] = str(self.repo / "other-checkout")
+        responses = [
+            completed(healthy_status(self.repo)),
+            completed("graph bytes must be discarded\n"),
+            completed(json.dumps(wrong)),
+        ]
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        response_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/runtime/code-intelligence/planning"
+            / "CIQ-001.response.txt"
+        )
+        self.assertEqual(
+            [item[1] for item in calls], ["status", "explore", "status"]
+        )
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["bundle"]["response_path"])
+        self.assertFalse(response_path.exists())
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(
+            result["bundle"]["delivery"]["reason"], "PROJECT_MISMATCH"
+        )
+
     def test_proxy_queries_unknown_pre_status_and_treats_result_as_stale(self) -> None:
         self.qualify_task()
         (self.repo / ".codegraph").mkdir()
@@ -583,6 +673,66 @@ class CodeGraphTests(unittest.TestCase):
         self.assertEqual(result["response"], "graph bytes\n")
         self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
         self.assertIn("freshness: TREAT_AS_STALE", result["envelope"])
+
+    def test_proxy_unknown_pre_status_overrides_later_stale_signals(self) -> None:
+        cases = [
+            (
+                "post_pending",
+                "graph bytes\n",
+                "PENDING_CHANGES",
+            ),
+            (
+                "response_stale",
+                "⚠️ CodeGraph auto-sync is DISABLED — the index is frozen.\n",
+                "AUTO_SYNC_DISABLED",
+            ),
+        ]
+        for index, (case, response, stale_reason) in enumerate(cases, start=1):
+            with self.subTest(case=case):
+                if index > 1:
+                    self.tearDown()
+                    self.setUp()
+                self.qualify_task()
+                (self.repo / ".codegraph").mkdir()
+                post_status = json.loads(healthy_status(self.repo))
+                if case == "post_pending":
+                    post_status["pendingChanges"]["modified"] = 1
+                responses = [
+                    completed("not-json\n"),
+                    completed(response),
+                    completed(json.dumps(post_status)),
+                ]
+                calls = []
+
+                def runner(command, **_kwargs):
+                    calls.append(command)
+                    return responses.pop(0)
+
+                with mock.patch(
+                    "internal.code_intelligence_proxy.shutil.which",
+                    return_value="/bin/codegraph",
+                ):
+                    result = self.proxy_module().execute_proxy_query(
+                        self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                        "locate A", "symbol A", runner=runner,
+                    )
+
+                self.assertEqual(
+                    [item[1] for item in calls], ["status", "explore", "status"]
+                )
+                self.assertEqual(result["response"], response)
+                self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+                self.assertEqual(
+                    result["bundle"]["delivery"]["reason"], "STATUS_UNREADABLE"
+                )
+                self.assertIn(
+                    stale_reason,
+                    [
+                        point["reason"]
+                        for point in result["bundle"]["delivery"]["stale_points"]
+                    ],
+                )
+                self.assertIn("freshness: TREAT_AS_STALE", result["envelope"])
 
     def test_proxy_does_not_query_a_different_project_index(self) -> None:
         self.qualify_task()

@@ -313,7 +313,13 @@ def _delivery(
         *_observation_points(post_status),
     ])
     pre_status_blocks_query = _pre_status_blocks_query(effective_pre)
-    known_stale = not pre_status_blocks_query and (any(
+    post_status_blocks_query = (
+        post_status is not None and _pre_status_blocks_query(post_status)
+    )
+    pre_status_unknown = _is_unknown(effective_pre)
+    known_stale = not (
+        pre_status_blocks_query or post_status_blocks_query or pre_status_unknown
+    ) and (any(
         point.get("reason") != "STATUS_UNREADABLE" for point in points
     ) or effective_pre.get("status") in {"PARTIAL_STALE", "INDEX_STALE"} or (
         post_status is not None
@@ -321,9 +327,10 @@ def _delivery(
     ) or (classification or {}).get("classification") in {"PARTIAL_STALE", "INDEX_STALE"})
     unknown = (
         pre_status_blocks_query
+        or post_status_blocks_query
         or forced_unknown is not None
         or query_result.get("status") != "SUCCESS"
-        or _is_unknown(effective_pre)
+        or pre_status_unknown
         or post_status is None
         or _is_unknown(post_status)
         or (classification or {}).get("classification") == "NOT_VERIFIED"
@@ -358,18 +365,22 @@ def _delivery(
     elif unknown:
         state = "UNKNOWN"
         record_status = "NOT_VERIFIED"
-        if pre_status_blocks_query:
+        if pre_status_blocks_query or post_status_blocks_query:
+            identity_observation = (
+                effective_pre if pre_status_blocks_query else post_status
+            )
+            assert identity_observation is not None
             reason = (
                 "WORKTREE_MISMATCH"
                 if any(
                     point.get("reason") == "WORKTREE_MISMATCH"
-                    for point in effective_pre.get("stale_points", [])
+                    for point in identity_observation.get("stale_points", [])
                 )
                 else "PROJECT_MISMATCH"
             )
         elif forced_unknown:
             reason = "RESPONSE_INTEGRITY_UNVERIFIED"
-        elif _is_unknown(effective_pre):
+        elif pre_status_unknown:
             reason = (
                 "PROJECT_MISMATCH"
                 if "different project" in str(effective_pre.get("error", "")).lower()
@@ -523,8 +534,17 @@ def execute_proxy_query(
             repo, descriptor, pre_status, runner=runner
         )
         bundle["sync"] = synchronized["sync"]
-        effective_pre = synchronized["freshness"]
         bundle["post_sync_status"] = synchronized["post_sync_status"]
+        effective_pre = synchronized["freshness"]
+        if (
+            bundle["post_sync_status"] is not None
+            and _pre_status_blocks_query(bundle["post_sync_status"])
+            and bundle["post_sync_status"].get("error")
+        ):
+            effective_pre = {
+                **effective_pre,
+                "error": bundle["post_sync_status"]["error"],
+            }
 
     if effective_pre["status"] == "UNAVAILABLE":
         bundle["query"]["status"] = "UNAVAILABLE"
@@ -610,6 +630,15 @@ def execute_proxy_query(
                     ).as_posix()
             post_status = inspect_status(repo, descriptor, runner=runner)
             bundle["post_query_status"] = post_status
+            if _pre_status_blocks_query(post_status):
+                forced_unknown = str(
+                    post_status.get("error")
+                    or "CodeGraph post-query status reports a worktree mismatch"
+                )
+                if response_path.exists():
+                    response_path.unlink()
+                bundle["response_path"] = None
+                response = None
 
     bundle["delivery"] = _delivery(
         effective_pre,
