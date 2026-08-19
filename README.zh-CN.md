@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-> 当前协议版本：`0.1.21`（开发中）；Workflow 版本：`0.1.3`
+> 当前协议版本：`0.1.22`（开发中）；Workflow 版本：`0.1.3`
 
 Polaris 是运行在 Coding Agent 宿主上的仓库原生工程工作流。它把需求、计划、实现、独立审查、验证和任务状态保存在 Git 仓库中，并通过确定性门禁防止需求漂移、证据过期和 Agent 自行宣布完成。
 
@@ -97,7 +97,7 @@ Polaris 阶段只调用 `polaris_codegraph_explore`。代理先检查 status，�
 
 CodeGraph 的安装、初始化、配置、raw MCP 注册、watcher、daemon 与每次全量 `codegraph index` 重建都归仓库所有者，而不是 Polaris；全量重建始终由用户主动执行。Polaris 绝不启动、配置、重新配置、等待或管理这些能力。raw `codegraph_explore` 或 `codegraph explore` 仍可作为带外工具使用，但不能支持 Polaris 的 `CURRENT` 证据。新 record 必须由保留的代理 bundle 与已完成回退投影为 v3；v1/v2 仅供历史读取。CodeGraph 始终可选，永远不是 Workflow 门禁。
 
-协议 `0.1.21` 新增项目级 Polaris CodeGraph 代理、Host Adapter v3 注册和可审计的 Code Intelligence record v3，Workflow 仍为 `0.1.3`。record v1/v2 仅作为不可变历史证据读取；新证据必须由保留的代理 bundle 投影为 v3。
+协议 `0.1.22` 保持 Workflow `0.1.3`，并新增从 `0.1.21` 出发的显式纯版本迁移；该迁移不清点也不重写 Code Intelligence record v3 证据。协议 `0.1.21` 引入项目级 Polaris CodeGraph 代理、Host Adapter v3 注册和可审计的 record v3；record v1/v2 仍仅作为不可变历史证据读取。
 
 ## v0.1 边界
 

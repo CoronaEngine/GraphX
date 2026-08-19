@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前协议版本：v0.1.21；Workflow 版本：v0.1.3。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
+> 当前协议版本：v0.1.22；Workflow 版本：v0.1.3。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -613,8 +613,9 @@ polaris migrate --repo .
 2. 注册步骤同时绑定源/目标 `polaris_version` 与 `workflow_version`。Migration protocol v2 支持仅更新版本，也支持显式替换冻结 workflow 并映射任务状态。
 3. `0.1.19 → 0.1.20` 使用 `replace_version_and_workflow` 与 `append_mapped_workflow_event`：冻结 workflow 更新到 `0.1.3`，旧 `IMPLEMENTED` / `DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`；旧 R0/R1 `VERIFIED` 也映射回 `VALIDATING`，以便通过 `PASS_AND_CLOSE` 重新提交关闭产物，R2 `VERIFIED` 保持不变。迁移事件记录源/目标状态及旧版本；旧 `events.jsonl` 行不可修改。
 4. `0.1.20 → 0.1.21` 只替换协议版本，Workflow 保持 `0.1.3`。迁移会校验并清点 canonical v1/v2 Code Intelligence 历史记录的路径与 SHA-256，保持原字节不变；中断恢复前会重算清单，任何变化都会拒绝继续。v1/v2 此后仅可作为历史证据读取。
-5. `.polaris/migrations/MIG-<from>-to-<to>.json` 先写为 `IN_PROGRESS`，全部投影更新后改为 `COMPLETED`。迁移锁会记录迁移/任务身份、主机名和 PID；若进程在中间终止，同一主机重新执行命令会接管已死亡的同迁移锁、验证并复用已经追加的事件，不会重复迁移。活跃进程、其他迁移或来源不明的锁不会被自动删除。
-6. 迁移完成后脚本自动运行项目校验；`validate_project.py` 会拒绝未完成记录、缺失/伪造的任务迁移事件或版本不一致。
+5. `0.1.21 → 0.1.22` 只替换协议版本，Workflow 保持 `0.1.3`。迁移记录中的 `retired_code_intelligence_records` 固定为空列表，不重新清点或重写任何 record v3 历史证据。
+6. `.polaris/migrations/MIG-<from>-to-<to>.json` 先写为 `IN_PROGRESS`，全部投影更新后改为 `COMPLETED`。迁移锁会记录迁移/任务身份、主机名和 PID；若进程在中间终止，同一主机重新执行命令会接管已死亡的同迁移锁、验证并复用已经追加的事件，不会重复迁移。活跃进程、其他迁移或来源不明的锁不会被自动删除。
+7. 迁移完成后脚本自动运行项目校验；`validate_project.py` 会拒绝未完成记录、缺失/伪造的任务迁移事件或版本不一致。
 
 没有注册路径时不要手改版本号。应先取得包含所需相邻步骤的 Polaris 版本，逐级完成并分别提交；任何失败都先保留 `.polaris/migrations/` 和事件现场，修复原因后重跑同一迁移命令。
 
@@ -639,6 +640,8 @@ v0.1.19 将正式 Provider 固定为 [colbymchenry/codegraph](https://github.com
 v0.1.20 / Workflow v0.1.3 删除没有独立治理边界的中间状态和事件；`START_IMPLEMENTATION` 与 `START_REVIEW` 各自原子注册所需产物，Review 接受后直接进入 `VALIDATING`，R0/R1 使用 `PASS_AND_CLOSE`。本机进度改为可选遥测；未执行 Provider 操作时不再生成 Code Intelligence record。
 
 v0.1.21 新增项目级 Polaris CodeGraph MCP 代理、Host Adapter v3 注册与 Code Intelligence record v3；Workflow 仍为 v0.1.3，CodeGraph 仍为可选且不参与门禁。v1/v2 record 仅作为不可变历史证据读取。
+
+v0.1.22 新增 `0.1.21 → 0.1.22` 显式相邻迁移；Workflow 仍为 v0.1.3。该迁移不重新清点或重写 record v3，迁移记录中的 retirement inventory 固定为空。
 
 ## 13. 失败探索与卡点
 

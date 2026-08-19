@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> Current protocol version: `0.1.21` (in development); workflow version: `0.1.3`
+> Current protocol version: `0.1.22` (in development); workflow version: `0.1.3`
 
 Polaris is a repo-native engineering workflow for coding agent hosts. It stores requirements, plans, implementation results, independent reviews, validation evidence, and task state in Git, then uses deterministic gates to prevent requirement drift, stale evidence, and agents declaring their own work complete.
 
@@ -97,7 +97,7 @@ When status cannot be verified but the project has a safe repository identity, t
 
 The repository owner, not Polaris, owns CodeGraph installation, initialization, configuration, raw MCP registration, watcher, daemon, and every full `codegraph index` rebuild. Polaris never starts, configures, reconfigures, waits for, or manages them. Raw `codegraph_explore` or `codegraph explore` remains available out-of-band but cannot back `CURRENT` Polaris evidence. New records are v3 projections of the retained proxy bundle and completed fallbacks; v1/v2 are historical only. CodeGraph remains optional and never becomes a workflow gate.
 
-Protocol `0.1.21` adds the project-scoped Polaris CodeGraph proxy, host adapter v3 registration, and auditable Code Intelligence record v3 while leaving Workflow at `0.1.3`. Record v1 and v2 are immutable historical evidence only; new evidence is projected from a retained proxy bundle into v3.
+Protocol `0.1.22` keeps Workflow at `0.1.3` and adds an explicit version-only migration from `0.1.21` that neither inventories nor rewrites Code Intelligence record v3 evidence. Protocol `0.1.21` introduced the project-scoped Polaris CodeGraph proxy, host adapter v3 registration, and auditable record v3; record v1 and v2 remain immutable historical evidence only.
 
 ## v0.1 scope
 

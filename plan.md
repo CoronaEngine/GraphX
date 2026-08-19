@@ -2,7 +2,7 @@
 
 > 状态：Implementation underway
 > 目标版本：v0.1
-> 当前协议：`0.1.21`；Workflow：`0.1.3`
+> 当前协议：`0.1.22`；Workflow：`0.1.3`
 > 产品形态：Repo-native Skill System
 > 宿主 Runtime：声明式可扩展；v0.1 内置 Codex、Claude Code
 >
@@ -452,7 +452,7 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 
 `.polaris/workflow.json` 保存当前项目实际使用且版本锁定的节点、边、依赖和门禁 ID；`tools/polaris/workflow/default-workflow.json` 只用于初始化。`transition_task.py` 只接受图中边并先运行对应 validators，Skill 不直接编辑 `state` 字段。v0.1 遇到 `polaris_version` 或 `workflow_version` 不匹配时拒绝正常执行，不做隐式迁移。
 
-版本升级必须先 vendoring 目标协议，再显式运行 vendored `migrate_project.py`。`workflow/migrations.json` 是迁移路径唯一且 append-only 的注册表，一次只执行一个从当前版本到目标版本的相邻步骤；历史步骤必须保留以校验已提交记录。Migration protocol v2 保留 `replace_version` / `append_version_event`，并增加 `replace_version_and_workflow` / `append_mapped_workflow_event`。`0.1.19 → 0.1.20` 原子替换冻结 workflow 为 `0.1.3`，追加带源/目标状态及旧版本字段的迁移事件；旧 `IMPLEMENTED`、`DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`，旧 R0/R1 `VERIFIED` 映射到 `VALIDATING` 以重新提交 `PASS_AND_CLOSE`，仅 R2 保持 `VERIFIED`。`0.1.20 → 0.1.21` 保持 Workflow `0.1.3`，新增项目级 CodeGraph 代理、Host Adapter v3 与 record v3，并把 canonical v1/v2 record 作为仅可读取的不可变历史证据按路径和 SHA-256 清点；迁移恢复前必须重算并比对清单。迁移以 `.polaris/migrations/MIG-*.json` 记录 `IN_PROGRESS/COMPLETED`、各任务 sequence 和状态映射；重跑必须可恢复且不得重复事件。未知路径、跨版本跳跃、未声明的 workflow 变化、任务集合并发变化和不完整记录都必须机械拒绝。
+版本升级必须先 vendoring 目标协议，再显式运行 vendored `migrate_project.py`。`workflow/migrations.json` 是迁移路径唯一且 append-only 的注册表，一次只执行一个从当前版本到目标版本的相邻步骤；历史步骤必须保留以校验已提交记录。Migration protocol v2 保留 `replace_version` / `append_version_event`，并增加 `replace_version_and_workflow` / `append_mapped_workflow_event`。`0.1.19 → 0.1.20` 原子替换冻结 workflow 为 `0.1.3`，追加带源/目标状态及旧版本字段的迁移事件；旧 `IMPLEMENTED`、`DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`，旧 R0/R1 `VERIFIED` 映射到 `VALIDATING` 以重新提交 `PASS_AND_CLOSE`，仅 R2 保持 `VERIFIED`。`0.1.20 → 0.1.21` 保持 Workflow `0.1.3`，新增项目级 CodeGraph 代理、Host Adapter v3 与 record v3，并把 canonical v1/v2 record 作为仅可读取的不可变历史证据按路径和 SHA-256 清点；迁移恢复前必须重算并比对清单。`0.1.21 → 0.1.22` 同样保持 Workflow `0.1.3`，但 retirement inventory 固定为空，不重新清点或重写任何 record v3 证据。迁移以 `.polaris/migrations/MIG-*.json` 记录 `IN_PROGRESS/COMPLETED`、各任务 sequence 和状态映射；重跑必须可恢复且不得重复事件。未知路径、跨版本跳跃、未声明的 workflow 变化、任务集合并发变化和不完整记录都必须机械拒绝。
 
 迁移占用任务转换锁时必须写入结构化 owner：迁移 ID、任务 ID、主机名、PID 和创建时间。重跑只允许接管同一迁移在同一主机上、且原 PID 已确认不存在的锁；活跃 PID、其他迁移、其他主机、空锁或损坏锁一律拒绝。这样既能从进程崩溃或机器重启恢复，又不把真实并发误判为遗留锁。
 

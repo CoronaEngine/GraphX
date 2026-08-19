@@ -177,7 +177,7 @@ class CodeGraphTests(unittest.TestCase):
             self.assertIn(official, path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
         for path in [ROOT / "README.md", ROOT / "README.zh-CN.md"]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.21", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.22", text, path.relative_to(ROOT).as_posix())
             self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
 
     def test_authority_surfaces_publish_workflow_013(self) -> None:
@@ -188,7 +188,7 @@ class CodeGraphTests(unittest.TestCase):
             ROOT / "plan.md",
         ]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.21", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.22", text, path.relative_to(ROOT).as_posix())
             self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
 
     def test_readmes_keep_codegraph_operational_boundaries(self) -> None:
@@ -2028,7 +2028,8 @@ else:
     ) -> None:
         """0.1.21 inventories current/prior v2 evidence and preserves Workflow 0.1.3."""
         frozen = self.prepare_v2_migration_records()
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.21") as source:
+            vendor(source, self.repo, False)
 
         result = migrate_project(self.repo)
 
@@ -2061,7 +2062,8 @@ else:
     def test_migration_resume_rejects_mutated_frozen_v2_inventory(self) -> None:
         """中断迁移重跑前会重算 v2 清单，拒绝已经变化的历史证据。"""
         frozen = self.prepare_v2_migration_records()
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.21") as source:
+            vendor(source, self.repo, False)
         with mock.patch(
             "internal.migration_protocol.append_jsonl",
             side_effect=OSError("injected migration interruption"),
@@ -2073,6 +2075,59 @@ else:
         value = json.loads(path.read_text(encoding="utf-8"))
         value["recorded_at"] = "2026-08-19T00:00:00Z"
         write_json_atomic(path, value)
+        with self.assertRaisesRegex(RuleFailure, "inventory changed"):
+            migrate_project(self.repo)
+
+    def test_0122_migration_preserves_v3_code_intelligence_records(self) -> None:
+        recorded, _query = self.record_current_v3_fixture()
+        actual_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/code-intelligence/r001/planning.json"
+        )
+        self.assertEqual(
+            json.loads(actual_path.read_text(encoding="utf-8")), recorded
+        )
+        before = actual_path.read_bytes()
+        self.set_protocol_version("0.1.21")
+
+        with protocol_source_at("0.1.22") as source:
+            vendor(source, self.repo, False)
+        result = migrate_project(self.repo)
+
+        self.assertEqual(result["from"], "0.1.21")
+        self.assertEqual(result["to"], "0.1.22")
+        self.assertEqual(actual_path.read_bytes(), before)
+        migration = json.loads(Path(result["record"]).read_text(encoding="utf-8"))
+        self.assertEqual(migration["retired_code_intelligence_records"], [])
+
+    def test_0122_migration_resume_rejects_nonempty_retirement_inventory(
+        self,
+    ) -> None:
+        self.record_current_v3_fixture()
+        self.set_protocol_version("0.1.21")
+        with protocol_source_at("0.1.22") as source:
+            vendor(source, self.repo, False)
+        with mock.patch(
+            "internal.migration_protocol.append_jsonl",
+            side_effect=OSError("injected migration interruption"),
+        ):
+            with self.assertRaisesRegex(OSError, "injected migration interruption"):
+                migrate_project(self.repo)
+
+        migration_path = (
+            self.repo
+            / ".polaris/migrations/MIG-0.1.21-to-0.1.22.json"
+        )
+        migration = json.loads(migration_path.read_text(encoding="utf-8"))
+        migration["retired_code_intelligence_records"] = [
+            {
+                "task_id": "TASK-0001",
+                "path": "code-intelligence/r001/planning.json",
+                "sha256": "0" * 64,
+            }
+        ]
+        write_json_atomic(migration_path, migration)
+
         with self.assertRaisesRegex(RuleFailure, "inventory changed"):
             migrate_project(self.repo)
 
