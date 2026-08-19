@@ -398,7 +398,6 @@ class PolarisCoreTests(unittest.TestCase):
                 "CIQ-001",
                 "bind final subject",
                 "final subject symbols",
-                False,
                 runner=runner,
             )
         return record_proxy_bundle(
@@ -2601,6 +2600,19 @@ class PolarisCoreTests(unittest.TestCase):
             write_json_atomic(migrations_path, migrations)
             vendor(source, self.repo, False)
 
+        with self.assertRaisesRegex(
+            RuleFailure, "workflow migration requires replacement"
+        ):
+            migrate_project(self.repo)
+
+    def test_0122_version_only_migration_rejects_workflow_change(self) -> None:
+        self.set_protocol_version("0.1.21")
+        with protocol_source_at("0.1.22") as source:
+            migrations_path = source / "workflow/migrations.json"
+            migrations = read_json(migrations_path)
+            migrations["steps"][-1]["to_workflow_version"] = "0.1.4"
+            write_json_atomic(migrations_path, migrations)
+            vendor(source, self.repo, False)
         with self.assertRaisesRegex(
             RuleFailure, "workflow migration requires replacement"
         ):

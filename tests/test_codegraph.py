@@ -177,7 +177,7 @@ class CodeGraphTests(unittest.TestCase):
             self.assertIn(official, path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
         for path in [ROOT / "README.md", ROOT / "README.zh-CN.md"]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.21", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.22", text, path.relative_to(ROOT).as_posix())
             self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
 
     def test_authority_surfaces_publish_workflow_013(self) -> None:
@@ -188,7 +188,7 @@ class CodeGraphTests(unittest.TestCase):
             ROOT / "plan.md",
         ]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.21", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.22", text, path.relative_to(ROOT).as_posix())
             self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
 
     def test_readmes_keep_codegraph_operational_boundaries(self) -> None:
@@ -333,7 +333,12 @@ class CodeGraphTests(unittest.TestCase):
     def proxy_module(self) -> object:
         return importlib.import_module("internal.code_intelligence_proxy")
 
-    def record_current_v3_fixture(self) -> tuple[dict[str, object], dict[str, object]]:
+    def record_current_v3_fixture(
+        self,
+        *,
+        legacy_bundle: bool = False,
+        invalid_refresh_policy: bool = False,
+    ) -> tuple[dict[str, object], dict[str, object]]:
         self.qualify_task()
         (self.repo / ".codegraph").mkdir()
         source = self.repo / "src/a.py"
@@ -357,9 +362,17 @@ class CodeGraphTests(unittest.TestCase):
                 "CIQ-001",
                 "locate A",
                 "symbol A",
-                False,
                 runner=runner,
             )
+        bundle_path = query["bundle_path"]
+        bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+        if legacy_bundle:
+            bundle["bundle_version"] = 1
+            bundle.pop("refresh_policy")
+        elif invalid_refresh_policy:
+            bundle["refresh_policy"]["max_sync_attempts"] = 2
+        if legacy_bundle or invalid_refresh_policy:
+            write_json_atomic(bundle_path, bundle)
         protocol = importlib.import_module("internal.code_intelligence_protocol")
         result = protocol.record_proxy_bundle(
             self.repo,
@@ -487,7 +500,6 @@ class CodeGraphTests(unittest.TestCase):
                 "CIQ-001",
                 "locate affected symbols",
                 "symbol A",
-                False,
                 runner=runner,
             )
 
@@ -506,10 +518,501 @@ class CodeGraphTests(unittest.TestCase):
             bundle["query"]["response_sha256"],
         )
 
+    def test_proxy_automatically_syncs_pending_without_a_caller_switch(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        pending = json.loads(healthy_status(self.repo))
+        pending["pendingChanges"]["modified"] = 1
+        responses = [
+            completed(json.dumps(pending)),
+            completed("synced\n"),
+            completed(healthy_status(self.repo)),
+            completed("graph bytes\n"),
+            completed(healthy_status(self.repo)),
+        ]
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return responses.pop(0)
+
+        proxy = self.proxy_module()
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = proxy.execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual([item[1] for item in calls], [
+            "status", "sync", "status", "explore", "status"
+        ])
+        self.assertEqual(result["bundle"]["bundle_version"], 2)
+        self.assertEqual(result["bundle"]["refresh_policy"], {
+            "mode": "AUTO_INCREMENTAL_ON_PENDING",
+            "max_sync_attempts": 1,
+            "full_rebuild": "USER_ONLY",
+        })
+
+    def test_proxy_gates_initial_worktree_mismatch_before_sync(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        mismatch = json.loads(healthy_status(self.repo))
+        mismatch["pendingChanges"]["modified"] = 1
+        mismatch["worktreeMismatch"] = {
+            "worktreeRoot": str(self.repo),
+            "indexRoot": str(self.repo / "other-worktree"),
+        }
+        calls: list[list[str]] = []
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return completed(json.dumps(mismatch))
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual([item[1] for item in calls], ["status"])
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["bundle"]["sync"])
+        self.assertEqual(result["bundle"]["query"]["status"], "FAILED")
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(
+            result["bundle"]["delivery"]["reason"], "WORKTREE_MISMATCH"
+        )
+
+    def test_proxy_blocks_post_sync_project_mismatch_before_explore(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        pending = json.loads(healthy_status(self.repo))
+        pending["pendingChanges"]["modified"] = 1
+        wrong = json.loads(healthy_status(self.repo))
+        wrong["projectPath"] = str(self.repo / "other-checkout")
+        responses = [
+            completed(json.dumps(pending)),
+            completed("synced\n"),
+            completed(json.dumps(wrong)),
+            completed("graph bytes must not be queried\n"),
+            completed(healthy_status(self.repo)),
+        ]
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual(
+            [item[1] for item in calls], ["status", "sync", "status"]
+        )
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["bundle"]["response_path"])
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(
+            result["bundle"]["delivery"]["reason"], "PROJECT_MISMATCH"
+        )
+        self.assertIn(
+            "different project", result["bundle"]["post_sync_status"]["error"]
+        )
+        self.assertEqual(
+            [
+                point["reason"]
+                for point in result["bundle"]["delivery"]["stale_points"]
+            ],
+            ["STATUS_UNREADABLE", "SYNC_FAILED"],
+        )
+
+    def test_proxy_blocks_post_sync_unavailable_before_explore(self) -> None:
+        self.qualify_task()
+        marker = self.repo / ".codegraph"
+        marker.mkdir()
+        pending = json.loads(healthy_status(self.repo))
+        pending["pendingChanges"]["modified"] = 1
+        calls: list[list[str]] = []
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            if command[1] == "status":
+                return completed(json.dumps(pending))
+            if command[1] == "sync":
+                marker.rmdir()
+                return completed("synced\n")
+            return completed("graph bytes must not be queried\n")
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual([item[1] for item in calls], ["status", "sync"])
+        self.assertEqual(
+            result["bundle"]["post_sync_status"]["status"], "UNAVAILABLE"
+        )
+        self.assertEqual(result["bundle"]["query"]["status"], "FAILED")
+        self.assertEqual(result["bundle"]["delivery"]["state"], "STALE")
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["bundle"]["response_path"])
+
+    def test_proxy_discards_response_after_post_query_project_mismatch(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        wrong = json.loads(healthy_status(self.repo))
+        wrong["projectPath"] = str(self.repo / "other-checkout")
+        responses = [
+            completed(healthy_status(self.repo)),
+            completed("graph bytes must be discarded\n"),
+            completed(json.dumps(wrong)),
+        ]
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        response_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/runtime/code-intelligence/planning"
+            / "CIQ-001.response.txt"
+        )
+        self.assertEqual(
+            [item[1] for item in calls], ["status", "explore", "status"]
+        )
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["bundle"]["response_path"])
+        self.assertFalse(response_path.exists())
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(
+            result["bundle"]["delivery"]["reason"], "PROJECT_MISMATCH"
+        )
+
+    def test_proxy_discards_response_classified_as_worktree_mismatch(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        response = (
+            "⚠ CodeGraph results below come from a different git worktree "
+            "(/tmp/main), not where you're working (/tmp/wt) — they may reflect "
+            "another branch.\n\n"
+            "graph bytes must be discarded\n"
+        )
+        responses = [
+            completed(healthy_status(self.repo)),
+            completed(response),
+            completed(healthy_status(self.repo)),
+        ]
+        calls: list[list[str]] = []
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        response_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/runtime/code-intelligence/planning"
+            / "CIQ-001.response.txt"
+        )
+        self.assertEqual(
+            [item[1] for item in calls], ["status", "explore", "status"]
+        )
+        self.assertEqual(
+            result["bundle"]["response_classification"]["classification"],
+            "INDEX_STALE",
+        )
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["bundle"]["response_path"])
+        self.assertFalse(response_path.exists())
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(
+            result["bundle"]["delivery"]["reason"], "WORKTREE_MISMATCH"
+        )
+
+    def test_proxy_discards_misplaced_worktree_mismatch_banner(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        response = (
+            "Ordinary graph content appears before the safety framing.\n\n"
+            "⚠ CodeGraph results below come from a different git worktree "
+            "(/tmp/main), not where you're working (/tmp/wt) — they may reflect "
+            "another branch.\n\n"
+            "graph bytes must be discarded\n"
+        )
+        responses = [
+            completed(healthy_status(self.repo)),
+            completed(response),
+            completed(healthy_status(self.repo)),
+        ]
+        calls: list[list[str]] = []
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        response_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/runtime/code-intelligence/planning"
+            / "CIQ-001.response.txt"
+        )
+        classification = result["bundle"]["response_classification"]
+        self.assertEqual(
+            [item[1] for item in calls], ["status", "explore", "status"]
+        )
+        self.assertEqual(classification["classification"], "NOT_VERIFIED")
+        self.assertEqual(
+            {point["reason"] for point in classification["stale_points"]},
+            {"WORKTREE_MISMATCH", "STATUS_UNREADABLE"},
+        )
+        self.assertIn("misplaced", classification["error"])
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["bundle"]["response_path"])
+        self.assertFalse(response_path.exists())
+        self.assertEqual(
+            result["bundle"]["post_query_status"]["status"],
+            "CURRENT_AT_CHECK",
+        )
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(result["bundle"]["delivery"]["usage"], "NAVIGATION_ONLY")
+        self.assertEqual(
+            result["bundle"]["delivery"]["reason"], "WORKTREE_MISMATCH"
+        )
+
+    def test_proxy_post_query_unavailable_cannot_become_current(self) -> None:
+        self.qualify_task()
+        marker = self.repo / ".codegraph"
+        marker.mkdir()
+        calls: list[list[str]] = []
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            if command[1] == "status":
+                return completed(healthy_status(self.repo))
+            if command[1] == "explore":
+                marker.rmdir()
+                return completed("graph bytes\n")
+            raise AssertionError(f"unexpected CodeGraph command: {command}")
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual([item[1] for item in calls], ["status", "explore"])
+        self.assertEqual(
+            result["bundle"]["post_query_status"]["status"], "UNAVAILABLE"
+        )
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(
+            result["bundle"]["delivery"]["record_status"], "NOT_VERIFIED"
+        )
+        self.assertEqual(result["response"], "graph bytes\n")
+        self.assertIsNotNone(result["bundle"]["response_path"])
+
+    def test_proxy_queries_unknown_pre_status_and_treats_result_as_stale(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        responses = [
+            completed("not-json\n"),
+            completed("graph bytes\n"),
+            completed(healthy_status(self.repo)),
+        ]
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual([item[1] for item in calls], ["status", "explore", "status"])
+        self.assertEqual(result["response"], "graph bytes\n")
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertIn("freshness: TREAT_AS_STALE", result["envelope"])
+
+    def test_proxy_known_stale_overrides_unknown_pre_status(self) -> None:
+        cases = [
+            (
+                "post_pending",
+                "graph bytes\n",
+                "PENDING_CHANGES",
+            ),
+            (
+                "response_stale",
+                "⚠️ CodeGraph auto-sync is DISABLED — the index is frozen.\n",
+                "AUTO_SYNC_DISABLED",
+            ),
+        ]
+        for index, (case, response, stale_reason) in enumerate(cases, start=1):
+            with self.subTest(case=case):
+                if index > 1:
+                    self.tearDown()
+                    self.setUp()
+                self.qualify_task()
+                (self.repo / ".codegraph").mkdir()
+                post_status = json.loads(healthy_status(self.repo))
+                if case == "post_pending":
+                    post_status["pendingChanges"]["modified"] = 1
+                responses = [
+                    completed("not-json\n"),
+                    completed(response),
+                    completed(json.dumps(post_status)),
+                ]
+                calls = []
+
+                def runner(command, **_kwargs):
+                    calls.append(command)
+                    return responses.pop(0)
+
+                with mock.patch(
+                    "internal.code_intelligence_proxy.shutil.which",
+                    return_value="/bin/codegraph",
+                ):
+                    result = self.proxy_module().execute_proxy_query(
+                        self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                        "locate A", "symbol A", runner=runner,
+                    )
+
+                self.assertEqual(
+                    [item[1] for item in calls], ["status", "explore", "status"]
+                )
+                self.assertEqual(result["response"], response)
+                self.assertEqual(result["bundle"]["delivery"]["state"], "STALE")
+                self.assertEqual(
+                    result["bundle"]["delivery"]["reason"], stale_reason
+                )
+                self.assertEqual(
+                    {
+                        point["reason"]
+                        for point in result["bundle"]["delivery"]["stale_points"]
+                    },
+                    {"STATUS_UNREADABLE", stale_reason},
+                )
+                self.assertIsNotNone(result["bundle"]["delivery"]["error"])
+                self.assertIn("freshness: TREAT_AS_STALE", result["envelope"])
+
+    def test_proxy_does_not_query_a_different_project_index(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        wrong = json.loads(healthy_status(self.repo))
+        wrong["projectPath"] = str(self.repo / "other-checkout")
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return completed(json.dumps(wrong))
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual([item[1] for item in calls], ["status"])
+        self.assertIsNone(result["response"])
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(result["bundle"]["delivery"]["reason"], "PROJECT_MISMATCH")
+
+    def test_proxy_worktree_mismatch_is_unknown_with_finite_error_evidence(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        wrong = json.loads(healthy_status(self.repo))
+        wrong["worktreeMismatch"] = {"reason": "different checkout"}
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return completed(json.dumps(wrong))
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual([item[1] for item in calls], ["status"])
+        self.assertIsNone(result["response"])
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(
+            result["bundle"]["delivery"]["reason"], "WORKTREE_MISMATCH"
+        )
+        self.assertIsNotNone(result["bundle"]["query"]["error"])
+        self.assertIsNotNone(result["bundle"]["delivery"]["error"])
+
     def test_proxy_window_downgrades_pending_unknown_and_unavailable_states(self) -> None:
         cases = [
-            ("pending", "STALE", 3),
-            ("malformed", "UNKNOWN", 1),
+            ("pending", "STALE", 5),
+            ("malformed", "UNKNOWN", 3),
             ("missing_marker", "UNAVAILABLE", 0),
         ]
         for index, (case, expected_state, expected_calls) in enumerate(cases, start=1):
@@ -526,11 +1029,17 @@ class CodeGraphTests(unittest.TestCase):
                     status["pendingChanges"]["modified"] = 1
                     responses = [
                         completed(json.dumps(status)),
+                        completed("synced\n"),
+                        completed(json.dumps(status)),
                         completed("graph bytes\n"),
                         completed(json.dumps(status)),
                     ]
                 else:
-                    responses = [completed("not-json\n")]
+                    responses = [
+                        completed("not-json\n"),
+                        completed("graph bytes\n"),
+                        completed(healthy_status(self.repo)),
+                    ]
                 if case != "missing_marker":
                     (self.repo / ".codegraph").mkdir()
 
@@ -546,7 +1055,6 @@ class CodeGraphTests(unittest.TestCase):
                         query_id,
                         "inspect freshness",
                         "symbol A",
-                        False,
                         runner=runner,
                     )
                 self.assertEqual(result["bundle"]["delivery"]["state"], expected_state)
@@ -581,7 +1089,6 @@ class CodeGraphTests(unittest.TestCase):
                 "CIQ-001",
                 "refresh one query window",
                 "symbol A",
-                True,
                 runner=runner,
             )
 
@@ -634,7 +1141,6 @@ class CodeGraphTests(unittest.TestCase):
                         "CIQ-001",
                         "verify failure handling",
                         "symbol A",
-                        False,
                         runner=runner,
                     )
                 self.assertEqual(result["bundle"]["delivery"]["state"], expected_state)
@@ -685,7 +1191,6 @@ For accurate content of those specific files, Read them directly.
                         "CIQ-001",
                         "classify response",
                         "symbol A",
-                        False,
                         runner=runner,
                     )
                 self.assertEqual(result["bundle"]["delivery"]["state"], expected_state)
@@ -714,7 +1219,6 @@ For accurate content of those specific files, Read them directly.
                 "CIQ-001",
                 "reject cross-project status",
                 "symbol A",
-                False,
                 runner=runner,
             )
         self.assertEqual([command[1] for command in calls], ["status"])
@@ -765,7 +1269,6 @@ For accurate content of those specific files, Read them directly.
                         "CIQ-001",
                         "verify activation gate",
                         "symbol A",
-                        True,
                         runner=runner,
                     )
                 self.assertEqual(result["bundle"]["delivery"]["state"], "UNAVAILABLE")
@@ -837,7 +1340,13 @@ For accurate content of those specific files, Read them directly.
         )
         tools = responses[1]["result"]["tools"]
         self.assertEqual([item["name"] for item in tools], ["polaris_codegraph_explore"])
-        self.assertNotIn("repository", tools[0]["inputSchema"]["properties"])
+        schema = tools[0]["inputSchema"]
+        self.assertNotIn("repository", schema["properties"])
+        self.assertNotIn("sync_if_needed", schema["properties"])
+        self.assertNotIn("sync_if_needed", schema["required"])
+        self.assertEqual(set(schema["required"]), {
+            "task_id", "stage", "query_id", "purpose", "query",
+        })
         self.assertEqual(completed_process.stderr, "")
 
     def test_mcp_server_returns_envelope_before_graph_and_preserves_bundle(self) -> None:
@@ -879,7 +1388,6 @@ For accurate content of those specific files, Read them directly.
                     "query_id": "CIQ-001",
                     "purpose": "locate symbols",
                     "query": "symbol A",
-                    "sync_if_needed": False,
                 },
             },
         }
@@ -939,7 +1447,6 @@ For accurate content of those specific files, Read them directly.
                     "query_id": "CIQ-000",
                     "purpose": "locate symbols",
                     "query": "symbol A",
-                    "sync_if_needed": False,
                 },
             },
         })
@@ -1142,7 +1649,6 @@ else:
                             "query_id": "CIQ-001",
                             "purpose": "locate A",
                             "query": "symbol A",
-                            "sync_if_needed": True,
                         },
                     },
                 }),
@@ -1162,8 +1668,11 @@ else:
             self.assertEqual([response["id"] for response in responses], [1, 2])
             tool_result = responses[1]["result"]
             self.assertFalse(tool_result["isError"])
+            first_content = tool_result["content"][0]["text"]
+            self.assertTrue(first_content.startswith("[POLARIS_CODEGRAPH_FRESHNESS]\n"))
+            self.assertIn("freshness: VERIFIED_AT_CHECK", first_content)
             self.assertTrue(
-                tool_result["content"][0]["text"].startswith(
+                first_content.startswith(
                     "[POLARIS_CODEGRAPH_FRESHNESS]\nstate: CURRENT\n"
                 )
             )
@@ -1203,7 +1712,14 @@ else:
                     ["status", "--json"],
                 ],
             )
-            self.assertTrue(all(entry["cwd"] == str(repo.resolve()) for entry in calls))
+            self.assertEqual(
+                [entry["argv"][0] for entry in calls],
+                ["status", "sync", "status", "explore", "status"],
+            )
+            self.assertTrue(
+                all(Path(entry["cwd"]).resolve() == repo.resolve() for entry in calls)
+            )
+            self.assertNotIn("index", [arg for entry in calls for arg in entry["argv"]])
 
             annotations_path = fixture_root / "annotations.json"
             write_json_atomic(
@@ -1237,6 +1753,7 @@ else:
             record_value = json.loads(
                 Path(record_result["path"]).read_text(encoding="utf-8")
             )
+            self.assertEqual(record_value["record_version"], 3)
             self.assertEqual(
                 record_value["proxy"]["evidence_bundle_sha256"],
                 file_sha256(bundle_path),
@@ -1274,6 +1791,15 @@ else:
             file_sha256(query["bundle_path"]),
         )
         self.assertEqual(recorded["query"]["symbols"][0]["path"], "src/a.py")
+
+    def test_bundle_v1_remains_projectable_but_v2_policy_is_fixed(self) -> None:
+        recorded, _query = self.record_current_v3_fixture(legacy_bundle=True)
+        self.assertEqual(recorded["record_version"], 3)
+
+        self.tearDown()
+        self.setUp()
+        with self.assertRaisesRegex(RuleFailure, "refresh policy"):
+            self.record_current_v3_fixture(invalid_refresh_policy=True)
 
     def test_v3_record_rejects_mutated_window_identity_and_fallbacks(self) -> None:
         recorded, _query = self.record_current_v3_fixture()
@@ -1446,7 +1972,6 @@ else:
                 "CIQ-001",
                 "locate A",
                 "symbol A",
-                False,
                 runner=runner,
             )
         protocol = importlib.import_module("internal.code_intelligence_protocol")
@@ -1478,6 +2003,73 @@ else:
         self.assertEqual(recorded["query"]["response_sha256"], None)
         self.assertEqual(recorded["delivery"]["stale_points"], [])
 
+    def test_failed_explore_with_known_stale_projects_to_failed_v3(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        source = self.repo / "src/a.py"
+        source.parent.mkdir()
+        source.write_text("class A:\n    pass\n", encoding="utf-8")
+        stale = json.loads(healthy_status(self.repo))
+        stale["index"]["state"] = "partial"
+        responses = [
+            completed(json.dumps(stale)),
+            completed("failed explore output\n", returncode=1),
+        ]
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            query = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A in a partial index", "symbol A", runner=runner,
+            )
+
+        self.assertEqual(query["bundle"]["delivery"]["state"], "STALE")
+        self.assertEqual(query["bundle"]["query"]["status"], "FAILED")
+        self.assertIsNone(query["bundle"]["response_path"])
+        protocol = importlib.import_module("internal.code_intelligence_protocol")
+        try:
+            result = protocol.record_proxy_bundle(
+                self.repo,
+                "TASK-0001",
+                query["bundle_path"],
+                {
+                    "summary": "Explore failed; verified current source instead.",
+                    "symbols": [],
+                    "source_fallbacks": [{
+                        "action": "SEARCH_SOURCE",
+                        "path": None,
+                        "observed_sha256": None,
+                        "base_commit": None,
+                        "head_commit": None,
+                        "diff_hash": None,
+                        "purpose": "locate A in current source",
+                        "result_paths": [{
+                            "path": "src/a.py",
+                            "observed_sha256": file_sha256(source),
+                        }],
+                    }],
+                },
+                ROOT,
+            )
+        except RuleFailure as error:
+            self.fail(f"known-stale failed query must remain projectable: {error}")
+        recorded = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+        self.assertEqual(recorded["record_version"], 3)
+        self.assertEqual(recorded["delivery"]["state"], "STALE")
+        self.assertEqual(recorded["status"], "FAILED")
+        self.assertEqual(recorded["query"]["status"], "FAILED")
+        self.assertIn(
+            "INDEX_PARTIAL",
+            [point["reason"] for point in recorded["delivery"]["stale_points"]],
+        )
+
     def test_failed_sync_proxy_bundle_preserves_only_observed_post_status(self) -> None:
         self.qualify_task()
         (self.repo / ".codegraph").mkdir()
@@ -1508,7 +2100,6 @@ else:
                 "CIQ-001",
                 "locate A after one sync attempt",
                 "symbol A",
-                True,
                 runner=runner,
             )
         self.assertIsNone(query["bundle"]["post_sync_status"])
@@ -1565,11 +2156,17 @@ else:
                     pending["pendingChanges"]["modified"] = 1
                     responses = [
                         completed(json.dumps(pending)),
+                        completed("synced\n"),
+                        completed(json.dumps(pending)),
                         completed("A is defined in src/a.py\n"),
                         completed(json.dumps(pending)),
                     ]
                 elif case == "unknown":
-                    responses = [completed("not-json\n")]
+                    responses = [
+                        completed("not-json\n"),
+                        completed("A is defined in src/a.py\n"),
+                        completed(healthy_status(self.repo)),
+                    ]
                 else:
                     responses = []
 
@@ -1590,7 +2187,6 @@ else:
                         "CIQ-001",
                         "locate A conservatively",
                         "symbol A",
-                        False,
                         runner=runner,
                     )
                 fallback = {
@@ -1731,7 +2327,8 @@ else:
     ) -> None:
         """0.1.21 inventories current/prior v2 evidence and preserves Workflow 0.1.3."""
         frozen = self.prepare_v2_migration_records()
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.21") as source:
+            vendor(source, self.repo, False)
 
         result = migrate_project(self.repo)
 
@@ -1764,7 +2361,8 @@ else:
     def test_migration_resume_rejects_mutated_frozen_v2_inventory(self) -> None:
         """中断迁移重跑前会重算 v2 清单，拒绝已经变化的历史证据。"""
         frozen = self.prepare_v2_migration_records()
-        vendor(ROOT, self.repo, False)
+        with protocol_source_at("0.1.21") as source:
+            vendor(source, self.repo, False)
         with mock.patch(
             "internal.migration_protocol.append_jsonl",
             side_effect=OSError("injected migration interruption"),
@@ -1776,6 +2374,59 @@ else:
         value = json.loads(path.read_text(encoding="utf-8"))
         value["recorded_at"] = "2026-08-19T00:00:00Z"
         write_json_atomic(path, value)
+        with self.assertRaisesRegex(RuleFailure, "inventory changed"):
+            migrate_project(self.repo)
+
+    def test_0122_migration_preserves_v3_code_intelligence_records(self) -> None:
+        recorded, _query = self.record_current_v3_fixture()
+        actual_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/code-intelligence/r001/planning.json"
+        )
+        self.assertEqual(
+            json.loads(actual_path.read_text(encoding="utf-8")), recorded
+        )
+        before = actual_path.read_bytes()
+        self.set_protocol_version("0.1.21")
+
+        with protocol_source_at("0.1.22") as source:
+            vendor(source, self.repo, False)
+        result = migrate_project(self.repo)
+
+        self.assertEqual(result["from"], "0.1.21")
+        self.assertEqual(result["to"], "0.1.22")
+        self.assertEqual(actual_path.read_bytes(), before)
+        migration = json.loads(Path(result["record"]).read_text(encoding="utf-8"))
+        self.assertEqual(migration["retired_code_intelligence_records"], [])
+
+    def test_0122_migration_resume_rejects_nonempty_retirement_inventory(
+        self,
+    ) -> None:
+        self.record_current_v3_fixture()
+        self.set_protocol_version("0.1.21")
+        with protocol_source_at("0.1.22") as source:
+            vendor(source, self.repo, False)
+        with mock.patch(
+            "internal.migration_protocol.append_jsonl",
+            side_effect=OSError("injected migration interruption"),
+        ):
+            with self.assertRaisesRegex(OSError, "injected migration interruption"):
+                migrate_project(self.repo)
+
+        migration_path = (
+            self.repo
+            / ".polaris/migrations/MIG-0.1.21-to-0.1.22.json"
+        )
+        migration = json.loads(migration_path.read_text(encoding="utf-8"))
+        migration["retired_code_intelligence_records"] = [
+            {
+                "task_id": "TASK-0001",
+                "path": "code-intelligence/r001/planning.json",
+                "sha256": "0" * 64,
+            }
+        ]
+        write_json_atomic(migration_path, migration)
+
         with self.assertRaisesRegex(RuleFailure, "inventory changed"):
             migrate_project(self.repo)
 
@@ -2998,7 +3649,7 @@ else:
         )
         available_skills = set(discover_skills(ROOT))
 
-        def assert_contract(text: str, label: str) -> None:
+        def assert_contract(text: str, label: Path) -> None:
             for anchor in anchors:
                 self.assertIn(anchor, text, f"{label}: {anchor}")
             self.assertIn("record_code_intelligence.py", text, label)
@@ -3032,6 +3683,91 @@ else:
             with self.assertRaises(AssertionError):
                 assert_contract(mutation, "mutated implementation")
 
+    def test_all_agent_surfaces_require_automatic_freshness_policy(self) -> None:
+        """Every CodeGraph-capable Agent surface follows proxy-owned freshness."""
+        paths = [
+            ROOT / "skills/code-intelligence/SKILL.md",
+            ROOT / "skills/architecture-planning/SKILL.md",
+            ROOT / "skills/implementation/SKILL.md",
+            ROOT / "skills/documentation-sync/SKILL.md",
+            ROOT / "skills/adversarial-review/SKILL.md",
+            ROOT / "templates/AGENTS.md",
+        ]
+        required = (
+            "automatically runs at most one incremental `codegraph sync`",
+            "never runs `codegraph index`",
+            "UNKNOWN",
+            "TREAT_AS_STALE",
+            "source/Git fallback",
+        )
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("sync_if_needed", text, path.as_posix())
+            for anchor in required:
+                self.assertIn(anchor, text, f"{path}: {anchor}")
+
+    def test_safe_identity_unknown_status_still_queries_and_is_stale(self) -> None:
+        """Safe identity keeps the bounded query available after an unreadable status."""
+        contracts = {
+            ROOT / "skills/code-intelligence/SKILL.md": (
+                "When status cannot be verified but the project has a safe repository "
+                "identity, the proxy still calls `polaris_codegraph_explore` and "
+                "returns `UNKNOWN`/`TREAT_AS_STALE`; graph content remains "
+                "navigation-only and any conclusion requires the exact source/Git "
+                "fallback."
+            ),
+            ROOT / "templates/AGENTS.md": (
+                "When status cannot be verified but the project has a safe repository "
+                "identity, the proxy still calls `polaris_codegraph_explore` and "
+                "returns `UNKNOWN`/`TREAT_AS_STALE`; graph content remains "
+                "navigation-only and any conclusion requires the exact source/Git "
+                "fallback."
+            ),
+            ROOT / "README.md": (
+                "When status cannot be verified but the project has a safe repository "
+                "identity, the proxy still calls `polaris_codegraph_explore` and "
+                "returns `UNKNOWN`/`TREAT_AS_STALE`. The graph remains "
+                "navigation-only: use the exact source/Git fallback before any "
+                "conclusion."
+            ),
+            ROOT / "README.zh-CN.md": (
+                "当 status 无法验证但仓库身份安全时，代理仍执行 "
+                "`polaris_codegraph_explore`，并返回 `UNKNOWN`/`TREAT_AS_STALE`。"
+                "图只用于导航；在使用任何结论前，必须完成精确源码/Git 回退。"
+            ),
+            ROOT / "docs/USAGE.md": (
+                "当 status 无法验证但仓库身份安全时，代理仍执行 "
+                "`polaris_codegraph_explore`，并返回 `UNKNOWN`/`TREAT_AS_STALE`。"
+                "图只用于导航；在使用任何结论前，必须完成精确源码/Git fallback。"
+            ),
+            ROOT / "plan.md": (
+                "当 status 无法验证但仓库身份安全时，代理仍执行 "
+                "`polaris_codegraph_explore` 并返回 `UNKNOWN`/`TREAT_AS_STALE`；"
+                "图仅用于导航，任何结论都必须先完成精确源码/Git fallback。"
+            ),
+        }
+
+        def assert_contract(text: str, label: str) -> None:
+            self.assertIn(contracts[label], text, label)
+
+        for path in contracts:
+            assert_contract(path.read_text(encoding="utf-8"), path)
+
+        canonical = contracts[ROOT / "skills/code-intelligence/SKILL.md"]
+        detached = canonical.replace(
+            "the proxy still calls `polaris_codegraph_explore` and returns "
+            "`UNKNOWN`/`TREAT_AS_STALE`",
+            "the proxy returns `UNKNOWN`/`TREAT_AS_STALE`",
+        ) + " The proxy still calls `polaris_codegraph_explore` after current status."
+        for anchor in (
+            "safe repository identity",
+            "still calls `polaris_codegraph_explore`",
+            "UNKNOWN`/`TREAT_AS_STALE",
+        ):
+            self.assertIn(anchor, detached)
+        with self.assertRaises(AssertionError):
+            assert_contract(detached, ROOT / "skills/code-intelligence/SKILL.md")
+
     def test_documentation_sync_uses_one_proxy_query(self) -> None:
         """Documentation Sync uses one bounded changed-path/symbol proxy query."""
         source = (ROOT / "skills/documentation-sync/SKILL.md").read_text(
@@ -3046,9 +3782,9 @@ else:
             )
             for anchor in (
                 "polaris_codegraph_explore",
-                "sync_if_needed: true",
                 "changed source paths",
                 "documented symbols",
+                "automatic incremental sync",
                 "no separate status/sync MCP tool",
             ):
                 self.assertIn(anchor, rendered, f"{adapter['host_id']}: {anchor}")
@@ -3526,6 +4262,165 @@ else:
                 self.assertEqual(result["sync"]["status"], "SKIPPED")
                 self.assertEqual(calls, [])
 
+    def test_current_codegraph_freshness_framing_is_classified(self) -> None:
+        samples = {
+            "pending": (
+                "⚠️ Some files referenced below were edited since the last index sync — "
+                "their codegraph entries may be stale:\n"
+                "  - src/a.py (edited 12ms ago, pending sync)\n"
+                "For accurate content of those specific files, Read them directly. "
+                "The rest of this response is fresh.\n",
+                "PARTIAL_STALE",
+            ),
+            "indexing": (
+                "⚠️ Some files referenced below were edited since the last index sync — "
+                "their codegraph entries may be stale:\n"
+                "  - src/a.py (edited 12ms ago, indexing in progress)\n"
+                "For accurate content of those specific files, Read them directly. "
+                "The rest of this response is fresh.\n",
+                "PARTIAL_STALE",
+            ),
+            "disabled": (
+                "⚠️ CodeGraph auto-sync is DISABLED — live file watching stopped, so the "
+                "index is frozen and any file edited since then is stale here.\n",
+                "INDEX_STALE",
+            ),
+            "drift": (
+                "**`src/a.py`** — A(function) · ⚠ changed since last index sync — "
+                "source below is current; the symbol list may be outdated\n",
+                "PARTIAL_STALE",
+            ),
+            "drifted_omitted_source": (
+                "**`src/a.py`** — ⚠ changed on disk after the last index sync — "
+                "source omitted (indexed line ranges no longer match, so a slice "
+                "could show the wrong code).\n",
+                "PARTIAL_STALE",
+            ),
+            "worktree": (
+                "⚠ CodeGraph results below come from a different git worktree "
+                "(/tmp/main), not where you're working (/tmp/wt) — they may reflect "
+                "another branch.\n",
+                "INDEX_STALE",
+            ),
+        }
+        for name, (response, expected) in samples.items():
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.classify_response(response)["classification"], expected
+                )
+
+    def test_combined_response_framing_preserves_worktree_mismatch(self) -> None:
+        source = self.repo / "src/a.py"
+        source.parent.mkdir()
+        source.write_text("value = 1\n", encoding="utf-8")
+        worktree = (
+            "⚠ CodeGraph results below come from a different git worktree "
+            "(/tmp/main), not where you're working (/tmp/wt) — they may reflect "
+            "another branch, and symbols changed only here are missing.\n"
+        )
+        partial = (
+            "⚠️ Some files referenced below were edited since the last index sync — "
+            "their codegraph entries may be stale:\n"
+            "  - src/a.py (edited 12ms ago, pending sync)\n"
+            "For accurate content of those specific files, Read them directly. "
+            "The rest of this response is fresh.\n\n"
+        )
+        disabled = (
+            "⚠️ CodeGraph auto-sync is DISABLED — live file watching stopped, so "
+            "the index is frozen and any file edited since then is stale here. "
+            "Read files directly to confirm current content before relying on it.\n\n"
+        )
+        cases = {
+            "partial_and_worktree": (
+                partial + worktree + "\ngraph result\n",
+                {"PENDING_SYNC", "WORKTREE_MISMATCH"},
+            ),
+            "disabled_and_worktree": (
+                disabled + worktree + "\ngraph result\n",
+                {"AUTO_SYNC_DISABLED", "WORKTREE_MISMATCH"},
+            ),
+        }
+
+        for name, (response, expected_reasons) in cases.items():
+            with self.subTest(name=name):
+                result = self.classify_response(response)
+                self.assertEqual(result["classification"], "INDEX_STALE")
+                self.assertEqual(
+                    {point["reason"] for point in result["stale_points"]},
+                    expected_reasons,
+                )
+
+    def test_current_project_pending_footer_is_index_stale(self) -> None:
+        response = (
+            "Graph result with no referenced stale files.\n\n"
+            "(Note: 2 file(s) elsewhere in this project are pending index sync "
+            "but were not referenced above:\n"
+            "  - src/a.py (edited 12ms ago)\n"
+            "  - src/b.py (edited 20ms ago))\n"
+        )
+
+        result = self.classify_response(response)
+
+        self.assertEqual(result["classification"], "INDEX_STALE")
+        self.assertEqual(result["stale_points"], [{
+            "scope": "INDEX",
+            "path": None,
+            "reason": "PENDING_CHANGES",
+            "fallback": "SEARCH_SOURCE",
+            "observed_sha256": None,
+        }])
+
+    def test_unclosed_source_fence_is_not_verified(self) -> None:
+        response = (
+            "**`src/a.py`** — A(function)\n\n"
+            "```python\n"
+            "def A():\n"
+            "    return 'ordinary source'\n"
+        )
+
+        result = self.classify_response(response)
+
+        self.assertEqual(result["classification"], "NOT_VERIFIED")
+        self.assertIn("fence", str(result["error"]).lower())
+
+    def test_warning_words_in_ordinary_prose_do_not_change_freshness(self) -> None:
+        response = (
+            "The pending request emits a warning when its cached value becomes stale.\n"
+            "This sentence is returned program prose, not CodeGraph freshness framing.\n"
+        )
+
+        self.assertEqual(self.classify_response(response)["classification"], "NONE")
+
+    def test_warning_words_inside_verbatim_source_do_not_change_freshness(self) -> None:
+        response = (
+            "**`src/a.py`** — A(function)\n\n"
+            "```python\n"
+            "def A():\n"
+            "    warning = 'stale pending sync out-of-date ⚠'\n"
+            "    return warning\n"
+            "```\n"
+        )
+
+        self.assertEqual(self.classify_response(response)["classification"], "NONE")
+
+    def test_project_drift_tail_requires_source_search(self) -> None:
+        response = (
+            "> ⚠ Changed on disk after the last index sync: src/a.py, src/b.py. "
+            "Line numbers referencing these files elsewhere in this response may be "
+            "shifted until that project's next sync re-indexes them.\n"
+        )
+
+        result = self.classify_response(response)
+
+        self.assertEqual(result["classification"], "INDEX_STALE")
+        self.assertEqual(result["stale_points"], [{
+            "scope": "INDEX",
+            "path": None,
+            "reason": "PENDING_CHANGES",
+            "fallback": "SEARCH_SOURCE",
+            "observed_sha256": None,
+        }])
+
     def test_response_banner_marks_only_named_files_stale(self) -> None:
         source = self.repo / "src/widget.py"
         source.parent.mkdir()
@@ -3705,6 +4600,41 @@ For accurate content of those specific files, Read them directly.
         self.assertEqual(result["basis"], ["STATUS_JSON", "RESPONSE_BANNER"])
         self.assertEqual(result["stale_points"], response["stale_points"])
         self.assertEqual(result["status_response_sha256"], "status-sha")
+
+    def test_merge_freshness_keeps_explicit_stale_above_verification_failure(self) -> None:
+        merger = getattr(self.adapter_module(), "merge_freshness", None)
+        self.assertTrue(callable(merger), "CodeGraph freshness merger must exist")
+        status = {
+            "status": "NOT_VERIFIED",
+            "checked_at": "2026-08-18T00:00:00Z",
+            "basis": ["STATUS_JSON"],
+            "stale_points": [{
+                "scope": "INDEX",
+                "path": None,
+                "reason": "STATUS_UNREADABLE",
+                "fallback": "SEARCH_SOURCE",
+                "observed_sha256": None,
+            }],
+            "status_response_sha256": None,
+            "error": "status JSON was unreadable",
+            "needs_sync": False,
+            "pending_changes": None,
+        }
+        response = self.classify_response(
+            "⚠️ Some files referenced below were edited since the last index sync — "
+            "their codegraph entries may be stale:\n"
+            "  - src/deleted.py (edited 800ms ago, pending sync)\n"
+            "For accurate content of those specific files, Read them directly.\n"
+        )
+
+        result = merger(status, response)
+
+        self.assertEqual(result["status"], "INDEX_STALE")
+        self.assertEqual(
+            {point["reason"] for point in result["stale_points"]},
+            {"STATUS_UNREADABLE", "PENDING_SYNC"},
+        )
+        self.assertEqual(result["error"], "status JSON was unreadable")
 
     def test_none_response_does_not_upgrade_unverified_status(self) -> None:
         merger = getattr(self.adapter_module(), "merge_freshness", None)

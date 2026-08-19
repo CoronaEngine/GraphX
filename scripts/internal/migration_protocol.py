@@ -38,6 +38,10 @@ from .task_layout import (
 
 
 MIGRATIONS_ROOT = Path(".polaris/migrations")
+RETIREMENT_INVENTORY_MIGRATIONS = {
+    "0.1.19-to-0.1.20",
+    "0.1.20-to-0.1.21",
+}
 
 LEGACY_STATUS_MAP = {
     "DRAFT": "DRAFT",
@@ -359,11 +363,12 @@ def _new_record(
                 else state["status"],
             }
         )
-        retired_code_intelligence_records.extend(
-            _retired_code_intelligence_records(
-                repo, task_id, directory, protocol_root, step
+        if step["migration_id"] in RETIREMENT_INVENTORY_MIGRATIONS:
+            retired_code_intelligence_records.extend(
+                _retired_code_intelligence_records(
+                    repo, task_id, directory, protocol_root, step
+                )
             )
-        )
     return {
         "record_version": 2,
         "migration_id": step["migration_id"],
@@ -452,17 +457,18 @@ def migrate_project(repo: Path, protocol_root: Path) -> dict[str, Any]:
         raise RuleFailure("project task list changed during migration")
     if incomplete is not None:
         current_inventory: list[dict[str, str]] = []
-        for item in record["tasks"]:
-            directory = task_dir(repo, item["task_id"])
-            current_inventory.extend(
-                _retired_code_intelligence_records(
-                    repo,
-                    item["task_id"],
-                    directory,
-                    protocol_root,
-                    step,
+        if step["migration_id"] in RETIREMENT_INVENTORY_MIGRATIONS:
+            for item in record["tasks"]:
+                directory = task_dir(repo, item["task_id"])
+                current_inventory.extend(
+                    _retired_code_intelligence_records(
+                        repo,
+                        item["task_id"],
+                        directory,
+                        protocol_root,
+                        step,
+                    )
                 )
-            )
         if record.get("retired_code_intelligence_records", []) != current_inventory:
             raise RuleFailure(
                 "retired Code Intelligence record inventory changed during migration"

@@ -1090,12 +1090,13 @@ def _validate_v3_record_value(
     }[state]
     if delivery["record_status"] != expected_record_status:
         raise RuleFailure("v3 delivery state contradicts its record freshness status")
-    if value["status"] != {
+    expected_value_status = {
         "CURRENT": "USED",
-        "STALE": "USED",
+        "STALE": "USED" if query["status"] == "SUCCESS" else "FAILED",
         "UNKNOWN": "FAILED",
         "UNAVAILABLE": "UNAVAILABLE",
-    }[state]:
+    }[state]
+    if value["status"] != expected_value_status:
         raise RuleFailure("v3 record status contradicts proxy delivery")
     if state == "CURRENT":
         if (
@@ -1116,13 +1117,14 @@ def _validate_v3_record_value(
             raise RuleFailure("CURRENT v3 evidence lacks a complete zero-pending window")
     elif state == "STALE":
         if (
-            query["status"] != "SUCCESS"
+            query["status"] not in {"SUCCESS", "FAILED"}
             or delivery["usage"] != "NAVIGATION_ONLY"
             or delivery["required_fallback"] == "NONE"
             or not any(
                 point["reason"] != "STATUS_UNREADABLE"
                 for point in delivery["stale_points"]
             )
+            or (query["status"] == "FAILED" and not delivery["error"])
         ):
             raise RuleFailure("STALE v3 evidence lacks an explicit stale reason")
     elif state == "UNKNOWN":
@@ -1217,26 +1219,26 @@ def record_proxy_bundle(
     require_regular_file(candidate, "CodeGraph proxy bundle")
     bundle_digest = file_sha256(candidate)
     bundle = read_json(candidate)
-    _require_exact_keys(
-        bundle,
-        {
-            "bundle_version",
-            "proxy",
-            "provider",
-            "repository",
-            "task_context",
-            "query",
-            "pre_status",
-            "sync",
-            "post_sync_status",
-            "response_classification",
-            "post_query_status",
-            "delivery",
-            "response_path",
-        },
-        "CodeGraph proxy bundle",
-    )
-    if bundle["bundle_version"] != 1 or bundle["proxy"] != {
+    from .code_intelligence_proxy import REFRESH_POLICY, resolve_stage_context
+
+    version = bundle.get("bundle_version")
+    base_keys = {
+        "bundle_version", "proxy", "provider", "repository", "task_context",
+        "query", "pre_status", "sync", "post_sync_status",
+        "response_classification", "post_query_status", "delivery",
+        "response_path",
+    }
+    if version == 1:
+        _require_exact_keys(bundle, base_keys, "CodeGraph proxy bundle")
+    elif version == 2:
+        _require_exact_keys(
+            bundle, {*base_keys, "refresh_policy"}, "CodeGraph proxy bundle"
+        )
+        if bundle["refresh_policy"] != REFRESH_POLICY:
+            raise RuleFailure("CodeGraph proxy bundle has an invalid refresh policy")
+    else:
+        raise RuleFailure("CodeGraph proxy bundle has an unsupported identity")
+    if bundle["proxy"] != {
         "server_id": "polaris-codegraph",
         "tool": "polaris_codegraph_explore",
     }:
@@ -1259,8 +1261,6 @@ def record_proxy_bundle(
     )
     if context["task_id"] != task_id:
         raise RuleFailure("CodeGraph proxy bundle targets the wrong task")
-    from .code_intelligence_proxy import resolve_stage_context
-
     if context != resolve_stage_context(repo, task_id, context["stage"]):
         raise RuleFailure("CodeGraph proxy bundle stage context is no longer current")
     query = _require_exact_keys(
@@ -1339,7 +1339,9 @@ def record_proxy_bundle(
         "target": context["target"],
         "status": {
             "CURRENT": "USED",
-            "STALE": "USED",
+            "STALE": (
+                "USED" if query["status"] == "SUCCESS" else "FAILED"
+            ),
             "UNKNOWN": "FAILED",
             "UNAVAILABLE": "UNAVAILABLE",
         }[delivery["state"]],

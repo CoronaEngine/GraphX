@@ -2,7 +2,7 @@
 
 本文面向希望在受支持 Coding Agent 宿主中使用 Polaris 管理软件工程任务的项目成员。当前内置 Codex 与 Claude Code 适配器；本文从首次接入讲到日常提出需求、独立 Implementation、进度查询、Review、验证、恢复与升级。
 
-> 当前协议版本：v0.1.21；Workflow 版本：v0.1.3。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
+> 当前协议版本：v0.1.22；Workflow 版本：v0.1.3。Polaris v0.1 是仓库原生的 Skills、宿主 worker 定义与 Python 脚本集合，并提供一个只分发到这些脚本的 `polaris` CLI；不提供后台服务或图形界面。
 
 ## 1. 先理解 Polaris 保存什么
 
@@ -219,13 +219,15 @@ Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工�
 }
 ```
 
-CodeGraph watcher 与连接时 reconciliation 是常规实时更新机制。Polaris 阶段只调用 `polaris_codegraph_explore`：代理在同一有界窗口内检查 status，按调用参数且确有 pending 时至多运行一次 `codegraph sync`，执行一次 explore，再复查 status。阶段没有独立的 status/sync MCP 工具，也不会等待 watcher、轮询、重试、启动 daemon 或改写用户的 raw MCP 配置。Documentation Sync 仅在 supported source 变化时执行一次查询，使用 `sync_if_needed: true`，并把 query 限制到 changed source paths 与 documented symbols。
+CodeGraph watcher 与连接时 reconciliation 是常规实时更新机制。Polaris 阶段只调用 `polaris_codegraph_explore`：代理在同一有界窗口内检查 status，存在 pending changes 时自动且至多运行一次增量 `codegraph sync`，执行一次 explore，再复查 status。阶段没有独立的 status/sync MCP 工具，也不会等待 watcher、轮询、重试、启动 daemon 或改写用户的 raw MCP 配置。Documentation Sync 仅在 supported source 变化时执行一次查询，把 query 限制到 changed source paths 与 documented symbols；automatic incremental sync 仅由代理负责。
 
-代理结果的第一个内容块总是 freshness envelope。`CURRENT / NON_AUTHORITATIVE_CONTEXT` 表示图可作为非权威上下文；`STALE / NAVIGATION_ONLY` 表示已知失效；`UNKNOWN / NAVIGATION_ONLY` 表示无法证明新鲜度；`UNAVAILABLE / NO_GRAPH` 表示没有图输出。任何状态都不宣称与 Git commit 严格一致，`UNKNOWN` 绝不能当作 current。raw `codegraph_explore` 或 `codegraph explore` 仍可由用户带外调用，但不能支持 Polaris 的 `CURRENT` 证据。
+当 status 无法验证但仓库身份安全时，代理仍执行 `polaris_codegraph_explore`，并返回 `UNKNOWN`/`TREAT_AS_STALE`。图只用于导航；在使用任何结论前，必须完成精确源码/Git fallback。
 
-`STALE` 或 `UNKNOWN` 必须先完成 envelope 指定的源码/Git fallback。当前具名普通文件直接读取并记录 `READ_SOURCE` 与当前 SHA-256；安全但已删除的路径检查注册 subject 的 Git diff，记录 `INSPECT_GIT_DIFF`、null observed SHA-256 与 base/head/diff hashes；不安全路径或索引级失效执行 `SEARCH_SOURCE`，记录有限、受限的当前文件路径与 SHA-256。图不能扩大冻结 scope、替代源码或决定 Review verdict，Validation 完全不调用 CodeGraph。
+代理结果的第一个内容块总是 freshness envelope。`CURRENT / NON_AUTHORITATIVE_CONTEXT` 表示图可作为非权威上下文；`STALE / NAVIGATION_ONLY` 表示已知失效；`UNKNOWN / TREAT_AS_STALE / NAVIGATION_ONLY` 表示无法证明新鲜度；`UNAVAILABLE / NO_GRAPH` 表示没有图输出。任何状态都不宣称与 Git commit 严格一致，`UNKNOWN` 必须按 `TREAT_AS_STALE` 处理，绝不能当作 current。raw `codegraph_explore` 或 `codegraph explore` 仍可由用户带外调用，但不能支持 Polaris 的 `CURRENT` 证据。
 
-每次代理调用都会把精确响应和 bundle 留在 ignored 的 `runtime/code-intelligence/`。完成 fallback 后，Agent 写只含 summary、已确认 symbols 和 source_fallbacks 的 annotations JSON，再运行 `record_code_intelligence.py <task-id> --repo . --bundle <bundle-path> --annotations <annotations-path>` 投影不可变 v3 record。不得手写 record；没有代理调用就省略 record。v1/v2 record 仅作为不可变历史证据读取。
+`STALE` 或 `UNKNOWN`/`TREAT_AS_STALE` 必须先完成 envelope 指定的精确源码/Git fallback。当前具名普通文件直接读取并记录 `READ_SOURCE` 与当前 SHA-256；安全但已删除的路径检查注册 subject 的 Git diff，记录 `INSPECT_GIT_DIFF`、null observed SHA-256 与 base/head/diff hashes；不安全路径或索引级失效执行 `SEARCH_SOURCE`，记录有限、受限的当前文件路径与 SHA-256。图不能扩大冻结 scope、替代源码或决定 Review verdict，Validation 完全不调用 CodeGraph。
+
+每次代理调用都会把精确响应和 bundle 留在 ignored 的 `runtime/code-intelligence/`。完成 fallback 后，Agent 写只含 summary、已确认 symbols 和 source_fallbacks 的 annotations JSON，再运行 `record_code_intelligence.py <task-id> --repo . --bundle <bundle-path> --annotations <annotations-path>` 投影不可变 v3 record。不得手写 record；没有代理调用就省略 record。全量 `codegraph index` 始终由用户主动执行，v1/v2 record 仅作为不可变历史证据读取。
 
 ## 4. Polaris 仓库自举
 
@@ -611,8 +613,9 @@ polaris migrate --repo .
 2. 注册步骤同时绑定源/目标 `polaris_version` 与 `workflow_version`。Migration protocol v2 支持仅更新版本，也支持显式替换冻结 workflow 并映射任务状态。
 3. `0.1.19 → 0.1.20` 使用 `replace_version_and_workflow` 与 `append_mapped_workflow_event`：冻结 workflow 更新到 `0.1.3`，旧 `IMPLEMENTED` / `DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`；旧 R0/R1 `VERIFIED` 也映射回 `VALIDATING`，以便通过 `PASS_AND_CLOSE` 重新提交关闭产物，R2 `VERIFIED` 保持不变。迁移事件记录源/目标状态及旧版本；旧 `events.jsonl` 行不可修改。
 4. `0.1.20 → 0.1.21` 只替换协议版本，Workflow 保持 `0.1.3`。迁移会校验并清点 canonical v1/v2 Code Intelligence 历史记录的路径与 SHA-256，保持原字节不变；中断恢复前会重算清单，任何变化都会拒绝继续。v1/v2 此后仅可作为历史证据读取。
-5. `.polaris/migrations/MIG-<from>-to-<to>.json` 先写为 `IN_PROGRESS`，全部投影更新后改为 `COMPLETED`。迁移锁会记录迁移/任务身份、主机名和 PID；若进程在中间终止，同一主机重新执行命令会接管已死亡的同迁移锁、验证并复用已经追加的事件，不会重复迁移。活跃进程、其他迁移或来源不明的锁不会被自动删除。
-6. 迁移完成后脚本自动运行项目校验；`validate_project.py` 会拒绝未完成记录、缺失/伪造的任务迁移事件或版本不一致。
+5. `0.1.21 → 0.1.22` 只替换协议版本，Workflow 保持 `0.1.3`。迁移记录中的 `retired_code_intelligence_records` 固定为空列表，不重新清点或重写任何 record v3 历史证据。
+6. `.polaris/migrations/MIG-<from>-to-<to>.json` 先写为 `IN_PROGRESS`，全部投影更新后改为 `COMPLETED`。迁移锁会记录迁移/任务身份、主机名和 PID；若进程在中间终止，同一主机重新执行命令会接管已死亡的同迁移锁、验证并复用已经追加的事件，不会重复迁移。活跃进程、其他迁移或来源不明的锁不会被自动删除。
+7. 迁移完成后脚本自动运行项目校验；`validate_project.py` 会拒绝未完成记录、缺失/伪造的任务迁移事件或版本不一致。
 
 没有注册路径时不要手改版本号。应先取得包含所需相邻步骤的 Polaris 版本，逐级完成并分别提交；任何失败都先保留 `.polaris/migrations/` 和事件现场，修复原因后重跑同一迁移命令。
 
@@ -637,6 +640,8 @@ v0.1.19 将正式 Provider 固定为 [colbymchenry/codegraph](https://github.com
 v0.1.20 / Workflow v0.1.3 删除没有独立治理边界的中间状态和事件；`START_IMPLEMENTATION` 与 `START_REVIEW` 各自原子注册所需产物，Review 接受后直接进入 `VALIDATING`，R0/R1 使用 `PASS_AND_CLOSE`。本机进度改为可选遥测；未执行 Provider 操作时不再生成 Code Intelligence record。
 
 v0.1.21 新增项目级 Polaris CodeGraph MCP 代理、Host Adapter v3 注册与 Code Intelligence record v3；Workflow 仍为 v0.1.3，CodeGraph 仍为可选且不参与门禁。v1/v2 record 仅作为不可变历史证据读取。
+
+v0.1.22 新增 `0.1.21 → 0.1.22` 显式相邻迁移；Workflow 仍为 v0.1.3。该迁移不重新清点或重写 record v3，迁移记录中的 retirement inventory 固定为空。
 
 ## 13. 失败探索与卡点
 

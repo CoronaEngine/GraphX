@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "corona-polaris"
-version = "0.1.21"
+version = "0.1.22"
 description = "Repo-native AI engineering workflow command dispatcher"
 requires-python = ">=3.10"
 dependencies = []
