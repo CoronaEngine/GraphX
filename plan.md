@@ -490,6 +490,7 @@ AGENTS.md
 - `.codegraph/` 与 CodeGraph 安装、初始化、配置、raw MCP、watcher 和 daemon 由用户拥有。Polaris 只非破坏地管理自身项目代理注册；缺少 marker 或策略禁用时直接回退源码，不生成阶段 record。
 - 代理在一个有界窗口内完成 pre-status、存在 pending changes 时自动且至多一次增量 `codegraph sync`、一次 explore 和 post-status，并先返回 freshness envelope。阶段不分别选择 status/sync；不等待、轮询或重试；全量 `codegraph index` 始终由用户主动执行。
 - envelope 状态为 `CURRENT / NON_AUTHORITATIVE_CONTEXT`、`STALE / NAVIGATION_ONLY`、`UNKNOWN / TREAT_AS_STALE / NAVIGATION_ONLY` 或 `UNAVAILABLE / NO_GRAPH`。`STALE`/`UNKNOWN` 必须先完成具名 `READ_SOURCE`、删除路径 `INSPECT_GIT_DIFF` 或索引级 `SEARCH_SOURCE` 的精确源码/Git fallback；`UNKNOWN` 必须按 `TREAT_AS_STALE` 处理，不得提升为 current。
+- 当 status 无法验证但仓库身份安全时，代理仍执行 `polaris_codegraph_explore` 并返回 `UNKNOWN`/`TREAT_AS_STALE`；图仅用于导航，任何结论都必须先完成精确源码/Git fallback。
 - Planning、Implementation 与 Reviewer 只在冻结范围内使用图关系；Implementation 修改关系后必须 fresh proxy call，Reviewer 必须独立调用且不得继承 Implementer envelope。Documentation Sync 仅在 supported source 改变时，对 changed paths/symbols 执行一次查询，自动增量同步由代理负责。Validation 完全不调用 CodeGraph。
 - 代理 bundle 与原始响应只进入 ignored runtime。Agent 完成 fallback 后提供 annotations，由 `record_code_intelligence.py --bundle ... --annotations ...` 投影不可变 v3 record；没有代理调用就省略 record。v1/v2 仅作为不可变历史证据读取。
 

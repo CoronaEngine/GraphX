@@ -221,6 +221,8 @@ Python CLI 无法直接查看 Codex 或 Claude Code 当前会话中的 MCP 工�
 
 CodeGraph watcher 与连接时 reconciliation 是常规实时更新机制。Polaris 阶段只调用 `polaris_codegraph_explore`：代理在同一有界窗口内检查 status，存在 pending changes 时自动且至多运行一次增量 `codegraph sync`，执行一次 explore，再复查 status。阶段没有独立的 status/sync MCP 工具，也不会等待 watcher、轮询、重试、启动 daemon 或改写用户的 raw MCP 配置。Documentation Sync 仅在 supported source 变化时执行一次查询，把 query 限制到 changed source paths 与 documented symbols；automatic incremental sync 仅由代理负责。
 
+当 status 无法验证但仓库身份安全时，代理仍执行 `polaris_codegraph_explore`，并返回 `UNKNOWN`/`TREAT_AS_STALE`。图只用于导航；在使用任何结论前，必须完成精确源码/Git fallback。
+
 代理结果的第一个内容块总是 freshness envelope。`CURRENT / NON_AUTHORITATIVE_CONTEXT` 表示图可作为非权威上下文；`STALE / NAVIGATION_ONLY` 表示已知失效；`UNKNOWN / TREAT_AS_STALE / NAVIGATION_ONLY` 表示无法证明新鲜度；`UNAVAILABLE / NO_GRAPH` 表示没有图输出。任何状态都不宣称与 Git commit 严格一致，`UNKNOWN` 必须按 `TREAT_AS_STALE` 处理，绝不能当作 current。raw `codegraph_explore` 或 `codegraph explore` 仍可由用户带外调用，但不能支持 Polaris 的 `CURRENT` 证据。
 
 `STALE` 或 `UNKNOWN`/`TREAT_AS_STALE` 必须先完成 envelope 指定的精确源码/Git fallback。当前具名普通文件直接读取并记录 `READ_SOURCE` 与当前 SHA-256；安全但已删除的路径检查注册 subject 的 Git diff，记录 `INSPECT_GIT_DIFF`、null observed SHA-256 与 base/head/diff hashes；不安全路径或索引级失效执行 `SEARCH_SOURCE`，记录有限、受限的当前文件路径与 SHA-256。图不能扩大冻结 scope、替代源码或决定 Review verdict，Validation 完全不调用 CodeGraph。

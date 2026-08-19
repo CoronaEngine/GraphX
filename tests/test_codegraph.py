@@ -3352,6 +3352,45 @@ else:
             for anchor in required:
                 self.assertIn(anchor, text, f"{path}: {anchor}")
 
+    def test_safe_identity_unknown_status_still_queries_and_is_stale(self) -> None:
+        """Safe identity keeps the bounded query available after an unreadable status."""
+        paths = {
+            ROOT / "skills/code-intelligence/SKILL.md": (
+                "safe repository identity",
+                "still calls `polaris_codegraph_explore`",
+                "UNKNOWN`/`TREAT_AS_STALE",
+            ),
+            ROOT / "templates/AGENTS.md": (
+                "safe repository identity",
+                "still calls `polaris_codegraph_explore`",
+                "UNKNOWN`/`TREAT_AS_STALE",
+            ),
+            ROOT / "README.md": (
+                "safe repository identity",
+                "still calls `polaris_codegraph_explore`",
+                "UNKNOWN`/`TREAT_AS_STALE",
+            ),
+            ROOT / "README.zh-CN.md": (
+                "仓库身份安全",
+                "仍执行 `polaris_codegraph_explore`",
+                "UNKNOWN`/`TREAT_AS_STALE",
+            ),
+            ROOT / "docs/USAGE.md": (
+                "仓库身份安全",
+                "仍执行 `polaris_codegraph_explore`",
+                "UNKNOWN`/`TREAT_AS_STALE",
+            ),
+            ROOT / "plan.md": (
+                "仓库身份安全",
+                "仍执行 `polaris_codegraph_explore`",
+                "UNKNOWN`/`TREAT_AS_STALE",
+            ),
+        }
+        for path, required in paths.items():
+            text = path.read_text(encoding="utf-8")
+            for anchor in required:
+                self.assertIn(anchor, text, f"{path}: {anchor}")
+
     def test_documentation_sync_uses_one_proxy_query(self) -> None:
         """Documentation Sync uses one bounded changed-path/symbol proxy query."""
         source = (ROOT / "skills/documentation-sync/SKILL.md").read_text(
