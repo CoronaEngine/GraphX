@@ -3,10 +3,12 @@
 ## 状态
 
 - 日期：2026-08-18
-- 状态：已在对话中确认，等待书面规格复核
+- 状态：历史设计，已由 `2026-08-18-codegraph-polaris-mcp-proxy-design.md` 取代；不得作为当前操作指南
 - 适用版本：Polaris v0.1 的下一协议版本
 - 产品 authority：`plan.md`
 - 唯一正式 CodeGraph Provider：[`colbymchenry/codegraph`](https://github.com/colbymchenry/codegraph)
+
+> 当前阶段必须只调用 Polaris 项目代理 `polaris_codegraph_explore`。本文以下对阶段直接编排 `status`、`sync-if-needed` 或 raw `codegraph_explore` 的描述仅用于解释 v2 历史协议，不能支持新的 Polaris `CURRENT` 证据。
 
 ## 背景
 

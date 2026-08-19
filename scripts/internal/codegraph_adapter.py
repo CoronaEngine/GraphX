@@ -43,6 +43,10 @@ _PARTIAL_BANNER_ROW = re.compile(
     r"^  - (?P<path>.+) \(edited [^\n()]+, pending sync\)$"
 )
 _DISABLED_BANNER = "⚠️ CodeGraph auto-sync is DISABLED — the index is frozen."
+_SUSPICIOUS_FRESHNESS_SIGNAL = re.compile(
+    r"(?:⚠|\bwarning\b|\bstale\b|\bpending(?:[- ]sync)?\b|\bout[- ]of[- ]date\b)",
+    re.IGNORECASE,
+)
 
 
 def _checked_at() -> str:
@@ -204,6 +208,12 @@ def classify_response(
         return result
 
     if not normalized.startswith(_PARTIAL_BANNER_HEADER):
+        if _SUSPICIOUS_FRESHNESS_SIGNAL.search(normalized):
+            result = _response_not_verified(
+                checked_at, "unrecognized CodeGraph freshness warning"
+            )
+            result["response_sha256"] = response_sha256
+            return result
         result = _response_result("NONE", checked_at, stale_points=[])
         result["response_sha256"] = response_sha256
         return result
@@ -328,9 +338,14 @@ def _run_cli(
     args_key: str,
     timeout_seconds: float,
     runner: Runner,
+    extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     timeout = _validated_timeout(timeout_seconds)
-    command = [descriptor["cli"]["executable"], *descriptor["cli"][args_key]]
+    command = [
+        descriptor["cli"]["executable"],
+        *descriptor["cli"][args_key],
+        *(extra_args or []),
+    ]
     return runner(
         command,
         cwd=repo,
@@ -423,7 +438,7 @@ def _status_result(
             stale_points=[_index_point(reason) for reason in stale_reasons],
             status_response_sha256=response_sha256,
             error=None,
-            needs_sync=False,
+            needs_sync=any(pending.values()),
             pending_changes=pending,
         )
 
@@ -476,6 +491,66 @@ def inspect_status(
         return _not_verified(checked_at, error, response_sha256)
 
 
+def run_explore(
+    repo: Path,
+    descriptor: dict[str, Any],
+    query: str,
+    *,
+    runner: Runner = subprocess.run,
+    timeout_seconds: float = 60,
+) -> dict[str, Any]:
+    """Run exactly one bounded CodeGraph explore command in ``repo``."""
+    checked_at = _checked_at()
+    if not isinstance(query, str) or not query.strip():
+        return {
+            "status": "FAILED",
+            "checked_at": checked_at,
+            "response": None,
+            "response_sha256": None,
+            "error": "CodeGraph query must not be blank",
+        }
+    try:
+        completed = _run_cli(
+            repo,
+            descriptor,
+            "explore_args",
+            timeout_seconds,
+            runner,
+            extra_args=[query],
+        )
+        raw, response_sha256 = _stdout_and_hash(completed)
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        UnicodeError,
+        ValueError,
+        subprocess.TimeoutExpired,
+    ) as error:
+        return {
+            "status": "FAILED",
+            "checked_at": checked_at,
+            "response": None,
+            "response_sha256": None,
+            "error": _error_summary(error),
+        }
+    if completed.returncode != 0:
+        return {
+            "status": "FAILED",
+            "checked_at": checked_at,
+            "response": None,
+            "response_sha256": response_sha256,
+            "error": f"CodeGraph explore exited with {completed.returncode}",
+        }
+    return {
+        "status": "SUCCESS",
+        "checked_at": checked_at,
+        "response": raw,
+        "response_sha256": response_sha256,
+        "error": None,
+    }
+
+
 def _sync_result(status: str, response_sha256: str | None, error: str | None) -> dict[str, Any]:
     return {
         "status": status,
@@ -487,6 +562,8 @@ def _sync_result(status: str, response_sha256: str | None, error: str | None) ->
 def _sync_failed(
     freshness: dict[str, Any],
     sync: dict[str, Any],
+    *,
+    post_sync_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     points = [*freshness["stale_points"], _index_point("SYNC_FAILED")]
     return {
@@ -498,33 +575,36 @@ def _sync_failed(
             "error": sync["error"] or freshness["error"],
         },
         "sync": sync,
+        "post_sync_status": post_sync_status,
     }
 
 
-def sync_if_needed(
+def synchronize_observed_status(
     repo: Path,
     descriptor: dict[str, Any],
+    initial: dict[str, Any],
     *,
     runner: Runner = subprocess.run,
     status_timeout_seconds: float = 15,
     sync_timeout_seconds: float = 120,
 ) -> dict[str, Any]:
-    """Synchronize at most once, then inspect status at most once more."""
+    """Synchronize one already-observed status at most once, then recheck once."""
     try:
         status_timeout = _validated_timeout(status_timeout_seconds)
         sync_timeout = _validated_timeout(sync_timeout_seconds)
     except ValueError as error:
         freshness = _not_verified(_checked_at(), error)
-        return {"freshness": freshness, "sync": _sync_result("SKIPPED", None, None)}
-    initial = inspect_status(
-        repo, descriptor, runner=runner, timeout_seconds=status_timeout
-    )
+        return {
+            "freshness": freshness,
+            "sync": _sync_result("SKIPPED", None, None),
+            "post_sync_status": None,
+        }
     skipped = _sync_result("SKIPPED", None, None)
     unavailable = _sync_result("UNAVAILABLE", None, None)
     if initial["status"] == "UNAVAILABLE" or _marker_path(repo, descriptor) is None:
-        return {"freshness": initial, "sync": unavailable}
+        return {"freshness": initial, "sync": unavailable, "post_sync_status": None}
     if not initial["needs_sync"]:
-        return {"freshness": initial, "sync": skipped}
+        return {"freshness": initial, "sync": skipped, "post_sync_status": None}
 
     try:
         completed = _run_cli(repo, descriptor, "sync_args", sync_timeout, runner)
@@ -555,6 +635,36 @@ def sync_if_needed(
                 response_sha256,
                 "CodeGraph post-sync status is not current",
             ),
+            post_sync_status=rechecked,
         )
     rechecked["basis"] = [*rechecked["basis"], "SYNC_ACKNOWLEDGED"]
-    return {"freshness": rechecked, "sync": sync}
+    return {"freshness": rechecked, "sync": sync, "post_sync_status": rechecked}
+
+
+def sync_if_needed(
+    repo: Path,
+    descriptor: dict[str, Any],
+    *,
+    runner: Runner = subprocess.run,
+    status_timeout_seconds: float = 15,
+    sync_timeout_seconds: float = 120,
+) -> dict[str, Any]:
+    """Inspect once, synchronize at most once, then inspect at most once more."""
+    try:
+        status_timeout = _validated_timeout(status_timeout_seconds)
+        sync_timeout = _validated_timeout(sync_timeout_seconds)
+    except ValueError as error:
+        freshness = _not_verified(_checked_at(), error)
+        return {"freshness": freshness, "sync": _sync_result("SKIPPED", None, None)}
+    initial = inspect_status(
+        repo, descriptor, runner=runner, timeout_seconds=status_timeout
+    )
+    result = synchronize_observed_status(
+        repo,
+        descriptor,
+        initial,
+        runner=runner,
+        status_timeout_seconds=status_timeout,
+        sync_timeout_seconds=sync_timeout,
+    )
+    return {"freshness": result["freshness"], "sync": result["sync"]}

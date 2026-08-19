@@ -13,6 +13,12 @@ TASK_PATH_PATTERNS = {
     "working_set": "working-set.json",
     "progress": "runtime/progress.json",
     "code_intelligence_runtime": "runtime/code-intelligence",
+    "code_intelligence_proxy_bundle": (
+        "runtime/code-intelligence/{record_name}/{query_id}.json"
+    ),
+    "code_intelligence_proxy_response": (
+        "runtime/code-intelligence/{record_name}/{query_id}.response.txt"
+    ),
     "code_intelligence_revision": "code-intelligence/r{revision:03d}",
     "code_intelligence_record": "code-intelligence/r{revision:03d}/{record_name}.json",
     "work_item": "revisions/work-item-r{revision:03d}.json",
@@ -48,6 +54,7 @@ def task_relative_path(
     reviewer: int = 1,
     exploration_id: str = "EXP-0001",
     record_name: str = "planning",
+    query_id: str = "CIQ-001",
 ) -> Path:
     pattern = TASK_PATH_PATTERNS[artifact]
     reviewer_suffix = "" if reviewer == 1 else f"-{reviewer}"
@@ -58,6 +65,7 @@ def task_relative_path(
             reviewer_suffix=reviewer_suffix,
             exploration_id=exploration_id,
             record_name=record_name,
+            query_id=query_id,
         )
     )
 

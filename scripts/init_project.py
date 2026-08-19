@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from internal.host_adapters import adapter_file_target, load_host_adapters
+from internal.project_mcp_registration import merge_project_mcp, project_mcp_target
 from internal.polaris_core import (
     InputFailure,
     ensure_gitignore_rule,
@@ -16,6 +17,7 @@ from internal.polaris_core import (
     read_json,
     run_main,
     write_json_atomic,
+    write_text_atomic,
 )
 from internal.task_layout import (
     ARCHIVED_RUNTIME_IGNORE_PATTERN,
@@ -55,6 +57,9 @@ def initialize(repo: Path, project_id: str | None = None) -> dict[str, str]:
             if not destination.exists():
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(adapter["adapter_root"] / item["source"], destination)
+        if root == repo / "tools" / "polaris":
+            destination = project_mcp_target(repo, adapter)
+            write_text_atomic(destination, merge_project_mcp(repo, adapter))
     ensure_gitignore_rule(repo, RUNTIME_IGNORE_PATTERN)
     ensure_gitignore_rule(repo, ARCHIVED_RUNTIME_IGNORE_PATTERN)
     return {"message": f"initialized Polaris project {project_id}"}

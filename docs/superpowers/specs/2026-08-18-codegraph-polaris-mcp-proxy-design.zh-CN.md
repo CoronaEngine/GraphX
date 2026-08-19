@@ -3,9 +3,20 @@
 ## 状态
 
 - 日期：2026-08-18
-- 状态：提议实施
+- 状态：已于 2026-08-19 批准实施
 - 范围：Polaris Code Intelligence 协议与阶段行为
 - Provider：`colbymchenry/codegraph`
+
+## 版本边界
+
+- Polaris 协议与包版本：`0.1.20` 升到 `0.1.21`。
+- Workflow graph 版本：保持 `0.1.3`；不改变 state 或 transition。
+- 宿主 adapter manifest 版本：v2 升到 v3。
+- 新阶段写入的 Code Intelligence record：v3。
+- Code Intelligence v1 和 v2 record：仅保留不可变的历史读取支持。
+
+相邻的 `0.1.20` 到 `0.1.21` migration 会盘点不可变 v2 record，但不改写它们。
+它会升级宿主注册和协议文件，但不修改 workflow graph。
 
 ## 问题
 
@@ -183,9 +194,22 @@ server 进程在启动时接收仓库根目录，工具调用本身不接受任�
 缺失、已移动或为 symlink 时，server 必须拒绝。移除或禁用项目本地的 Polaris
 MCP 注册，只会禁用代理，不影响 CodeGraph 本身。
 
-adapter 契约必须为每个受支持宿主表示项目级 MCP 注册，而不能把宿主专属配置写入
-Code Intelligence adapter。Vendoring 和项目校验会验证该注册只启动仓库中的
-vendored Polaris runtime。
+宿主 adapter v3 新增一个必需的声明式 `project_mcp` 注册。它声明固定的
+`polaris-codegraph` server ID、宿主原生项目配置的目标与格式，以及项目相对路径
+下的 vendored launcher。当前受支持宿主中，Codex 目标为
+`.codex/config.toml`，Claude Code 目标为 `.mcp.json`。宿主 renderer 负责这些
+语法差异；Code Intelligence adapter 保持宿主无关。
+
+初始化和 vendoring 只合并名为 `polaris-codegraph` 的条目，并保留用户其他 server
+与设置。若宿主配置畸形、路径或 symlink 逃逸，或者存在同名但定义不同的注册，
+系统必须拒绝，而不是静默覆盖。升级只移除或替换先前由 Polaris 管理的条目。项目
+校验会解析最终宿主配置，证明该条目只能启动
+`tools/polaris/scripts/code_intelligence_mcp.py`，仓库参数被固定为项目根目录，且
+不存在用户可选的仓库参数。
+
+launcher 与 server 都会独立解析并比对配置根目录和实际项目根目录。因此，即使
+宿主从意外工作目录启动进程，也会 fail closed，而不会查询另一个仓库。宿主原生
+的项目信任或首次使用批准仍由用户决定；Polaris 不绕过它。
 
 ## Envelope
 
@@ -233,8 +257,9 @@ v3 查询证据包含：
 validator 会拒绝观察结果缺失、状态自相矛盾、项目不匹配、响应 hash 不匹配，或在
 任何 pending 计数非零时声明 `CURRENT`。
 
-迁移过程会盘点不可变 v2 record，但不改写它们。Polaris 协议版本递增；workflow
-graph 版本不变，因为 workflow 状态和 transition 都没有变化。
+迁移过程会盘点不可变 v2 record，但不改写它们。Polaris 协议与包版本升到
+`0.1.21`；workflow graph 保持 `0.1.3`，因为 workflow 状态和 transition 都没有
+变化。
 
 ## 阶段行为
 
@@ -243,8 +268,12 @@ graph 版本不变，因为 workflow 状态和 transition 都没有变化。
   Polaris 而言始终是未验证的，不能支撑 `CURRENT` 阶段 record。
 - Implementation 在编辑后若要为 Polaris 生成证据，只能发起一次新的代理调用；
   不能复用阶段入口的 envelope。
-- Documentation Sync 在受支持源码发生变化时，使用相同的代理/status 机制生成
-  最终有界 sync 证据。
+- 当受支持源码发生变化时，Documentation Sync 发起一次有界的
+  `polaris_codegraph_explore` 调用，使用 `stage: DOCUMENTATION_SYNC`、
+  `sync_if_needed: true`，并把查询限制为已变更源码路径和文档涉及的 symbol。查询
+  后 status 就是最终 sync 观察结果；不增加第二个 status/sync MCP 工具。如果受
+  支持源码没有变化，则不创建 Code Intelligence record。`STALE` 或 `UNKNOWN`
+  结果必须在使用文档结论前完成同样的源码/Git 回退。
 - Validation 仍然不使用 graph。
 - 当状态为 `STALE` 或 `UNKNOWN` 时，任何涉及返回文件或关系的阶段结论，都必须先
   完成 envelope 要求的源码/Git 回退。
@@ -285,6 +314,11 @@ Vendored `AGENTS.md`、宿主 overlay 和 canonical Skill 必须共享此契约�
 13. Validation 仍然不使用 graph；
 14. 完整 Polaris 测试套件不依赖 CodeGraph 即可通过；
 15. 可选的真实 CLI smoke test 只使用一次性临时仓库。
+16. 宿主注册会把配置合并到现有 Codex TOML 和 Claude JSON 中，且不修改无关
+    server 或设置；拒绝冲突的同名条目和不安全路径，并验证精确的 vendored
+    launcher/root；
+17. Documentation Sync 使用唯一的 explore 代理完成最终有界查询；受支持源码未
+    变化时跳过 graph 证据；并且绝不调用单独的 sync/status MCP 工具。
 
 Skill 评估必须包含以下压力场景：要求 Agent 跳过代理；在存在 pending changes 时
 仍信任看似干净的 graph；复用旧 Implementation envelope；或者把 `UNKNOWN` 当成

@@ -8,7 +8,7 @@ from typing import Any
 from .code_intelligence_protocol import (
     _record_name,
     validate_historical_legacy_record_value,
-    validate_record_value,
+    validate_historical_v2_record_value,
 )
 from .polaris_core import (
     InputFailure,
@@ -272,9 +272,13 @@ def _step_for_record(
 
 
 def _retired_code_intelligence_records(
-    repo: Path, task_id: str, directory: Path, protocol_root: Path
+    repo: Path,
+    task_id: str,
+    directory: Path,
+    protocol_root: Path,
+    step: dict[str, Any],
 ) -> list[dict[str, str]]:
-    """Inventory immutable v1 records at their canonical task-local locations."""
+    """Inventory immutable historical records at canonical task-local locations."""
     records_root = directory / "code-intelligence"
     if records_root.is_symlink():
         raise RuleFailure(
@@ -297,9 +301,15 @@ def _retired_code_intelligence_records(
                 repo, task_id, path, value, protocol_root
             )
         elif value.get("record_version") == 2:
-            value = validate_record_value(repo, task_id, value, protocol_root)
+            value = validate_historical_v2_record_value(
+                repo, task_id, path, value, protocol_root
+            )
         else:
             raise RuleFailure(f"Code Intelligence record path is non-canonical: {path}")
+        should_inventory = value["record_version"] == 1 or (
+            value["record_version"] == 2
+            and step["migration_id"] == "0.1.20-to-0.1.21"
+        )
         if value["record_version"] != 1:
             expected = code_intelligence_record_path(
                 directory, value["work_item_revision"], _record_name(value)
@@ -308,6 +318,7 @@ def _retired_code_intelligence_records(
                 raise RuleFailure(
                     f"Code Intelligence record path is non-canonical: {path}"
                 )
+        if not should_inventory:
             continue
         retired.append(
             {
@@ -349,7 +360,9 @@ def _new_record(
             }
         )
         retired_code_intelligence_records.extend(
-            _retired_code_intelligence_records(repo, task_id, directory, protocol_root)
+            _retired_code_intelligence_records(
+                repo, task_id, directory, protocol_root, step
+            )
         )
     return {
         "record_version": 2,
@@ -437,6 +450,23 @@ def migrate_project(repo: Path, protocol_root: Path) -> dict[str, Any]:
         item["task_id"] for item in record["tasks"]
     }:
         raise RuleFailure("project task list changed during migration")
+    if incomplete is not None:
+        current_inventory: list[dict[str, str]] = []
+        for item in record["tasks"]:
+            directory = task_dir(repo, item["task_id"])
+            current_inventory.extend(
+                _retired_code_intelligence_records(
+                    repo,
+                    item["task_id"],
+                    directory,
+                    protocol_root,
+                    step,
+                )
+            )
+        if record.get("retired_code_intelligence_records", []) != current_inventory:
+            raise RuleFailure(
+                "retired Code Intelligence record inventory changed during migration"
+            )
 
     locks: list[tuple[Path, int]] = []
     try:

@@ -3,9 +3,21 @@
 ## Status
 
 - Date: 2026-08-18
-- Status: proposed for implementation
+- Status: approved for implementation on 2026-08-19
 - Scope: Polaris Code Intelligence protocol and stage behavior
 - Provider: `colbymchenry/codegraph`
+
+## Version Boundary
+
+- Polaris protocol and package version: `0.1.20` to `0.1.21`.
+- Workflow graph version: remains `0.1.3`; no state or transition changes.
+- Host adapter manifest version: v2 to v3.
+- Code Intelligence records written by new stages: v3.
+- Code Intelligence v1 and v2 records: immutable historical read support only.
+
+The adjacent `0.1.20` to `0.1.21` migration inventories immutable v2 records
+without rewriting them. It upgrades the host registration and protocol files,
+but does not alter the workflow graph.
 
 ## Problem
 
@@ -204,10 +216,27 @@ an arbitrary project path from the tool call. It rejects a missing, moved, or
 symlinked project root. Removing or disabling the project-local Polaris MCP
 registration disables the proxy without affecting CodeGraph itself.
 
-The adapter contract must represent the project-scoped MCP registration for
-each supported host rather than embedding host-specific configuration writes
-in the Code Intelligence adapter. Vendoring and project validation verify that
-the registration launches only the repository's vendored Polaris runtime.
+Host adapter v3 adds one required declarative `project_mcp` registration. It
+identifies the fixed `polaris-codegraph` server ID, the host-native project
+configuration target and format, and the project-relative vendored launcher.
+For the supported hosts, the targets are `.codex/config.toml` for Codex and
+`.mcp.json` for Claude Code. The host renderer owns these syntax differences;
+the Code Intelligence adapter remains host-neutral.
+
+Initialization and vendoring merge only the named `polaris-codegraph` entry
+and preserve unrelated user servers and settings. They refuse malformed host
+configuration, path/symlink escape, or an existing same-name registration with
+a different definition instead of silently overwriting it. Upgrade removes or
+replaces only the previously managed Polaris entry. Project validation parses
+the resulting host configuration and proves that this entry launches only
+`tools/polaris/scripts/code_intelligence_mcp.py`, fixes the repository argument
+to the project root, and exposes no user-selected repository parameter.
+
+The launcher and server independently resolve and compare the configured root
+with the actual project root. A host starting the process from an unexpected
+working directory therefore fails closed rather than querying another
+repository. Host-native trust or first-use approval remains a user decision;
+Polaris does not bypass it.
 
 ## Envelope
 
@@ -260,8 +289,8 @@ mismatch, response-hash mismatch, or a `CURRENT` claim with any non-zero
 pending count.
 
 Migration inventories immutable v2 records without rewriting them. The
-Polaris protocol version increments; the workflow graph version does not
-change because no workflow state or transition changes.
+Polaris protocol and package version become `0.1.21`; the workflow graph stays
+at `0.1.3` because no workflow state or transition changes.
 
 ## Stage Behavior
 
@@ -271,8 +300,13 @@ change because no workflow state or transition changes.
   `CURRENT` stage record.
 - Implementation may query after edits only through a fresh proxy invocation
   for Polaris evidence; it does not reuse the entry envelope.
-- Documentation Sync uses the same proxy/status machinery for its final
-  bounded sync evidence when supported source changed.
+- When supported source changed, Documentation Sync makes one bounded
+  `polaris_codegraph_explore` call with `stage: DOCUMENTATION_SYNC`,
+  `sync_if_needed: true`, and a query limited to the changed source paths and
+  documented symbols. Its post-query status is the final sync observation;
+  there is no second status/sync MCP tool. When no supported source changed,
+  it creates no Code Intelligence record. `STALE` or `UNKNOWN` results require
+  the same source/Git fallback before documentation conclusions are used.
 - Validation remains graph-free.
 - On `STALE` or `UNKNOWN`, stage conclusions concerning returned files or
   relationships require the envelope's source/Git fallback before use.
@@ -319,6 +353,12 @@ Deterministic unit and integration tests must cover:
 13. Validation remains graph-free;
 14. the full Polaris suite passes without requiring CodeGraph;
 15. an optional real-CLI smoke test uses only a disposable temporary repo.
+16. host registration merges into existing Codex TOML and Claude JSON without
+    changing unrelated servers or settings, rejects conflicting same-name
+    entries and unsafe paths, and validates the exact vendored launcher/root;
+17. Documentation Sync uses the single explore proxy for its final bounded
+    query, skips graph evidence when supported source did not change, and
+    never calls a separate sync/status MCP tool.
 
 Skill evaluation must include pressure cases where an Agent is asked to skip
 the proxy, trust a clean-looking graph despite pending changes, reuse an old

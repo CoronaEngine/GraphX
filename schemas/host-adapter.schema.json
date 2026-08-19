@@ -13,12 +13,13 @@
         "entry_frontmatter",
         "skill_overlay_root",
         "skill_appendix_root",
+        "project_mcp",
         "files"
     ],
     "additionalProperties": false,
     "properties": {
         "adapter_version": {
-            "const": 2
+            "const": 3
         },
         "host_id": {
             "type": "string",
@@ -85,6 +86,42 @@
                 "string",
                 "null"
             ]
+        },
+        "project_mcp": {
+            "type": "object",
+            "required": [
+                "server_id",
+                "format",
+                "target",
+                "command",
+                "args"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "server_id": {
+                    "const": "polaris-codegraph"
+                },
+                "format": {
+                    "enum": [
+                        "codex-toml",
+                        "claude-json"
+                    ]
+                },
+                "target": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "command": {
+                    "const": "python3"
+                },
+                "args": {
+                    "const": [
+                        "tools/polaris/scripts/code_intelligence_mcp.py",
+                        "--repo",
+                        "."
+                    ]
+                }
+            }
         },
         "files": {
             "type": "array",

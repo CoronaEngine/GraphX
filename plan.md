@@ -2,7 +2,7 @@
 
 > 状态：Implementation underway
 > 目标版本：v0.1
-> 当前协议：`0.1.20`；Workflow：`0.1.3`
+> 当前协议：`0.1.21`；Workflow：`0.1.3`
 > 产品形态：Repo-native Skill System
 > 宿主 Runtime：声明式可扩展；v0.1 内置 Codex、Claude Code
 >
@@ -288,9 +288,9 @@ target-repo/
 
 ### 宿主适配契约
 
-每个宿主占用独立、平级的 `hosts/<host-id>/`，并提供由 `host-adapter.schema.json` 校验的 `adapter.json`。清单版本 `adapter_version=2` 声明 Skill 目标目录、调用前缀、入口 Skill、宿主能力、额外 frontmatter、可选 metadata overlay、执行附录和宿主专用文件。能力至少包括结构化用户输入、worker 创建、状态查询、续接和稳定身份；依赖关系必须机械自洽。共享 Skill 只使用 `{{skill:<name>}}` 占位符和宿主无关 worker 语义；vendoring 时再渲染调用语法并追加宿主执行机制。
+每个宿主占用独立、平级的 `hosts/<host-id>/`，并提供由 `host-adapter.schema.json` 校验的 `adapter.json`。清单版本 `adapter_version=3` 除 Skill 目标、调用前缀、入口 Skill、宿主能力、frontmatter、overlay、appendix 与专用文件外，还声明唯一项目级 `polaris-codegraph` MCP 注册。能力依赖必须机械自洽；MCP 注册固定启动器、vendored server、`--repo .` 与宿主配置目标。共享 Skill 只使用 `{{skill:<name>}}` 占位符和宿主无关 worker 语义；vendoring 时再渲染调用语法、执行机制与宿主 MCP 格式。
 
-`vendor_project.py`、`init_project.py` 和 `validate_project.py` 必须通过 `scripts/internal/host_adapters.py` 发现 canonical Skills 与所有清单，不得按宿主 ID 编写条件分支。入口必须指向实际 Skill；overlay 只能向已知 Skill 增加 canonical 源中不存在的普通文件，不能替换 `SKILL.md` 或其他源内容；adapter 源树与全部目标路径禁止 symlink。新增满足 v2 文件型契约的宿主只增加目录和资产；目标路径冲突、越界路径、缺失源文件、能力矛盾和未知清单版本都必须机械拒绝。需要超出 v2 表达能力的新机制时，先升级 adapter schema/version，再保持旧版本迁移边界，不把宿主差异写回共享 Workflow 或 Authority schema。
+`vendor_project.py`、`init_project.py` 和 `validate_project.py` 必须通过 `scripts/internal/host_adapters.py` 发现 canonical Skills 与所有清单，不得按宿主 ID 编写条件分支。入口必须指向实际 Skill；overlay 只能向已知 Skill 增加 canonical 源中不存在的普通文件，不能替换 `SKILL.md` 或其他源内容；adapter 源树、MCP 启动器与全部目标路径禁止 symlink。新增满足 v3 契约的宿主只增加目录和资产；目标路径冲突、越界路径、缺失源文件、能力矛盾、同名 MCP 冲突和未知清单版本都必须机械拒绝。需要超出 v3 表达能力的新机制时，先升级 adapter schema/version，再保持旧版本迁移边界，不把宿主差异写回共享 Workflow 或 Authority schema。
 
 JSON 文件是机械门禁的权威输入。结构化 artifact 不生成同名 Markdown 副本；用户可直接查看四格缩进 JSON，主任务也可按需格式化展示。旧 revision 和旧 attempt 文件不可覆盖，`state.json` 仅保存当前有效 artifact 的指针。
 
@@ -452,7 +452,7 @@ v0.1 不设置 `FAILED`：可修复失败通过治理回路处理，外部阻塞
 
 `.polaris/workflow.json` 保存当前项目实际使用且版本锁定的节点、边、依赖和门禁 ID；`tools/polaris/workflow/default-workflow.json` 只用于初始化。`transition_task.py` 只接受图中边并先运行对应 validators，Skill 不直接编辑 `state` 字段。v0.1 遇到 `polaris_version` 或 `workflow_version` 不匹配时拒绝正常执行，不做隐式迁移。
 
-版本升级必须先 vendoring 目标协议，再显式运行 vendored `migrate_project.py`。`workflow/migrations.json` 是迁移路径唯一且 append-only 的注册表，一次只执行一个从当前版本到目标版本的相邻步骤；历史步骤必须保留以校验已提交记录。Migration protocol v2 保留 `replace_version` / `append_version_event`，并增加 `replace_version_and_workflow` / `append_mapped_workflow_event`。`0.1.19 → 0.1.20` 原子替换冻结 workflow 为 `0.1.3`，追加带源/目标状态及旧版本字段的迁移事件；旧 `IMPLEMENTED`、`DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`，旧 R0/R1 `VERIFIED` 映射到 `VALIDATING` 以重新提交 `PASS_AND_CLOSE`，仅 R2 保持 `VERIFIED`。迁移以 `.polaris/migrations/MIG-*.json` 记录 `IN_PROGRESS/COMPLETED`、各任务 sequence 和状态映射；重跑必须可恢复且不得重复事件。未知路径、跨版本跳跃、未声明的 workflow 变化、任务集合并发变化和不完整记录都必须机械拒绝。
+版本升级必须先 vendoring 目标协议，再显式运行 vendored `migrate_project.py`。`workflow/migrations.json` 是迁移路径唯一且 append-only 的注册表，一次只执行一个从当前版本到目标版本的相邻步骤；历史步骤必须保留以校验已提交记录。Migration protocol v2 保留 `replace_version` / `append_version_event`，并增加 `replace_version_and_workflow` / `append_mapped_workflow_event`。`0.1.19 → 0.1.20` 原子替换冻结 workflow 为 `0.1.3`，追加带源/目标状态及旧版本字段的迁移事件；旧 `IMPLEMENTED`、`DOCS_SYNCED` 映射到 `IMPLEMENTING`，旧 `REVIEWED` 映射到 `VALIDATING`，旧 R0/R1 `VERIFIED` 映射到 `VALIDATING` 以重新提交 `PASS_AND_CLOSE`，仅 R2 保持 `VERIFIED`。`0.1.20 → 0.1.21` 保持 Workflow `0.1.3`，新增项目级 CodeGraph 代理、Host Adapter v3 与 record v3，并把 canonical v1/v2 record 作为仅可读取的不可变历史证据按路径和 SHA-256 清点；迁移恢复前必须重算并比对清单。迁移以 `.polaris/migrations/MIG-*.json` 记录 `IN_PROGRESS/COMPLETED`、各任务 sequence 和状态映射；重跑必须可恢复且不得重复事件。未知路径、跨版本跳跃、未声明的 workflow 变化、任务集合并发变化和不完整记录都必须机械拒绝。
 
 迁移占用任务转换锁时必须写入结构化 owner：迁移 ID、任务 ID、主机名、PID 和创建时间。重跑只允许接管同一迁移在同一主机上、且原 PID 已确认不存在的锁；活跃 PID、其他迁移、其他主机、空锁或损坏锁一律拒绝。这样既能从进程崩溃或机器重启恢复，又不把真实并发误判为遗留锁。
 
@@ -486,13 +486,12 @@ AGENTS.md
 
 ### 可选 Code Intelligence 协议
 
-- v0.1 的唯一正式 Provider 是 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)。`providers/code-intelligence/codegraph.json` 声明其 MCP `codegraph_explore` 和 CLI `status`、`explore`、`sync` 能力；核心 record 使用 Provider-neutral 的新鲜度和回退字段。
-- `.codegraph/` 由用户创建和维护。Polaris 允许用户显式运行 `polaris code-intelligence add codegraph --repo .`，但绝不安装、初始化、启动或配置 Provider、watcher、daemon、锁或 MCP；缺少 marker 或策略禁用时直接回退源码，不生成新的阶段 record。
-- Provider 原生 watcher 与连接时 reconciliation 是保持索引接近工作树的主机制。Polaris 只在阶段入口、已知索引冻结或最终 Documentation Sync 的有界点读取 status；仅在 status 表示 pending 时至多执行一次 `codegraph sync`，随后至多复查一次，绝不等待或轮询。
-- 记录的结论限定为检查时：`CURRENT_AT_CHECK`、`PARTIAL_STALE`、`INDEX_STALE`、`NOT_VERIFIED` 或 `UNAVAILABLE`，不得宣称与某个 Git commit 严格一致。逐文件 stale point 必须记录路径和原因；文件仍存在时 Agent 直接读取源码并记录 `READ_SOURCE`，已删除时检查注册 subject 的 Git diff 并记录 `INSPECT_GIT_DIFF`；索引级失效使用 `SEARCH_SOURCE` 和 Git 证据。
-- Planning、Implementation 与 Reviewer 只在冻结范围内使用图关系；返回路径必须经源码确认才可进入 Working Set，Reviewer 必须独立查询。响应的局部 stale 不会丢弃其余图线索，但 stale 路径不能直接作为编辑或 Review 结论。
-- 只有阶段实际执行 Provider `status`、`sync` 或 `explore` 操作时才写耐久 record，并准确记录成功、失败和新鲜度；未执行操作时省略 artifact 引用。图不扩展 scope，也不是 Workflow gate；Validation 完全不调用 CodeGraph，仍只依赖源码、Git、构建、测试、静态检查和 Human Check。
-- Git 只保存绑定 Provider、阶段、subject、目的、有限摘要、响应哈希、新鲜度、stale point 与源码回退证据；原始响应只进入 ignored runtime。已提交 v1 record 是不可变历史证据，迁移后标为 `retired_provider_evidence`，不能支持新的新鲜度结论。
+- v0.1 的唯一正式 Provider 是 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)。项目级 `polaris-codegraph` MCP 只暴露 `polaris_codegraph_explore`；raw `codegraph_explore` 与 shell 仍可带外使用，但不能支持 Polaris `CURRENT` 证据。
+- `.codegraph/` 与 CodeGraph 安装、初始化、配置、raw MCP、watcher 和 daemon 由用户拥有。Polaris 只非破坏地管理自身项目代理注册；缺少 marker 或策略禁用时直接回退源码，不生成阶段 record。
+- 代理在一个有界窗口内完成 pre-status、可选一次 `codegraph sync`、一次 explore 和 post-status，并先返回 freshness envelope。阶段不分别选择 status/sync；不等待、轮询或重试。
+- envelope 状态为 `CURRENT / NON_AUTHORITATIVE_CONTEXT`、`STALE / NAVIGATION_ONLY`、`UNKNOWN / NAVIGATION_ONLY` 或 `UNAVAILABLE / NO_GRAPH`。`STALE`/`UNKNOWN` 必须先完成具名 `READ_SOURCE`、删除路径 `INSPECT_GIT_DIFF` 或索引级 `SEARCH_SOURCE` 回退；`UNKNOWN` 不得提升为 current。
+- Planning、Implementation 与 Reviewer 只在冻结范围内使用图关系；Implementation 修改关系后必须 fresh proxy call，Reviewer 必须独立调用且不得继承 Implementer envelope。Documentation Sync 仅在 supported source 改变时，以 `sync_if_needed: true` 对 changed paths/symbols执行一次查询。Validation 完全不调用 CodeGraph。
+- 代理 bundle 与原始响应只进入 ignored runtime。Agent 完成 fallback 后提供 annotations，由 `record_code_intelligence.py --bundle ... --annotations ...` 投影不可变 v3 record；没有代理调用就省略 record。v1/v2 仅作为不可变历史证据读取。
 
 ## 9. 确定性脚本
 
@@ -510,8 +509,9 @@ AGENTS.md
 | `materialize_task_layout.py` | 从 `internal/task_layout.py` 生成模板样例树和真实任务目录，并校验生成物与平铺模板正文一致 |
 | `update_implementation_progress.py` | 通过明确事件原子更新 ignored 的线性步骤进度；拒绝 session 接管、跳步、回退、未知验收 ID 和非法 blocker |
 | `doctor_project.py` | 只读聚合环境、协议、Authority、清单、迁移、索引、任务与操作残留诊断，输出版本化报告、证据和人工动作 |
-| `record_code_intelligence.py` | 写入不可变的精简 Code Intelligence Record；只接受已检查的 v2 新鲜度、stale point 和源码回退证据 |
-| `code_intelligence_runtime.py` | 内部阶段工具：读取一次 status、按需至多 sync 一次并复查一次，或分类 explore 响应；不暴露为用户 CLI 命令 |
+| `record_code_intelligence.py` | 从保留的代理 bundle 与受 Schema 校验的 annotations 投影不可变 v3 Code Intelligence Record；拒绝手写 v1/v2/v3 输入 |
+| `code_intelligence_mcp.py` | 项目级 stdio MCP，只暴露一个有界 `polaris_codegraph_explore` 工具并保证 freshness envelope 先于图内容 |
+| `code_intelligence_runtime.py` | 保留的底层适配入口；阶段 Skill 不直接编排它，而由项目代理统一执行状态、同步和响应分类窗口 |
 | `configure_code_intelligence.py` | 启用并优先一个已配置 Provider，保留现有索引范围，不安装或运行 Provider |
 | `validate_project.py` | 检查目录、ID、结构化索引、活动任务、dangling refs、graph schema |
 | `validate_task.py` | 检查 revision、artifact JSON、commit/diff hash、finding、AC evidence、docs delta 和 closure eligibility |
@@ -630,7 +630,7 @@ Work Item 的 `risk_flags` 用于机械计算最低 rigor：任意 risk flag 为
 
 - [x] 建源仓库目录、JSON artifact 模板、必要 Markdown 上下文模板和八个 Skill
 - [x] 建立版本化 `hosts/*/adapter.json` 契约，从宿主无关 Skills 生成 Codex/Claude Code 目录与 worker 文件，并将适配器、脚本、Schema、模板和 Workflow vendoring 到 `tools/polaris/`
-- [x] 将 Adapter 升级到 v2，校验真实入口、overlay 新增边界、symlink confinement 与宿主能力依赖
+- [x] 将 Adapter 升级到 v3，校验真实入口、overlay 新增边界、symlink confinement、宿主能力依赖与非破坏项目 MCP 注册
 - [x] 用安装清单登记 vendored 文件归属、跨平台文本哈希/严格字节哈希，并以预生成、备份、回滚和崩溃恢复事务执行强制升级
 - [x] 建立显式相邻迁移注册表、可恢复迁移记录与 append-only 任务版本事件
 - [ ] 用最小 fixture 验证当前 Codex 宿主能够发现仓库内 Skills

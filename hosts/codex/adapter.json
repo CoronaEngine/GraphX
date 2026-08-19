@@ -1,5 +1,5 @@
 {
-    "adapter_version": 2,
+    "adapter_version": 3,
     "host_id": "codex",
     "display_name": "Codex",
     "skill_target": ".agents/skills",
@@ -15,5 +15,16 @@
     "entry_frontmatter": [],
     "skill_overlay_root": "skill-overlays",
     "skill_appendix_root": "skill-appendices",
+    "project_mcp": {
+        "server_id": "polaris-codegraph",
+        "format": "codex-toml",
+        "target": ".codex/config.toml",
+        "command": "python3",
+        "args": [
+            "tools/polaris/scripts/code_intelligence_mcp.py",
+            "--repo",
+            "."
+        ]
+    },
     "files": []
 }
