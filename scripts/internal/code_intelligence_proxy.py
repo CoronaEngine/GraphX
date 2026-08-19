@@ -263,7 +263,16 @@ def _deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _response_identity_mismatch(classification: dict[str, Any] | None) -> bool:
+    return classification is not None and any(
+        point.get("reason") == "WORKTREE_MISMATCH"
+        for point in classification.get("stale_points", [])
+    )
+
+
 def _unsafe_response(classification: dict[str, Any]) -> bool:
+    if _response_identity_mismatch(classification):
+        return True
     error = str(classification.get("error") or "").lower()
     return classification.get("classification") == "NOT_VERIFIED" and any(
         token in error
@@ -292,6 +301,42 @@ def _pre_status_blocks_query(observation: dict[str, Any]) -> bool:
     ))
 
 
+def _clean_status_observation(observation: dict[str, Any] | None) -> bool:
+    if observation is None:
+        return False
+    pending = observation.get("pending_changes")
+    return (
+        observation.get("status") == "CURRENT_AT_CHECK"
+        and observation.get("needs_sync") is False
+        and isinstance(pending, dict)
+        and set(pending) == {"added", "modified", "removed"}
+        and all(type(value) is int and value == 0 for value in pending.values())
+        and observation.get("basis")
+        in (["STATUS_JSON"], ["STATUS_JSON", "SYNC_ACKNOWLEDGED"])
+        and observation.get("stale_points") == []
+        and observation.get("error") is None
+        and isinstance(observation.get("status_response_sha256"), str)
+        and re.fullmatch(
+            r"[0-9a-f]{64}", observation["status_response_sha256"]
+        ) is not None
+    )
+
+
+def _neutral_response_classification(
+    classification: dict[str, Any] | None,
+) -> bool:
+    return (
+        classification is not None
+        and classification.get("classification") == "NONE"
+        and classification.get("basis") == ["RESPONSE_BANNER"]
+        and classification.get("stale_points") == []
+        and classification.get("error") is None
+        and isinstance(classification.get("response_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", classification["response_sha256"])
+        is not None
+    )
+
+
 def _delivery(
     effective_pre: dict[str, Any],
     query_result: dict[str, Any],
@@ -316,24 +361,42 @@ def _delivery(
     post_status_blocks_query = (
         post_status is not None and _pre_status_blocks_query(post_status)
     )
-    pre_status_unknown = _is_unknown(effective_pre)
-    known_stale = not (
-        pre_status_blocks_query or post_status_blocks_query or pre_status_unknown
-    ) and (any(
-        point.get("reason") != "STATUS_UNREADABLE" for point in points
-    ) or effective_pre.get("status") in {"PARTIAL_STALE", "INDEX_STALE"} or (
-        post_status is not None
-        and post_status.get("status") in {"PARTIAL_STALE", "INDEX_STALE"}
-    ) or (classification or {}).get("classification") in {"PARTIAL_STALE", "INDEX_STALE"})
-    unknown = (
+    response_identity_mismatch = _response_identity_mismatch(classification)
+    safety_failure = (
         pre_status_blocks_query
         or post_status_blocks_query
+        or response_identity_mismatch
         or forced_unknown is not None
+    )
+    pre_status_unknown = _is_unknown(effective_pre)
+    known_stale = (
+        any(point.get("reason") != "STATUS_UNREADABLE" for point in points)
+        or effective_pre.get("status") in {"PARTIAL_STALE", "INDEX_STALE"}
+        or (
+            post_status is not None
+            and post_status.get("status") in {"PARTIAL_STALE", "INDEX_STALE"}
+        )
+        or (classification or {}).get("classification")
+        in {"PARTIAL_STALE", "INDEX_STALE"}
+    )
+    clean_window = (
+        _clean_status_observation(effective_pre)
+        and query_result.get("status") == "SUCCESS"
+        and query_result.get("error") is None
+        and _neutral_response_classification(classification)
+        and query_result.get("response_sha256")
+        == (classification or {}).get("response_sha256")
+        and _clean_status_observation(post_status)
+        and not safety_failure
+    )
+    unknown = (
+        safety_failure
         or query_result.get("status") != "SUCCESS"
         or pre_status_unknown
         or post_status is None
         or _is_unknown(post_status)
         or (classification or {}).get("classification") == "NOT_VERIFIED"
+        or not clean_window
     )
     errors = [
         forced_unknown,
@@ -343,7 +406,30 @@ def _delivery(
         (post_status or {}).get("error"),
     ]
     error = next((str(item)[:240] for item in errors if item), None)
-    if known_stale:
+
+    if safety_failure:
+        state = "UNKNOWN"
+        record_status = "NOT_VERIFIED"
+        if response_identity_mismatch:
+            reason = "WORKTREE_MISMATCH"
+        elif pre_status_blocks_query or post_status_blocks_query:
+            identity_observation = (
+                effective_pre if pre_status_blocks_query else post_status
+            )
+            assert identity_observation is not None
+            reason = (
+                "WORKTREE_MISMATCH"
+                if any(
+                    point.get("reason") == "WORKTREE_MISMATCH"
+                    for point in identity_observation.get("stale_points", [])
+                )
+                else "PROJECT_MISMATCH"
+            )
+        else:
+            reason = "RESPONSE_INTEGRITY_UNVERIFIED"
+        required_fallback = "SEARCH_SOURCE"
+        usage = "NAVIGATION_ONLY"
+    elif known_stale:
         index_points = [point for point in points if point.get("scope") == "INDEX"]
         state = "STALE"
         record_status = "INDEX_STALE" if index_points else "PARTIAL_STALE"
@@ -365,22 +451,7 @@ def _delivery(
     elif unknown:
         state = "UNKNOWN"
         record_status = "NOT_VERIFIED"
-        if pre_status_blocks_query or post_status_blocks_query:
-            identity_observation = (
-                effective_pre if pre_status_blocks_query else post_status
-            )
-            assert identity_observation is not None
-            reason = (
-                "WORKTREE_MISMATCH"
-                if any(
-                    point.get("reason") == "WORKTREE_MISMATCH"
-                    for point in identity_observation.get("stale_points", [])
-                )
-                else "PROJECT_MISMATCH"
-            )
-        elif forced_unknown:
-            reason = "RESPONSE_INTEGRITY_UNVERIFIED"
-        elif pre_status_unknown:
+        if pre_status_unknown:
             reason = (
                 "PROJECT_MISMATCH"
                 if "different project" in str(effective_pre.get("error", "")).lower()
@@ -394,12 +465,14 @@ def _delivery(
             reason = "POST_STATUS_UNREADABLE"
         required_fallback = "SEARCH_SOURCE"
         usage = "NAVIGATION_ONLY"
-    else:
+    elif clean_window:
         state = "CURRENT"
         record_status = "CURRENT_AT_CHECK"
         reason = "VERIFIED_WINDOW"
         required_fallback = "NONE"
         usage = "NON_AUTHORITATIVE_CONTEXT"
+    else:
+        raise AssertionError("CodeGraph delivery state was not classified")
     return {
         "state": state,
         "record_status": record_status,
@@ -529,6 +602,26 @@ def execute_proxy_query(
     pre_status = inspect_status(repo, descriptor, runner=runner)
     bundle["pre_status"] = pre_status
     effective_pre = pre_status
+    if _pre_status_blocks_query(pre_status):
+        blocked_error = pre_status.get("error") or (
+            "CodeGraph status reports a worktree mismatch"
+        )
+        bundle["query"]["status"] = "FAILED"
+        bundle["query"]["error"] = blocked_error
+        bundle["delivery"] = _delivery(
+            effective_pre,
+            bundle["query"],
+            None,
+            None,
+        )
+        _write_bundle(bundle_path, bundle)
+        return {
+            "bundle": bundle,
+            "bundle_path": bundle_path,
+            "response": None,
+            "envelope": render_freshness_envelope(bundle),
+        }
+
     if pre_status.get("needs_sync"):
         synchronized = synchronize_observed_status(
             repo, descriptor, pre_status, runner=runner
@@ -538,13 +631,40 @@ def execute_proxy_query(
         effective_pre = synchronized["freshness"]
         if (
             bundle["post_sync_status"] is not None
-            and _pre_status_blocks_query(bundle["post_sync_status"])
+            and (
+                _pre_status_blocks_query(bundle["post_sync_status"])
+                or bundle["post_sync_status"].get("status") == "UNAVAILABLE"
+            )
             and bundle["post_sync_status"].get("error")
         ):
             effective_pre = {
                 **effective_pre,
                 "error": bundle["post_sync_status"]["error"],
             }
+
+    post_sync_status = bundle["post_sync_status"]
+    if post_sync_status is not None and (
+        _pre_status_blocks_query(post_sync_status)
+        or post_sync_status.get("status") == "UNAVAILABLE"
+    ):
+        blocked_error = post_sync_status.get("error") or (
+            "CodeGraph post-sync status is unsafe or unavailable"
+        )
+        bundle["query"]["status"] = "FAILED"
+        bundle["query"]["error"] = blocked_error
+        bundle["delivery"] = _delivery(
+            effective_pre,
+            bundle["query"],
+            None,
+            None,
+        )
+        _write_bundle(bundle_path, bundle)
+        return {
+            "bundle": bundle,
+            "bundle_path": bundle_path,
+            "response": None,
+            "envelope": render_freshness_envelope(bundle),
+        }
 
     if effective_pre["status"] == "UNAVAILABLE":
         bundle["query"]["status"] = "UNAVAILABLE"
@@ -614,7 +734,14 @@ def execute_proxy_query(
                 forced_unknown = "CodeGraph classification digest mismatch"
                 response = None
             elif _unsafe_response(classification):
-                forced_unknown = "CodeGraph response contains an unsafe repository path"
+                forced_unknown = (
+                    "CodeGraph response reports a worktree mismatch"
+                    if _response_identity_mismatch(classification)
+                    else "CodeGraph response contains an unsafe repository path"
+                )
+                if response_path.exists():
+                    response_path.unlink()
+                bundle["response_path"] = None
                 response = None
             else:
                 response_path.parent.mkdir(parents=True, exist_ok=True)

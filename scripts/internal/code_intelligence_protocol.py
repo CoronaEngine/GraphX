@@ -1090,12 +1090,13 @@ def _validate_v3_record_value(
     }[state]
     if delivery["record_status"] != expected_record_status:
         raise RuleFailure("v3 delivery state contradicts its record freshness status")
-    if value["status"] != {
+    expected_value_status = {
         "CURRENT": "USED",
-        "STALE": "USED",
+        "STALE": "USED" if query["status"] == "SUCCESS" else "FAILED",
         "UNKNOWN": "FAILED",
         "UNAVAILABLE": "UNAVAILABLE",
-    }[state]:
+    }[state]
+    if value["status"] != expected_value_status:
         raise RuleFailure("v3 record status contradicts proxy delivery")
     if state == "CURRENT":
         if (
@@ -1116,13 +1117,14 @@ def _validate_v3_record_value(
             raise RuleFailure("CURRENT v3 evidence lacks a complete zero-pending window")
     elif state == "STALE":
         if (
-            query["status"] != "SUCCESS"
+            query["status"] not in {"SUCCESS", "FAILED"}
             or delivery["usage"] != "NAVIGATION_ONLY"
             or delivery["required_fallback"] == "NONE"
             or not any(
                 point["reason"] != "STATUS_UNREADABLE"
                 for point in delivery["stale_points"]
             )
+            or (query["status"] == "FAILED" and not delivery["error"])
         ):
             raise RuleFailure("STALE v3 evidence lacks an explicit stale reason")
     elif state == "UNKNOWN":
@@ -1337,7 +1339,9 @@ def record_proxy_bundle(
         "target": context["target"],
         "status": {
             "CURRENT": "USED",
-            "STALE": "USED",
+            "STALE": (
+                "USED" if query["status"] == "SUCCESS" else "FAILED"
+            ),
             "UNKNOWN": "FAILED",
             "UNAVAILABLE": "UNAVAILABLE",
         }[delivery["state"]],
