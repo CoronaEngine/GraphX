@@ -769,6 +769,66 @@ class CodeGraphTests(unittest.TestCase):
             result["bundle"]["delivery"]["reason"], "WORKTREE_MISMATCH"
         )
 
+    def test_proxy_discards_misplaced_worktree_mismatch_banner(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        response = (
+            "Ordinary graph content appears before the safety framing.\n\n"
+            "⚠ CodeGraph results below come from a different git worktree "
+            "(/tmp/main), not where you're working (/tmp/wt) — they may reflect "
+            "another branch.\n\n"
+            "graph bytes must be discarded\n"
+        )
+        responses = [
+            completed(healthy_status(self.repo)),
+            completed(response),
+            completed(healthy_status(self.repo)),
+        ]
+        calls: list[list[str]] = []
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        response_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/runtime/code-intelligence/planning"
+            / "CIQ-001.response.txt"
+        )
+        classification = result["bundle"]["response_classification"]
+        self.assertEqual(
+            [item[1] for item in calls], ["status", "explore", "status"]
+        )
+        self.assertEqual(classification["classification"], "NOT_VERIFIED")
+        self.assertEqual(
+            {point["reason"] for point in classification["stale_points"]},
+            {"WORKTREE_MISMATCH", "STATUS_UNREADABLE"},
+        )
+        self.assertIn("misplaced", classification["error"])
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["bundle"]["response_path"])
+        self.assertFalse(response_path.exists())
+        self.assertEqual(
+            result["bundle"]["post_query_status"]["status"],
+            "CURRENT_AT_CHECK",
+        )
+        self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
+        self.assertEqual(result["bundle"]["delivery"]["usage"], "NAVIGATION_ONLY")
+        self.assertEqual(
+            result["bundle"]["delivery"]["reason"], "WORKTREE_MISMATCH"
+        )
+
     def test_proxy_post_query_unavailable_cannot_become_current(self) -> None:
         self.qualify_task()
         marker = self.repo / ".codegraph"

@@ -330,10 +330,15 @@ def classify_response(
     # prose. This retains the legacy wrapped-banner safety behavior.
     for line_index in range(index, len(framing)):
         line = framing[line_index]
+        worktree_mismatch = line.startswith(_WORKTREE_BANNER_PREFIX)
+        if worktree_mismatch:
+            _append_unique_point(
+                stale_points, _index_point("WORKTREE_MISMATCH")
+            )
         if (
             _partial_header_length(framing, line_index)
             or line.startswith(_DISABLED_BANNER_PREFIX)
-            or line.startswith(_WORKTREE_BANNER_PREFIX)
+            or worktree_mismatch
         ):
             parse_error = parse_error or "misplaced CodeGraph freshness banner"
 
