@@ -3329,6 +3329,29 @@ else:
             with self.assertRaises(AssertionError):
                 assert_contract(mutation, "mutated implementation")
 
+    def test_all_agent_surfaces_require_automatic_freshness_policy(self) -> None:
+        """Every CodeGraph-capable Agent surface follows proxy-owned freshness."""
+        paths = [
+            ROOT / "skills/code-intelligence/SKILL.md",
+            ROOT / "skills/architecture-planning/SKILL.md",
+            ROOT / "skills/implementation/SKILL.md",
+            ROOT / "skills/documentation-sync/SKILL.md",
+            ROOT / "skills/adversarial-review/SKILL.md",
+            ROOT / "templates/AGENTS.md",
+        ]
+        required = (
+            "automatically runs at most one incremental `codegraph sync`",
+            "never runs `codegraph index`",
+            "UNKNOWN",
+            "TREAT_AS_STALE",
+            "source/Git fallback",
+        )
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("sync_if_needed", text, path.as_posix())
+            for anchor in required:
+                self.assertIn(anchor, text, f"{path}: {anchor}")
+
     def test_documentation_sync_uses_one_proxy_query(self) -> None:
         """Documentation Sync uses one bounded changed-path/symbol proxy query."""
         source = (ROOT / "skills/documentation-sync/SKILL.md").read_text(
@@ -3343,9 +3366,9 @@ else:
             )
             for anchor in (
                 "polaris_codegraph_explore",
-                "sync_if_needed: true",
                 "changed source paths",
                 "documented symbols",
+                "automatic incremental sync",
                 "no separate status/sync MCP tool",
             ):
                 self.assertIn(anchor, rendered, f"{adapter['host_id']}: {anchor}")

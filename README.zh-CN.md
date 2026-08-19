@@ -91,9 +91,9 @@ polaris code-intelligence add codegraph --repo .
 
 `codegraph init` 创建 `.codegraph/` marker；没有 marker 时 Polaris 直接使用源码和 Git，不生成阶段 record。Vendoring 会在 `.codex/config.toml` 与 `.mcp.json` 中非破坏地注册项目级 `polaris-codegraph` 代理，并保留其他设置。宿主可能要求信任项目或首次使用确认；是否批准仍由用户决定。
 
-Polaris 阶段只调用 `polaris_codegraph_explore`。代理先检查 status，按请求且确有 pending 时至多执行一次有界 `codegraph sync`，再执行一次 explore、复查 status，并保证 freshness envelope 位于图内容之前；阶段没有独立的 status/sync MCP 调用。`CURRENT` 表示 `NON_AUTHORITATIVE_CONTEXT`；`STALE` 与 `UNKNOWN` 表示 `NAVIGATION_ONLY`，必须完成 envelope 指定的源码/Git 回退；`UNAVAILABLE` 表示没有图内容。当前具名文件使用 `READ_SOURCE`，已删除文件使用 `INSPECT_GIT_DIFF`，索引级或不安全结果使用 `SEARCH_SOURCE`。Validation 不调用 CodeGraph，仍以源码、Git、构建、测试、静态检查和 Human Check 为准。
+Polaris 阶段只调用 `polaris_codegraph_explore`。代理先检查 status，存在 pending changes 时自动且至多执行一次有界增量 `codegraph sync`，再执行一次 explore、复查 status，并保证 freshness envelope 位于图内容之前；阶段没有独立的 status/sync MCP 调用。`CURRENT` 表示 `NON_AUTHORITATIVE_CONTEXT`；`STALE` 与 `UNKNOWN`/`TREAT_AS_STALE` 表示 `NAVIGATION_ONLY`，在使用任何结论前必须完成 envelope 指定的精确源码/Git 回退；`UNAVAILABLE` 表示没有图内容。当前具名文件使用 `READ_SOURCE`，已删除文件使用 `INSPECT_GIT_DIFF`，索引级或不安全结果使用 `SEARCH_SOURCE`。Validation 不调用 CodeGraph，仍以源码、Git、构建、测试、静态检查和 Human Check 为准。
 
-CodeGraph 的安装、初始化、配置、raw MCP 注册、watcher 与 daemon 归仓库所有者，而不是 Polaris。Polaris 绝不启动、配置、重新配置、等待或管理这些能力。raw `codegraph_explore` 或 `codegraph explore` 仍可作为带外工具使用，但不能支持 Polaris 的 `CURRENT` 证据。新 record 必须由保留的代理 bundle 与已完成回退投影为 v3；v1/v2 仅供历史读取。CodeGraph 始终可选，永远不是 Workflow 门禁。
+CodeGraph 的安装、初始化、配置、raw MCP 注册、watcher、daemon 与每次全量 `codegraph index` 重建都归仓库所有者，而不是 Polaris；全量重建始终由用户主动执行。Polaris 绝不启动、配置、重新配置、等待或管理这些能力。raw `codegraph_explore` 或 `codegraph explore` 仍可作为带外工具使用，但不能支持 Polaris 的 `CURRENT` 证据。新 record 必须由保留的代理 bundle 与已完成回退投影为 v3；v1/v2 仅供历史读取。CodeGraph 始终可选，永远不是 Workflow 门禁。
 
 协议 `0.1.21` 新增项目级 Polaris CodeGraph 代理、Host Adapter v3 注册和可审计的 Code Intelligence record v3，Workflow 仍为 `0.1.3`。record v1/v2 仅作为不可变历史证据读取；新证据必须由保留的代理 bundle 投影为 v3。
 
