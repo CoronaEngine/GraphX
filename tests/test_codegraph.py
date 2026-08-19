@@ -3295,7 +3295,7 @@ else:
         )
         available_skills = set(discover_skills(ROOT))
 
-        def assert_contract(text: str, label: str) -> None:
+        def assert_contract(text: str, label: Path) -> None:
             for anchor in anchors:
                 self.assertIn(anchor, text, f"{label}: {anchor}")
             self.assertIn("record_code_intelligence.py", text, label)
@@ -3354,42 +3354,65 @@ else:
 
     def test_safe_identity_unknown_status_still_queries_and_is_stale(self) -> None:
         """Safe identity keeps the bounded query available after an unreadable status."""
-        paths = {
+        contracts = {
             ROOT / "skills/code-intelligence/SKILL.md": (
-                "safe repository identity",
-                "still calls `polaris_codegraph_explore`",
-                "UNKNOWN`/`TREAT_AS_STALE",
+                "When status cannot be verified but the project has a safe repository "
+                "identity, the proxy still calls `polaris_codegraph_explore` and "
+                "returns `UNKNOWN`/`TREAT_AS_STALE`; graph content remains "
+                "navigation-only and any conclusion requires the exact source/Git "
+                "fallback."
             ),
             ROOT / "templates/AGENTS.md": (
-                "safe repository identity",
-                "still calls `polaris_codegraph_explore`",
-                "UNKNOWN`/`TREAT_AS_STALE",
+                "When status cannot be verified but the project has a safe repository "
+                "identity, the proxy still calls `polaris_codegraph_explore` and "
+                "returns `UNKNOWN`/`TREAT_AS_STALE`; graph content remains "
+                "navigation-only and any conclusion requires the exact source/Git "
+                "fallback."
             ),
             ROOT / "README.md": (
-                "safe repository identity",
-                "still calls `polaris_codegraph_explore`",
-                "UNKNOWN`/`TREAT_AS_STALE",
+                "When status cannot be verified but the project has a safe repository "
+                "identity, the proxy still calls `polaris_codegraph_explore` and "
+                "returns `UNKNOWN`/`TREAT_AS_STALE`. The graph remains "
+                "navigation-only: use the exact source/Git fallback before any "
+                "conclusion."
             ),
             ROOT / "README.zh-CN.md": (
-                "仓库身份安全",
-                "仍执行 `polaris_codegraph_explore`",
-                "UNKNOWN`/`TREAT_AS_STALE",
+                "当 status 无法验证但仓库身份安全时，代理仍执行 "
+                "`polaris_codegraph_explore`，并返回 `UNKNOWN`/`TREAT_AS_STALE`。"
+                "图只用于导航；在使用任何结论前，必须完成精确源码/Git 回退。"
             ),
             ROOT / "docs/USAGE.md": (
-                "仓库身份安全",
-                "仍执行 `polaris_codegraph_explore`",
-                "UNKNOWN`/`TREAT_AS_STALE",
+                "当 status 无法验证但仓库身份安全时，代理仍执行 "
+                "`polaris_codegraph_explore`，并返回 `UNKNOWN`/`TREAT_AS_STALE`。"
+                "图只用于导航；在使用任何结论前，必须完成精确源码/Git fallback。"
             ),
             ROOT / "plan.md": (
-                "仓库身份安全",
-                "仍执行 `polaris_codegraph_explore`",
-                "UNKNOWN`/`TREAT_AS_STALE",
+                "当 status 无法验证但仓库身份安全时，代理仍执行 "
+                "`polaris_codegraph_explore` 并返回 `UNKNOWN`/`TREAT_AS_STALE`；"
+                "图仅用于导航，任何结论都必须先完成精确源码/Git fallback。"
             ),
         }
-        for path, required in paths.items():
-            text = path.read_text(encoding="utf-8")
-            for anchor in required:
-                self.assertIn(anchor, text, f"{path}: {anchor}")
+
+        def assert_contract(text: str, label: str) -> None:
+            self.assertIn(contracts[label], text, label)
+
+        for path in contracts:
+            assert_contract(path.read_text(encoding="utf-8"), path)
+
+        canonical = contracts[ROOT / "skills/code-intelligence/SKILL.md"]
+        detached = canonical.replace(
+            "the proxy still calls `polaris_codegraph_explore` and returns "
+            "`UNKNOWN`/`TREAT_AS_STALE`",
+            "the proxy returns `UNKNOWN`/`TREAT_AS_STALE`",
+        ) + " The proxy still calls `polaris_codegraph_explore` after current status."
+        for anchor in (
+            "safe repository identity",
+            "still calls `polaris_codegraph_explore`",
+            "UNKNOWN`/`TREAT_AS_STALE",
+        ):
+            self.assertIn(anchor, detached)
+        with self.assertRaises(AssertionError):
+            assert_contract(detached, ROOT / "skills/code-intelligence/SKILL.md")
 
     def test_documentation_sync_uses_one_proxy_query(self) -> None:
         """Documentation Sync uses one bounded changed-path/symbol proxy query."""
