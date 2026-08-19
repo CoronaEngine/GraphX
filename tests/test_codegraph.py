@@ -3526,6 +3526,77 @@ else:
                 self.assertEqual(result["sync"]["status"], "SKIPPED")
                 self.assertEqual(calls, [])
 
+    def test_current_codegraph_freshness_framing_is_classified(self) -> None:
+        samples = {
+            "pending": (
+                "⚠️ Some files referenced below were edited since the last index sync — "
+                "their codegraph entries may be stale:\n"
+                "  - src/a.py (edited 12ms ago, pending sync)\n"
+                "For accurate content of those specific files, Read them directly. "
+                "The rest of this response is fresh.\n",
+                "PARTIAL_STALE",
+            ),
+            "indexing": (
+                "⚠️ Some files referenced below were edited since the last index sync — "
+                "their codegraph entries may be stale:\n"
+                "  - src/a.py (edited 12ms ago, indexing in progress)\n"
+                "For accurate content of those specific files, Read them directly. "
+                "The rest of this response is fresh.\n",
+                "PARTIAL_STALE",
+            ),
+            "disabled": (
+                "⚠️ CodeGraph auto-sync is DISABLED — live file watching stopped, so the "
+                "index is frozen and any file edited since then is stale here.\n",
+                "INDEX_STALE",
+            ),
+            "drift": (
+                "**`src/a.py`** — A(function) · ⚠ changed since last index sync — "
+                "source below is current; the symbol list may be outdated\n",
+                "PARTIAL_STALE",
+            ),
+            "worktree": (
+                "⚠ CodeGraph results below come from a different git worktree "
+                "(/tmp/main), not where you're working (/tmp/wt) — they may reflect "
+                "another branch.\n",
+                "INDEX_STALE",
+            ),
+        }
+        for name, (response, expected) in samples.items():
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.classify_response(response)["classification"], expected
+                )
+
+    def test_warning_words_inside_verbatim_source_do_not_change_freshness(self) -> None:
+        response = (
+            "**`src/a.py`** — A(function)\n\n"
+            "```python\n"
+            "def A():\n"
+            "    warning = 'stale pending sync out-of-date ⚠'\n"
+            "    return warning\n"
+            "```\n"
+        )
+
+        self.assertEqual(self.classify_response(response)["classification"], "NONE")
+
+    def test_project_drift_tail_requires_source_search(self) -> None:
+        response = (
+            "> ⚠ Changed on disk after the last index sync: src/a.py, src/b.py. "
+            "Line numbers referencing these files elsewhere in this response may be "
+            "shifted until that project's next sync re-indexes them.\n"
+        )
+
+        result = self.classify_response(response)
+
+        self.assertEqual(result["classification"], "INDEX_STALE")
+        self.assertEqual(result["stale_points"], [{
+            "scope": "INDEX",
+            "path": None,
+            "reason": "PENDING_CHANGES",
+            "fallback": "SEARCH_SOURCE",
+            "observed_sha256": None,
+        }])
+
     def test_response_banner_marks_only_named_files_stale(self) -> None:
         source = self.repo / "src/widget.py"
         source.parent.mkdir()

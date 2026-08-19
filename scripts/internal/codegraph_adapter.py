@@ -33,16 +33,26 @@ FRESHNESS_ORDER = {
 }
 
 _PARTIAL_BANNER_HEADER = (
-    "⚠️ Some files referenced below were edited since the last index sync —\n"
+    "⚠️ Some files referenced below were edited since the last index sync — "
     "their codegraph entries may be stale:\n"
 )
+_LEGACY_PARTIAL_BANNER_HEADER = _PARTIAL_BANNER_HEADER.replace(" — ", " —\n")
 _PARTIAL_BANNER_FOOTER = (
     "For accurate content of those specific files, Read them directly."
 )
 _PARTIAL_BANNER_ROW = re.compile(
-    r"^  - (?P<path>.+) \(edited [^\n()]+, pending sync\)$"
+    r"^  - (?P<path>.+) \(edited [^\n()]+, "
+    r"(?:pending sync|indexing in progress)\)$"
 )
-_DISABLED_BANNER = "⚠️ CodeGraph auto-sync is DISABLED — the index is frozen."
+_DISABLED_BANNER_PREFIX = "⚠️ CodeGraph auto-sync is DISABLED —"
+_WORKTREE_BANNER_PREFIX = (
+    "⚠ CodeGraph results below come from a different git worktree"
+)
+_DRIFTED_FILE_HEADER = re.compile(
+    r"^\*\*`(?P<path>[^`]+)`\*\* — .*⚠ changed "
+    r"(?:since last index sync|on disk after the last index sync)"
+)
+_DRIFTED_PROJECT_TAIL_PREFIX = "> ⚠ Changed on disk after the last index sync:"
 _SUSPICIOUS_FRESHNESS_SIGNAL = re.compile(
     r"(?:⚠|\bwarning\b|\bstale\b|\bpending(?:[- ]sync)?\b|\bout[- ]of[- ]date\b)",
     re.IGNORECASE,
@@ -183,13 +193,31 @@ def _response_file_point(repo: Path, raw_path: str) -> dict[str, Any]:
     }
 
 
+def _framing_lines(response: str) -> list[str]:
+    """Return response lines outside Markdown code fences."""
+    lines: list[str] = []
+    inside_fence = False
+    for line in response.splitlines():
+        if line.startswith("```"):
+            inside_fence = not inside_fence
+            continue
+        if not inside_fence:
+            lines.append(line)
+    return lines
+
+
+def _with_response_sha256(result: dict[str, Any], response_sha256: str) -> dict[str, Any]:
+    result["response_sha256"] = response_sha256
+    return result
+
+
 def classify_response(
     repo: Path,
     response: str,
     *,
     checked_at: str | None = None,
 ) -> dict[str, Any]:
-    """Classify only documented banners beginning at response byte zero.
+    """Classify documented freshness framing outside source-code fences.
 
     Leading whitespace and a UTF-8 BOM are not accepted as an official banner.
     """
@@ -198,49 +226,104 @@ def classify_response(
         return _response_not_verified(checked_at, "CodeGraph response is not text")
     response_sha256 = hashlib.sha256(response.encode("utf-8")).hexdigest()
     normalized = response.replace("\r\n", "\n").replace("\r", "\n")
-    if normalized.startswith(_DISABLED_BANNER):
-        result = _response_result(
-            "INDEX_STALE",
-            checked_at,
-            stale_points=[_index_point("AUTO_SYNC_DISABLED")],
+    if normalized.startswith(_WORKTREE_BANNER_PREFIX):
+        return _with_response_sha256(
+            _response_result(
+                "INDEX_STALE",
+                checked_at,
+                stale_points=[_index_point("WORKTREE_MISMATCH")],
+            ),
+            response_sha256,
         )
-        result["response_sha256"] = response_sha256
-        return result
+    if normalized.startswith(_DISABLED_BANNER_PREFIX):
+        return _with_response_sha256(
+            _response_result(
+                "INDEX_STALE",
+                checked_at,
+                stale_points=[_index_point("AUTO_SYNC_DISABLED")],
+            ),
+            response_sha256,
+        )
 
-    if not normalized.startswith(_PARTIAL_BANNER_HEADER):
-        if _SUSPICIOUS_FRESHNESS_SIGNAL.search(normalized):
-            result = _response_not_verified(
-                checked_at, "unrecognized CodeGraph freshness warning"
+    header = next(
+        (
+            candidate
+            for candidate in (_PARTIAL_BANNER_HEADER, _LEGACY_PARTIAL_BANNER_HEADER)
+            if normalized.startswith(candidate)
+        ),
+        None,
+    )
+    if header is not None:
+        listed = normalized[len(header) :]
+        footer_index = listed.find(_PARTIAL_BANNER_FOOTER)
+        if footer_index < 0:
+            return _with_response_sha256(
+                _response_not_verified(checked_at, "malformed CodeGraph stale banner"),
+                response_sha256,
             )
-            result["response_sha256"] = response_sha256
-            return result
-        result = _response_result("NONE", checked_at, stale_points=[])
-        result["response_sha256"] = response_sha256
-        return result
+        rows = listed[:footer_index].splitlines()
+        matches = [_PARTIAL_BANNER_ROW.fullmatch(row) for row in rows]
+        if not rows or any(match is None for match in matches):
+            return _with_response_sha256(
+                _response_not_verified(checked_at, "malformed CodeGraph stale banner"),
+                response_sha256,
+            )
+        try:
+            stale_points = [
+                _response_file_point(repo, match["path"])
+                for match in matches
+                if match is not None
+            ]
+        except (InputFailure, RuleFailure, OSError, ValueError) as error:
+            return _with_response_sha256(
+                _response_not_verified(checked_at, error), response_sha256
+            )
+        return _with_response_sha256(
+            _response_result("PARTIAL_STALE", checked_at, stale_points=stale_points),
+            response_sha256,
+        )
 
-    listed = normalized[len(_PARTIAL_BANNER_HEADER) :]
-    footer_index = listed.find(_PARTIAL_BANNER_FOOTER)
-    if footer_index < 0:
-        result = _response_not_verified(checked_at, "malformed CodeGraph stale banner")
-        result["response_sha256"] = response_sha256
-        return result
-    rows = listed[:footer_index].splitlines()
-    if not rows or any(_PARTIAL_BANNER_ROW.fullmatch(row) is None for row in rows):
-        result = _response_not_verified(checked_at, "malformed CodeGraph stale banner")
-        result["response_sha256"] = response_sha256
-        return result
-    try:
-        stale_points = [
-            _response_file_point(repo, _PARTIAL_BANNER_ROW.fullmatch(row)["path"])
-            for row in rows
-        ]
-    except (InputFailure, RuleFailure, OSError, ValueError) as error:
-        result = _response_not_verified(checked_at, error)
-        result["response_sha256"] = response_sha256
-        return result
-    result = _response_result("PARTIAL_STALE", checked_at, stale_points=stale_points)
-    result["response_sha256"] = response_sha256
-    return result
+    framing = _framing_lines(normalized)
+    drifted_headers = [
+        match
+        for line in framing
+        if (match := _DRIFTED_FILE_HEADER.match(line)) is not None
+    ]
+    if drifted_headers:
+        try:
+            stale_points = [
+                _response_file_point(repo, match["path"])
+                for match in drifted_headers
+            ]
+        except (InputFailure, RuleFailure, OSError, ValueError) as error:
+            return _with_response_sha256(
+                _response_not_verified(checked_at, error), response_sha256
+            )
+        return _with_response_sha256(
+            _response_result("PARTIAL_STALE", checked_at, stale_points=stale_points),
+            response_sha256,
+        )
+
+    if any(line.startswith(_DRIFTED_PROJECT_TAIL_PREFIX) for line in framing):
+        return _with_response_sha256(
+            _response_result(
+                "INDEX_STALE",
+                checked_at,
+                stale_points=[_index_point("PENDING_CHANGES")],
+            ),
+            response_sha256,
+        )
+
+    if _SUSPICIOUS_FRESHNESS_SIGNAL.search("\n".join(framing)):
+        return _with_response_sha256(
+            _response_not_verified(
+                checked_at, "unrecognized CodeGraph freshness warning"
+            ),
+            response_sha256,
+        )
+    return _with_response_sha256(
+        _response_result("NONE", checked_at, stale_points=[]), response_sha256
+    )
 
 
 def _unique_items(items: list[Any]) -> list[Any]:
