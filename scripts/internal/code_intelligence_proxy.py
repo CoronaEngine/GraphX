@@ -49,6 +49,11 @@ STAGE_STATUSES = {
     "DOCUMENTATION_SYNC": {"IMPLEMENTING"},
     "REVIEW": {"REVIEWING"},
 }
+REFRESH_POLICY = {
+    "mode": "AUTO_INCREMENTAL_ON_PENDING",
+    "max_sync_attempts": 1,
+    "full_rebuild": "USER_ONLY",
+}
 _INDEX_FALLBACK = {
     "scope": "INDEX",
     "path": None,
@@ -272,6 +277,21 @@ def _unsafe_response(classification: dict[str, Any]) -> bool:
     )
 
 
+def _pre_status_blocks_query(observation: dict[str, Any]) -> bool:
+    if any(
+        point.get("reason") == "WORKTREE_MISMATCH"
+        for point in observation.get("stale_points", [])
+    ):
+        return True
+    error = str(observation.get("error") or "").lower()
+    return any(token in error for token in (
+        "different project",
+        "unsafe project marker",
+        "repository root",
+        "symlink",
+    ))
+
+
 def _delivery(
     effective_pre: dict[str, Any],
     query_result: dict[str, Any],
@@ -292,14 +312,16 @@ def _delivery(
         *((classification or {}).get("stale_points", [])),
         *_observation_points(post_status),
     ])
-    known_stale = any(
+    pre_status_blocks_query = _pre_status_blocks_query(effective_pre)
+    known_stale = not pre_status_blocks_query and (any(
         point.get("reason") != "STATUS_UNREADABLE" for point in points
     ) or effective_pre.get("status") in {"PARTIAL_STALE", "INDEX_STALE"} or (
         post_status is not None
         and post_status.get("status") in {"PARTIAL_STALE", "INDEX_STALE"}
-    ) or (classification or {}).get("classification") in {"PARTIAL_STALE", "INDEX_STALE"}
+    ) or (classification or {}).get("classification") in {"PARTIAL_STALE", "INDEX_STALE"})
     unknown = (
-        forced_unknown is not None
+        pre_status_blocks_query
+        or forced_unknown is not None
         or query_result.get("status") != "SUCCESS"
         or _is_unknown(effective_pre)
         or post_status is None
@@ -336,7 +358,16 @@ def _delivery(
     elif unknown:
         state = "UNKNOWN"
         record_status = "NOT_VERIFIED"
-        if forced_unknown:
+        if pre_status_blocks_query:
+            reason = (
+                "WORKTREE_MISMATCH"
+                if any(
+                    point.get("reason") == "WORKTREE_MISMATCH"
+                    for point in effective_pre.get("stale_points", [])
+                )
+                else "PROJECT_MISMATCH"
+            )
+        elif forced_unknown:
             reason = "RESPONSE_INTEGRITY_UNVERIFIED"
         elif _is_unknown(effective_pre):
             reason = (
@@ -381,7 +412,8 @@ def _bundle_base(
 ) -> dict[str, Any]:
     project = read_json(repo / ".polaris/project.json")
     return {
-        "bundle_version": 1,
+        "bundle_version": 2,
+        "refresh_policy": dict(REFRESH_POLICY),
         "proxy": {
             "server_id": "polaris-codegraph",
             "tool": "polaris_codegraph_explore",
@@ -428,17 +460,14 @@ def execute_proxy_query(
     query_id: str,
     purpose: str,
     query: str,
-    sync_if_needed: bool,
     *,
     runner: Any = subprocess.run,
 ) -> dict[str, Any]:
-    """Execute one immutable CodeGraph query window and persist its evidence."""
+    """Execute one automatically refreshed, immutable CodeGraph query window."""
     if not isinstance(purpose, str) or not purpose.strip() or len(purpose) > 240:
         raise InputFailure("CodeGraph query purpose must contain 1 to 240 characters")
     if not isinstance(query, str) or not query.strip() or len(query) > 8000:
         raise InputFailure("CodeGraph query must contain 1 to 8000 characters")
-    if not isinstance(sync_if_needed, bool):
-        raise InputFailure("sync_if_needed must be a boolean")
     repo = repo.absolute()
     if repo.is_symlink() or not repo.is_dir():
         raise RuleFailure("CodeGraph proxy repository root must be a fixed real directory")
@@ -489,7 +518,7 @@ def execute_proxy_query(
     pre_status = inspect_status(repo, descriptor, runner=runner)
     bundle["pre_status"] = pre_status
     effective_pre = pre_status
-    if sync_if_needed and pre_status.get("needs_sync"):
+    if pre_status.get("needs_sync"):
         synchronized = synchronize_observed_status(
             repo, descriptor, pre_status, runner=runner
         )
@@ -497,30 +526,40 @@ def execute_proxy_query(
         effective_pre = synchronized["freshness"]
         bundle["post_sync_status"] = synchronized["post_sync_status"]
 
-    if effective_pre["status"] in {"UNAVAILABLE", "NOT_VERIFIED"}:
-        bundle["query"]["status"] = (
-            "UNAVAILABLE" if effective_pre["status"] == "UNAVAILABLE" else "FAILED"
-        )
+    if effective_pre["status"] == "UNAVAILABLE":
+        bundle["query"]["status"] = "UNAVAILABLE"
         bundle["query"]["error"] = effective_pre.get("error")
-        if effective_pre["status"] == "UNAVAILABLE":
-            bundle["delivery"] = {
-                "state": "UNAVAILABLE",
-                "record_status": "UNAVAILABLE",
-                "reason": "PROVIDER_UNAVAILABLE",
-                "checked_at": effective_pre["checked_at"],
-                "usage": "NO_GRAPH",
-                "required_fallback": "SEARCH_SOURCE",
-                "stale_points": [],
-                "pending_changes": {"added": 0, "modified": 0, "removed": 0},
-                "error": effective_pre.get("error"),
-            }
-        else:
-            bundle["delivery"] = _delivery(
-                effective_pre,
-                bundle["query"],
-                None,
-                None,
-            )
+        bundle["delivery"] = {
+            "state": "UNAVAILABLE",
+            "record_status": "UNAVAILABLE",
+            "reason": "PROVIDER_UNAVAILABLE",
+            "checked_at": effective_pre["checked_at"],
+            "usage": "NO_GRAPH",
+            "required_fallback": "SEARCH_SOURCE",
+            "stale_points": [],
+            "pending_changes": {"added": 0, "modified": 0, "removed": 0},
+            "error": effective_pre.get("error"),
+        }
+        _write_bundle(bundle_path, bundle)
+        return {
+            "bundle": bundle,
+            "bundle_path": bundle_path,
+            "response": None,
+            "envelope": render_freshness_envelope(bundle),
+        }
+
+    if _pre_status_blocks_query(effective_pre):
+        blocked_error = effective_pre.get("error") or (
+            "CodeGraph status reports a worktree mismatch"
+        )
+        bundle["query"]["status"] = "FAILED"
+        bundle["query"]["error"] = blocked_error
+        bundle["delivery"] = _delivery(
+            effective_pre,
+            bundle["query"],
+            None,
+            None,
+        )
         _write_bundle(bundle_path, bundle)
         return {
             "bundle": bundle,
@@ -595,6 +634,13 @@ def render_freshness_envelope(bundle: dict[str, Any]) -> str:
     delivery = bundle["delivery"]
     pending = delivery.get("pending_changes") or {}
     error = " ".join(str(delivery.get("error") or "").split())[:240]
+    freshness = (
+        "VERIFIED_AT_CHECK"
+        if delivery["state"] == "CURRENT"
+        else "NO_GRAPH"
+        if delivery["state"] == "UNAVAILABLE"
+        else "TREAT_AS_STALE"
+    )
     bundle_path = task_relative_path(
         "code_intelligence_proxy_bundle",
         record_name=bundle["task_context"]["record_name"],
@@ -613,6 +659,7 @@ def render_freshness_envelope(bundle: dict[str, Any]) -> str:
         f"required_fallback: {delivery['required_fallback']}",
         f"evidence_bundle: {bundle_path}",
     ]
+    lines.insert(3, f"freshness: {freshness}")
     if error:
         lines.append(f"error: {error}")
     lines.append("[/POLARIS_CODEGRAPH_FRESHNESS]")

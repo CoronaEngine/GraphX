@@ -33,7 +33,6 @@ TOOL = {
             "query_id",
             "purpose",
             "query",
-            "sync_if_needed",
         ],
         "additionalProperties": False,
         "properties": {
@@ -50,7 +49,6 @@ TOOL = {
             "query_id": {"type": "string", "pattern": r"^CIQ-[0-9]{3}$"},
             "purpose": {"type": "string", "minLength": 1, "maxLength": 240},
             "query": {"type": "string", "minLength": 1, "maxLength": 8000},
-            "sync_if_needed": {"type": "boolean"},
         },
     },
 }
@@ -92,7 +90,6 @@ def _validate_arguments(value: Any) -> list[str]:
         "query_id",
         "purpose",
         "query",
-        "sync_if_needed",
     }
     errors: list[str] = []
     missing = expected - set(value)
@@ -118,8 +115,6 @@ def _validate_arguments(value: Any) -> list[str]:
         item = value.get(key)
         if not isinstance(item, str) or not item.strip() or len(item) > maximum:
             errors.append(f"{key} must contain 1 to {maximum} characters")
-    if not isinstance(value.get("sync_if_needed"), bool):
-        errors.append("sync_if_needed must be a boolean")
     return errors
 
 
@@ -179,7 +174,6 @@ class McpServer:
                 arguments["query_id"],
                 arguments["purpose"],
                 arguments["query"],
-                arguments["sync_if_needed"],
             )
             content = [{"type": "text", "text": proxy["envelope"]}]
             if proxy["response"] is not None:

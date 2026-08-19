@@ -398,7 +398,6 @@ class PolarisCoreTests(unittest.TestCase):
                 "CIQ-001",
                 "bind final subject",
                 "final subject symbols",
-                False,
                 runner=runner,
             )
         return record_proxy_bundle(

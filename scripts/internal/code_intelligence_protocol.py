@@ -1217,26 +1217,26 @@ def record_proxy_bundle(
     require_regular_file(candidate, "CodeGraph proxy bundle")
     bundle_digest = file_sha256(candidate)
     bundle = read_json(candidate)
-    _require_exact_keys(
-        bundle,
-        {
-            "bundle_version",
-            "proxy",
-            "provider",
-            "repository",
-            "task_context",
-            "query",
-            "pre_status",
-            "sync",
-            "post_sync_status",
-            "response_classification",
-            "post_query_status",
-            "delivery",
-            "response_path",
-        },
-        "CodeGraph proxy bundle",
-    )
-    if bundle["bundle_version"] != 1 or bundle["proxy"] != {
+    from .code_intelligence_proxy import REFRESH_POLICY, resolve_stage_context
+
+    version = bundle.get("bundle_version")
+    base_keys = {
+        "bundle_version", "proxy", "provider", "repository", "task_context",
+        "query", "pre_status", "sync", "post_sync_status",
+        "response_classification", "post_query_status", "delivery",
+        "response_path",
+    }
+    if version == 1:
+        _require_exact_keys(bundle, base_keys, "CodeGraph proxy bundle")
+    elif version == 2:
+        _require_exact_keys(
+            bundle, {*base_keys, "refresh_policy"}, "CodeGraph proxy bundle"
+        )
+        if bundle["refresh_policy"] != REFRESH_POLICY:
+            raise RuleFailure("CodeGraph proxy bundle has an invalid refresh policy")
+    else:
+        raise RuleFailure("CodeGraph proxy bundle has an unsupported identity")
+    if bundle["proxy"] != {
         "server_id": "polaris-codegraph",
         "tool": "polaris_codegraph_explore",
     }:
@@ -1259,8 +1259,6 @@ def record_proxy_bundle(
     )
     if context["task_id"] != task_id:
         raise RuleFailure("CodeGraph proxy bundle targets the wrong task")
-    from .code_intelligence_proxy import resolve_stage_context
-
     if context != resolve_stage_context(repo, task_id, context["stage"]):
         raise RuleFailure("CodeGraph proxy bundle stage context is no longer current")
     query = _require_exact_keys(
