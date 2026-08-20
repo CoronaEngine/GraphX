@@ -41,15 +41,17 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _option_value(arguments: Sequence[str], option: str) -> str | None:
+    value = None
+    prefix = option + "="
     for index, argument in enumerate(arguments):
         if argument == option:
             if index + 1 >= len(arguments):
-                return None
-            return arguments[index + 1]
-        prefix = option + "="
-        if argument.startswith(prefix):
-            return argument[len(prefix) :]
-    return None
+                value = None
+            else:
+                value = arguments[index + 1]
+        elif argument.startswith(prefix):
+            value = argument[len(prefix) :]
+    return value
 
 
 def _ancestors(path: Path) -> tuple[Path, ...]:

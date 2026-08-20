@@ -216,6 +216,29 @@ class PolarisCoreTests(unittest.TestCase):
         ):
             self.assertEqual(polaris_cli.main(["doctor"]), 130)
 
+    def test_cli_uses_last_repeated_explicit_location(self) -> None:
+        """重复 --repo/--source 遵循 argparse 的最后值语义并保持参数原样。"""
+        repeated_repo = ["--repo", str(self.repo), "--repo", str(ROOT), "--json"]
+        script, forwarded = polaris_cli._resolve_script(
+            "doctor", repeated_repo, self.repo
+        )
+        self.assertEqual(script, ROOT / "scripts" / "doctor_project.py")
+        self.assertEqual(forwarded, repeated_repo)
+
+        repeated_source = [
+            str(self.repo),
+            "--source",
+            str(self.repo / "not-a-source"),
+            "--source",
+            str(ROOT),
+            "--force",
+        ]
+        script, forwarded = polaris_cli._resolve_script(
+            "vendor", repeated_source, self.repo
+        )
+        self.assertEqual(script, ROOT / "scripts" / "vendor_project.py")
+        self.assertEqual(forwarded, repeated_source)
+
     def test_cli_packaging_declares_no_runtime_dependencies(self) -> None:
         """pip console script 使用独立分发名，且不声明运行时第三方依赖。"""
         metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
