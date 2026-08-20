@@ -96,6 +96,7 @@ polaris init-task TASK-0001 --rigor R1 --repo .
 
 ```powershell
 polaris validate-project --repo .
+polaris validate-task TASK-0001 --repo .
 ```
 
 统一退出码为：
