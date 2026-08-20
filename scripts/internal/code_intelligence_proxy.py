@@ -49,8 +49,13 @@ STAGE_STATUSES = {
     "DOCUMENTATION_SYNC": {"IMPLEMENTING"},
     "REVIEW": {"REVIEWING"},
 }
-REFRESH_POLICY = {
+LEGACY_REFRESH_POLICY_V2 = {
     "mode": "AUTO_INCREMENTAL_ON_PENDING",
+    "max_sync_attempts": 1,
+    "full_rebuild": "USER_ONLY",
+}
+REFRESH_POLICY = {
+    "mode": "AUTO_INCREMENTAL_BEFORE_QUERY",
     "max_sync_attempts": 1,
     "full_rebuild": "USER_ONLY",
 }
@@ -343,8 +348,10 @@ def _delivery(
     classification: dict[str, Any] | None,
     post_status: dict[str, Any] | None,
     *,
+    initial_pre: dict[str, Any] | None = None,
     forced_unknown: str | None = None,
 ) -> dict[str, Any]:
+    initial_observation = initial_pre or effective_pre
     checked_at = (
         (post_status or {}).get("checked_at")
         or (classification or {}).get("checked_at")
@@ -353,11 +360,19 @@ def _delivery(
         or utc_now()
     )
     points = _deduplicate([
+        *(
+            point
+            for point in _observation_points(initial_observation)
+            if point.get("reason") == "STATUS_UNREADABLE"
+        ),
         *_observation_points(effective_pre),
         *((classification or {}).get("stale_points", [])),
         *_observation_points(post_status),
     ])
-    pre_status_blocks_query = _pre_status_blocks_query(effective_pre)
+    initial_status_blocks_query = _pre_status_blocks_query(initial_observation)
+    pre_status_blocks_query = (
+        initial_status_blocks_query or _pre_status_blocks_query(effective_pre)
+    )
     post_status_blocks_query = (
         post_status is not None and _pre_status_blocks_query(post_status)
     )
@@ -368,7 +383,9 @@ def _delivery(
         or response_identity_mismatch
         or forced_unknown is not None
     )
-    pre_status_unknown = _is_unknown(effective_pre)
+    pre_status_unknown = (
+        _is_unknown(initial_observation) or _is_unknown(effective_pre)
+    )
     known_stale = (
         any(point.get("reason") != "STATUS_UNREADABLE" for point in points)
         or effective_pre.get("status") in {"PARTIAL_STALE", "INDEX_STALE"}
@@ -400,6 +417,7 @@ def _delivery(
     )
     errors = [
         forced_unknown,
+        initial_observation.get("error"),
         effective_pre.get("error"),
         query_result.get("error"),
         (classification or {}).get("error"),
@@ -414,7 +432,11 @@ def _delivery(
             reason = "WORKTREE_MISMATCH"
         elif pre_status_blocks_query or post_status_blocks_query:
             identity_observation = (
-                effective_pre if pre_status_blocks_query else post_status
+                initial_observation
+                if initial_status_blocks_query
+                else effective_pre
+                if _pre_status_blocks_query(effective_pre)
+                else post_status
             )
             assert identity_observation is not None
             reason = (
@@ -454,7 +476,8 @@ def _delivery(
         if pre_status_unknown:
             reason = (
                 "PROJECT_MISMATCH"
-                if "different project" in str(effective_pre.get("error", "")).lower()
+                if "different project"
+                in str(initial_observation.get("error", "")).lower()
                 else "STATUS_UNREADABLE"
             )
         elif query_result.get("status") != "SUCCESS":
@@ -496,7 +519,7 @@ def _bundle_base(
 ) -> dict[str, Any]:
     project = read_json(repo / ".polaris/project.json")
     return {
-        "bundle_version": 2,
+        "bundle_version": 3,
         "refresh_policy": dict(REFRESH_POLICY),
         "proxy": {
             "server_id": "polaris-codegraph",
@@ -622,25 +645,24 @@ def execute_proxy_query(
             "envelope": render_freshness_envelope(bundle),
         }
 
-    if pre_status.get("needs_sync"):
-        synchronized = synchronize_observed_status(
-            repo, descriptor, pre_status, runner=runner
+    synchronized = synchronize_observed_status(
+        repo, descriptor, pre_status, runner=runner, force_attempt=True
+    )
+    bundle["sync"] = synchronized["sync"]
+    bundle["post_sync_status"] = synchronized["post_sync_status"]
+    effective_pre = synchronized["freshness"]
+    if (
+        bundle["post_sync_status"] is not None
+        and (
+            _pre_status_blocks_query(bundle["post_sync_status"])
+            or bundle["post_sync_status"].get("status") == "UNAVAILABLE"
         )
-        bundle["sync"] = synchronized["sync"]
-        bundle["post_sync_status"] = synchronized["post_sync_status"]
-        effective_pre = synchronized["freshness"]
-        if (
-            bundle["post_sync_status"] is not None
-            and (
-                _pre_status_blocks_query(bundle["post_sync_status"])
-                or bundle["post_sync_status"].get("status") == "UNAVAILABLE"
-            )
-            and bundle["post_sync_status"].get("error")
-        ):
-            effective_pre = {
-                **effective_pre,
-                "error": bundle["post_sync_status"]["error"],
-            }
+        and bundle["post_sync_status"].get("error")
+    ):
+        effective_pre = {
+            **effective_pre,
+            "error": bundle["post_sync_status"]["error"],
+        }
 
     post_sync_status = bundle["post_sync_status"]
     if post_sync_status is not None and (
@@ -657,6 +679,7 @@ def execute_proxy_query(
             bundle["query"],
             None,
             None,
+            initial_pre=pre_status,
         )
         _write_bundle(bundle_path, bundle)
         return {
@@ -699,6 +722,7 @@ def execute_proxy_query(
             bundle["query"],
             None,
             None,
+            initial_pre=pre_status,
         )
         _write_bundle(bundle_path, bundle)
         return {
@@ -772,6 +796,7 @@ def execute_proxy_query(
         bundle["query"],
         classification,
         post_status,
+        initial_pre=pre_status,
         forced_unknown=forced_unknown,
     )
     if response is None:
@@ -806,6 +831,7 @@ def render_freshness_envelope(bundle: dict[str, Any]) -> str:
         "[POLARIS_CODEGRAPH_FRESHNESS]",
         f"state: {delivery['state']}",
         f"record_status: {delivery['record_status']}",
+        "source_of_truth: false",
         f"reason: {delivery['reason']}",
         f"checked_at: {delivery['checked_at']}",
         f"pending_added: {pending.get('added', 0)}",
@@ -815,7 +841,7 @@ def render_freshness_envelope(bundle: dict[str, Any]) -> str:
         f"required_fallback: {delivery['required_fallback']}",
         f"evidence_bundle: {bundle_path}",
     ]
-    lines.insert(3, f"freshness: {freshness}")
+    lines.insert(4, f"freshness: {freshness}")
     if error:
         lines.append(f"error: {error}")
     lines.append("[/POLARIS_CODEGRAPH_FRESHNESS]")

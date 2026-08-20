@@ -1030,7 +1030,11 @@ def _validate_v3_record_value(
     for point in delivery["stale_points"]:
         _validate_v3_stale_point(repo, point)
     effective = post_sync if post_sync is not None else pre
-    observed_points: list[dict[str, Any]] = []
+    observed_points: list[dict[str, Any]] = [
+        point
+        for point in pre["stale_points"]
+        if point["reason"] == "STATUS_UNREADABLE"
+    ]
     for observation in (effective, post):
         if observation is None:
             continue
@@ -1219,7 +1223,11 @@ def record_proxy_bundle(
     require_regular_file(candidate, "CodeGraph proxy bundle")
     bundle_digest = file_sha256(candidate)
     bundle = read_json(candidate)
-    from .code_intelligence_proxy import REFRESH_POLICY, resolve_stage_context
+    from .code_intelligence_proxy import (
+        LEGACY_REFRESH_POLICY_V2,
+        REFRESH_POLICY,
+        resolve_stage_context,
+    )
 
     version = bundle.get("bundle_version")
     base_keys = {
@@ -1234,8 +1242,26 @@ def record_proxy_bundle(
         _require_exact_keys(
             bundle, {*base_keys, "refresh_policy"}, "CodeGraph proxy bundle"
         )
+        if bundle["refresh_policy"] != LEGACY_REFRESH_POLICY_V2:
+            raise RuleFailure("CodeGraph proxy bundle has an invalid refresh policy")
+    elif version == 3:
+        _require_exact_keys(
+            bundle, {*base_keys, "refresh_policy"}, "CodeGraph proxy bundle"
+        )
         if bundle["refresh_policy"] != REFRESH_POLICY:
             raise RuleFailure("CodeGraph proxy bundle has an invalid refresh policy")
+        delivery = bundle.get("delivery")
+        if (
+            isinstance(delivery, dict)
+            and delivery.get("state") != "UNAVAILABLE"
+            and (
+                not isinstance(bundle.get("sync"), dict)
+                or bundle["sync"].get("status") not in {"SUCCESS", "FAILED"}
+            )
+        ):
+            raise RuleFailure(
+                "CodeGraph v3 proxy bundle lacks its mandatory sync attempt"
+            )
     else:
         raise RuleFailure("CodeGraph proxy bundle has an unsupported identity")
     if bundle["proxy"] != {

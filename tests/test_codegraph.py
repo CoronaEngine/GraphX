@@ -337,6 +337,7 @@ class CodeGraphTests(unittest.TestCase):
         self,
         *,
         legacy_bundle: bool = False,
+        legacy_v2_bundle: bool = False,
         invalid_refresh_policy: bool = False,
     ) -> tuple[dict[str, object], dict[str, object]]:
         self.qualify_task()
@@ -346,6 +347,8 @@ class CodeGraphTests(unittest.TestCase):
         source.write_text("class A:\n    pass\n", encoding="utf-8")
         proxy = self.proxy_module()
         responses = [
+            completed(healthy_status(self.repo)),
+            completed("synced\n"),
             completed(healthy_status(self.repo)),
             completed("A is defined in src/a.py\n"),
             completed(healthy_status(self.repo)),
@@ -369,9 +372,16 @@ class CodeGraphTests(unittest.TestCase):
         if legacy_bundle:
             bundle["bundle_version"] = 1
             bundle.pop("refresh_policy")
+        elif legacy_v2_bundle:
+            bundle["bundle_version"] = 2
+            bundle["refresh_policy"] = {
+                "mode": "AUTO_INCREMENTAL_ON_PENDING",
+                "max_sync_attempts": 1,
+                "full_rebuild": "USER_ONLY",
+            }
         elif invalid_refresh_policy:
             bundle["refresh_policy"]["max_sync_attempts"] = 2
-        if legacy_bundle or invalid_refresh_policy:
+        if legacy_bundle or legacy_v2_bundle or invalid_refresh_policy:
             write_json_atomic(bundle_path, bundle)
         protocol = importlib.import_module("internal.code_intelligence_protocol")
         result = protocol.record_proxy_bundle(
@@ -482,6 +492,8 @@ class CodeGraphTests(unittest.TestCase):
         calls: list[tuple[list[str], dict[str, object]]] = []
         responses = [
             completed(healthy_status(self.repo)),
+            completed("synced\n"),
+            completed(healthy_status(self.repo)),
             completed("graph bytes\n"),
             completed(healthy_status(self.repo)),
         ]
@@ -507,7 +519,10 @@ class CodeGraphTests(unittest.TestCase):
         self.assertEqual(bundle["delivery"]["state"], "CURRENT")
         self.assertEqual(bundle["delivery"]["usage"], "NON_AUTHORITATIVE_CONTEXT")
         self.assertEqual(bundle["delivery"]["record_status"], "CURRENT_AT_CHECK")
-        self.assertEqual([call[0][1] for call in calls], ["status", "explore", "status"])
+        self.assertEqual(
+            [call[0][1] for call in calls],
+            ["status", "sync", "status", "explore", "status"],
+        )
         self.assertTrue(all(Path(call[1]["cwd"]).resolve() == self.repo.resolve() for call in calls))
         self.assertEqual(result["response"], "graph bytes\n")
         self.assertTrue(result["envelope"].startswith("[POLARIS_CODEGRAPH_FRESHNESS]\n"))
@@ -549,9 +564,9 @@ class CodeGraphTests(unittest.TestCase):
         self.assertEqual([item[1] for item in calls], [
             "status", "sync", "status", "explore", "status"
         ])
-        self.assertEqual(result["bundle"]["bundle_version"], 2)
+        self.assertEqual(result["bundle"]["bundle_version"], 3)
         self.assertEqual(result["bundle"]["refresh_policy"], {
-            "mode": "AUTO_INCREMENTAL_ON_PENDING",
+            "mode": "AUTO_INCREMENTAL_BEFORE_QUERY",
             "max_sync_attempts": 1,
             "full_rebuild": "USER_ONLY",
         })
@@ -684,6 +699,8 @@ class CodeGraphTests(unittest.TestCase):
         wrong["projectPath"] = str(self.repo / "other-checkout")
         responses = [
             completed(healthy_status(self.repo)),
+            completed("synced\n"),
+            completed(healthy_status(self.repo)),
             completed("graph bytes must be discarded\n"),
             completed(json.dumps(wrong)),
         ]
@@ -708,7 +725,8 @@ class CodeGraphTests(unittest.TestCase):
             / "CIQ-001.response.txt"
         )
         self.assertEqual(
-            [item[1] for item in calls], ["status", "explore", "status"]
+            [item[1] for item in calls],
+            ["status", "sync", "status", "explore", "status"],
         )
         self.assertIsNone(result["response"])
         self.assertIsNone(result["bundle"]["response_path"])
@@ -728,6 +746,8 @@ class CodeGraphTests(unittest.TestCase):
             "graph bytes must be discarded\n"
         )
         responses = [
+            completed(healthy_status(self.repo)),
+            completed("synced\n"),
             completed(healthy_status(self.repo)),
             completed(response),
             completed(healthy_status(self.repo)),
@@ -755,7 +775,8 @@ class CodeGraphTests(unittest.TestCase):
             / "CIQ-001.response.txt"
         )
         self.assertEqual(
-            [item[1] for item in calls], ["status", "explore", "status"]
+            [item[1] for item in calls],
+            ["status", "sync", "status", "explore", "status"],
         )
         self.assertEqual(
             result["bundle"]["response_classification"]["classification"],
@@ -780,6 +801,8 @@ class CodeGraphTests(unittest.TestCase):
             "graph bytes must be discarded\n"
         )
         responses = [
+            completed(healthy_status(self.repo)),
+            completed("synced\n"),
             completed(healthy_status(self.repo)),
             completed(response),
             completed(healthy_status(self.repo)),
@@ -808,7 +831,8 @@ class CodeGraphTests(unittest.TestCase):
         )
         classification = result["bundle"]["response_classification"]
         self.assertEqual(
-            [item[1] for item in calls], ["status", "explore", "status"]
+            [item[1] for item in calls],
+            ["status", "sync", "status", "explore", "status"],
         )
         self.assertEqual(classification["classification"], "NOT_VERIFIED")
         self.assertEqual(
@@ -841,6 +865,8 @@ class CodeGraphTests(unittest.TestCase):
             calls.append(command)
             if command[1] == "status":
                 return completed(healthy_status(self.repo))
+            if command[1] == "sync":
+                return completed("synced\n")
             if command[1] == "explore":
                 marker.rmdir()
                 return completed("graph bytes\n")
@@ -855,7 +881,10 @@ class CodeGraphTests(unittest.TestCase):
                 "locate A", "symbol A", runner=runner,
             )
 
-        self.assertEqual([item[1] for item in calls], ["status", "explore"])
+        self.assertEqual(
+            [item[1] for item in calls],
+            ["status", "sync", "status", "explore"],
+        )
         self.assertEqual(
             result["bundle"]["post_query_status"]["status"], "UNAVAILABLE"
         )
@@ -871,6 +900,8 @@ class CodeGraphTests(unittest.TestCase):
         (self.repo / ".codegraph").mkdir()
         responses = [
             completed("not-json\n"),
+            completed("synced\n"),
+            completed(healthy_status(self.repo)),
             completed("graph bytes\n"),
             completed(healthy_status(self.repo)),
         ]
@@ -889,10 +920,49 @@ class CodeGraphTests(unittest.TestCase):
                 "locate A", "symbol A", runner=runner,
             )
 
-        self.assertEqual([item[1] for item in calls], ["status", "explore", "status"])
+        self.assertEqual(
+            [item[1] for item in calls],
+            ["status", "sync", "status", "explore", "status"],
+        )
         self.assertEqual(result["response"], "graph bytes\n")
         self.assertEqual(result["bundle"]["delivery"]["state"], "UNKNOWN")
         self.assertIn("freshness: TREAT_AS_STALE", result["envelope"])
+
+    def test_proxy_sync_failure_keeps_graph_for_navigation_and_marks_it_stale(self) -> None:
+        self.qualify_task()
+        (self.repo / ".codegraph").mkdir()
+        responses = [
+            completed(healthy_status(self.repo)),
+            completed("", 1, "sync failed"),
+            completed("graph bytes\n"),
+            completed(healthy_status(self.repo)),
+        ]
+        calls: list[list[str]] = []
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return responses.pop(0)
+
+        with mock.patch(
+            "internal.code_intelligence_proxy.shutil.which",
+            return_value="/bin/codegraph",
+        ):
+            result = self.proxy_module().execute_proxy_query(
+                self.repo, "TASK-0001", "PLANNING", "CIQ-001",
+                "locate A", "symbol A", runner=runner,
+            )
+
+        self.assertEqual(
+            [item[1] for item in calls],
+            ["status", "sync", "explore", "status"],
+        )
+        self.assertEqual(result["response"], "graph bytes\n")
+        self.assertEqual(result["bundle"]["sync"]["status"], "FAILED")
+        self.assertEqual(result["bundle"]["delivery"]["state"], "STALE")
+        self.assertEqual(result["bundle"]["delivery"]["usage"], "NAVIGATION_ONLY")
+        self.assertEqual(result["bundle"]["delivery"]["reason"], "SYNC_FAILED")
 
     def test_proxy_known_stale_overrides_unknown_pre_status(self) -> None:
         cases = [
@@ -919,6 +989,8 @@ class CodeGraphTests(unittest.TestCase):
                     post_status["pendingChanges"]["modified"] = 1
                 responses = [
                     completed("not-json\n"),
+                    completed("synced\n"),
+                    completed(healthy_status(self.repo)),
                     completed(response),
                     completed(json.dumps(post_status)),
                 ]
@@ -938,7 +1010,8 @@ class CodeGraphTests(unittest.TestCase):
                     )
 
                 self.assertEqual(
-                    [item[1] for item in calls], ["status", "explore", "status"]
+                    [item[1] for item in calls],
+                    ["status", "sync", "status", "explore", "status"],
                 )
                 self.assertEqual(result["response"], response)
                 self.assertEqual(result["bundle"]["delivery"]["state"], "STALE")
@@ -1012,7 +1085,7 @@ class CodeGraphTests(unittest.TestCase):
     def test_proxy_window_downgrades_pending_unknown_and_unavailable_states(self) -> None:
         cases = [
             ("pending", "STALE", 5),
-            ("malformed", "UNKNOWN", 3),
+            ("malformed", "UNKNOWN", 5),
             ("missing_marker", "UNAVAILABLE", 0),
         ]
         for index, (case, expected_state, expected_calls) in enumerate(cases, start=1):
@@ -1037,6 +1110,8 @@ class CodeGraphTests(unittest.TestCase):
                 else:
                     responses = [
                         completed("not-json\n"),
+                        completed("synced\n"),
+                        completed(healthy_status(self.repo)),
                         completed("graph bytes\n"),
                         completed(healthy_status(self.repo)),
                     ]
@@ -1105,8 +1180,16 @@ class CodeGraphTests(unittest.TestCase):
 
     def test_proxy_window_never_promotes_failed_or_post_stale_queries(self) -> None:
         cases = [
-            ("explore_failed", "UNKNOWN", ["status", "explore"]),
-            ("post_pending", "STALE", ["status", "explore", "status"]),
+            (
+                "explore_failed",
+                "UNKNOWN",
+                ["status", "sync", "status", "explore"],
+            ),
+            (
+                "post_pending",
+                "STALE",
+                ["status", "sync", "status", "explore", "status"],
+            ),
         ]
         for index, (case, expected_state, expected_calls) in enumerate(cases, start=1):
             with self.subTest(case=case):
@@ -1119,9 +1202,16 @@ class CodeGraphTests(unittest.TestCase):
                 post = json.loads(healthy_status(self.repo))
                 post["pendingChanges"]["added"] = 1
                 responses = (
-                    [completed(healthy_status(self.repo)), completed("", 1, "failed")]
+                    [
+                        completed(healthy_status(self.repo)),
+                        completed("synced\n"),
+                        completed(healthy_status(self.repo)),
+                        completed("", 1, "failed"),
+                    ]
                     if case == "explore_failed"
                     else [
+                        completed(healthy_status(self.repo)),
+                        completed("synced\n"),
                         completed(healthy_status(self.repo)),
                         completed("graph bytes\n"),
                         completed(json.dumps(post)),
@@ -1175,6 +1265,8 @@ For accurate content of those specific files, Read them directly.
                 source.write_text("value = 1\n", encoding="utf-8")
                 proxy = self.proxy_module()
                 responses = [
+                    completed(healthy_status(self.repo)),
+                    completed("synced\n"),
                     completed(healthy_status(self.repo)),
                     completed(response),
                     completed(healthy_status(self.repo)),
@@ -1298,6 +1390,7 @@ For accurate content of those specific files, Read them directly.
 
         self.assertTrue(envelope.startswith("[POLARIS_CODEGRAPH_FRESHNESS]\n"))
         self.assertTrue(envelope.endswith("[/POLARIS_CODEGRAPH_FRESHNESS]\n"))
+        self.assertIn("source_of_truth: false\n", envelope)
         error_line = next(line for line in envelope.splitlines() if line.startswith("error: "))
         self.assertEqual(len(error_line.removeprefix("error: ")), 240)
 
@@ -1792,8 +1885,13 @@ else:
         )
         self.assertEqual(recorded["query"]["symbols"][0]["path"], "src/a.py")
 
-    def test_bundle_v1_remains_projectable_but_v2_policy_is_fixed(self) -> None:
+    def test_bundle_v1_and_v2_remain_projectable_but_policies_are_fixed(self) -> None:
         recorded, _query = self.record_current_v3_fixture(legacy_bundle=True)
+        self.assertEqual(recorded["record_version"], 3)
+
+        self.tearDown()
+        self.setUp()
+        recorded, _query = self.record_current_v3_fixture(legacy_v2_bundle=True)
         self.assertEqual(recorded["record_version"], 3)
 
         self.tearDown()
@@ -1954,6 +2052,8 @@ else:
         source.write_text("class A:\n    pass\n", encoding="utf-8")
         responses = [
             completed(healthy_status(self.repo)),
+            completed("synced\n"),
+            completed(healthy_status(self.repo)),
             completed("failed explore output\n", returncode=1),
         ]
 
@@ -2012,6 +2112,8 @@ else:
         stale = json.loads(healthy_status(self.repo))
         stale["index"]["state"] = "partial"
         responses = [
+            completed(json.dumps(stale)),
+            completed("synced\n"),
             completed(json.dumps(stale)),
             completed("failed explore output\n", returncode=1),
         ]
@@ -2164,6 +2266,8 @@ else:
                 elif case == "unknown":
                     responses = [
                         completed("not-json\n"),
+                        completed("synced\n"),
+                        completed(healthy_status(self.repo)),
                         completed("A is defined in src/a.py\n"),
                         completed(healthy_status(self.repo)),
                     ]
@@ -5258,6 +5362,214 @@ For accurate content of those specific files, Read them directly.
             temporary_repo, descriptor, timeout_seconds=30
         )
         self.assertEqual(result["status"], "CURRENT_AT_CHECK")
+
+    @unittest.skipUnless(shutil.which("codegraph"), "codegraph CLI is not installed")
+    def test_real_codegraph_sync_reconciles_a_clean_committed_symbol(self) -> None:
+        """A clean commit can evade status, but one explicit sync must reconcile it."""
+        temporary_repo = validated_disposable_codegraph_repo(
+            self.repo, self.temp.name
+        )
+        symbol = "polaris_clean_head_committed_symbol_6f82c1"
+        (temporary_repo / ".gitignore").write_text(".codegraph/\n", encoding="utf-8")
+        source = temporary_repo / "indexed.py"
+        source.write_text("def indexed_symbol():\n    return 1\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", ".gitignore", "indexed.py"],
+            cwd=temporary_repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-qm", "add indexed symbol"],
+            cwd=temporary_repo,
+            check=True,
+        )
+        subprocess.run(
+            ["codegraph", "init", str(temporary_repo)],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        new_source = temporary_repo / "clean_head_new.py"
+        new_source.write_text(
+            f"def {symbol}():\n    return 2\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["git", "add", "clean_head_new.py"], cwd=temporary_repo, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-qm", "add clean head symbol"],
+            cwd=temporary_repo,
+            check=True,
+        )
+
+        self.assertEqual(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=temporary_repo,
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout,
+            "",
+        )
+        status = json.loads(subprocess.run(
+            ["codegraph", "status", "--json"],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        ).stdout)
+        self.assertEqual(
+            status["pendingChanges"],
+            {"added": 0, "modified": 0, "removed": 0},
+        )
+        before = subprocess.run(
+            ["codegraph", "explore", symbol],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        ).stdout
+        self.assertNotIn("`clean_head_new.py`", before)
+
+        subprocess.run(
+            ["codegraph", "sync", "--quiet"],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        after = subprocess.run(
+            ["codegraph", "explore", symbol],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        ).stdout
+        self.assertIn("`clean_head_new.py`", after)
+        self.assertIn(symbol, after)
+
+    @unittest.skipUnless(shutil.which("codegraph"), "codegraph CLI is not installed")
+    def test_real_codegraph_sync_reconciles_a_clean_branch_switch(self) -> None:
+        """A clean branch switch can evade status, but one explicit sync repairs it."""
+        temporary_repo = validated_disposable_codegraph_repo(
+            self.repo, self.temp.name
+        )
+        symbol = "polaris_clean_branch_symbol_9d31a4"
+        initial_branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        (temporary_repo / ".gitignore").write_text(".codegraph/\n", encoding="utf-8")
+        source = temporary_repo / "main_branch.py"
+        source.write_text("def main_symbol():\n    return 1\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", ".gitignore", "main_branch.py"],
+            cwd=temporary_repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-qm", "add main branch symbol"],
+            cwd=temporary_repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "switch", "-q", "-c", "clean-feature"],
+            cwd=temporary_repo,
+            check=True,
+        )
+        feature_source = temporary_repo / "feature_branch.py"
+        feature_source.write_text(
+            f"def {symbol}():\n    return 2\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["git", "add", "feature_branch.py"], cwd=temporary_repo, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-qm", "add feature branch symbol"],
+            cwd=temporary_repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "switch", "-q", initial_branch],
+            cwd=temporary_repo,
+            check=True,
+        )
+        subprocess.run(
+            ["codegraph", "init", str(temporary_repo)],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        subprocess.run(
+            ["git", "switch", "-q", "clean-feature"],
+            cwd=temporary_repo,
+            check=True,
+        )
+
+        self.assertEqual(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=temporary_repo,
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout,
+            "",
+        )
+        status = json.loads(subprocess.run(
+            ["codegraph", "status", "--json"],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        ).stdout)
+        self.assertEqual(
+            status["pendingChanges"],
+            {"added": 0, "modified": 0, "removed": 0},
+        )
+        before = subprocess.run(
+            ["codegraph", "explore", symbol],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        ).stdout
+        self.assertNotIn("`feature_branch.py`", before)
+
+        subprocess.run(
+            ["codegraph", "sync", "--quiet"],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        after = subprocess.run(
+            ["codegraph", "explore", symbol],
+            cwd=temporary_repo,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        ).stdout
+        self.assertIn("`feature_branch.py`", after)
+        self.assertIn(symbol, after)
 
     def test_real_cli_fixture_rejects_temporary_paths_nested_in_workspace(self) -> None:
         """A hostile TMPDIR beneath the workspace must never become an init target."""
