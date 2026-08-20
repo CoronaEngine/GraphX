@@ -24,7 +24,10 @@ TOOL_NAME = "polaris_codegraph_explore"
 SERVER_ROOT = Path(__file__).resolve().parent.parent
 TOOL = {
     "name": TOOL_NAME,
-    "description": "Run one bounded Polaris CodeGraph freshness window.",
+    "description": (
+        "Run one bounded Polaris CodeGraph window with one pre-query "
+        "incremental sync; graph output is never source of truth."
+    ),
     "inputSchema": {
         "type": "object",
         "required": [

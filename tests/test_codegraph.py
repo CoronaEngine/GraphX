@@ -177,7 +177,7 @@ class CodeGraphTests(unittest.TestCase):
             self.assertIn(official, path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
         for path in [ROOT / "README.md", ROOT / "README.zh-CN.md"]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.22", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.23", text, path.relative_to(ROOT).as_posix())
             self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
 
     def test_authority_surfaces_publish_workflow_013(self) -> None:
@@ -188,8 +188,49 @@ class CodeGraphTests(unittest.TestCase):
             ROOT / "plan.md",
         ]:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("0.1.22", text, path.relative_to(ROOT).as_posix())
+            self.assertIn("0.1.23", text, path.relative_to(ROOT).as_posix())
             self.assertIn("0.1.3", text, path.relative_to(ROOT).as_posix())
+
+    def test_codegraph_surfaces_publish_clean_head_freshness_contract(self) -> None:
+        for relative in [
+            "skills/architecture-planning/SKILL.md",
+            "skills/implementation/SKILL.md",
+            "skills/documentation-sync/SKILL.md",
+            "skills/adversarial-review/SKILL.md",
+            "skills/code-intelligence/SKILL.md",
+            "templates/AGENTS.md",
+        ]:
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("before every proxy query", text, relative)
+            self.assertIn("never a source of truth", text, relative)
+            self.assertIn("raw", text, relative)
+            self.assertIn("unverified", text, relative)
+        localized_anchors = {
+            "README.md": [
+                "before every proxy query",
+                "zero pending changes",
+                "never a source of truth",
+            ],
+            "README.zh-CN.md": [
+                "每次代理查询前",
+                "零 pending changes",
+                "永远不是 source of truth",
+            ],
+            "docs/USAGE.md": [
+                "每次代理查询前",
+                "零 pending changes",
+                "永远不是 source of truth",
+            ],
+            "plan.md": [
+                "每次代理查询前",
+                "零 pending changes",
+                "永远不是 source of truth",
+            ],
+        }
+        for relative, anchors in localized_anchors.items():
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            for anchor in anchors:
+                self.assertIn(anchor, text, relative)
 
     def test_readmes_keep_codegraph_operational_boundaries(self) -> None:
         """User-facing authorities retain the source-fallback and ownership boundaries."""
@@ -1433,6 +1474,8 @@ For accurate content of those specific files, Read them directly.
         )
         tools = responses[1]["result"]["tools"]
         self.assertEqual([item["name"] for item in tools], ["polaris_codegraph_explore"])
+        self.assertIn("one pre-query incremental sync", tools[0]["description"])
+        self.assertIn("never source of truth", tools[0]["description"])
         schema = tools[0]["inputSchema"]
         self.assertNotIn("repository", schema["properties"])
         self.assertNotIn("sync_if_needed", schema["properties"])
@@ -3820,8 +3863,10 @@ else:
             ROOT / "templates/AGENTS.md",
         ]
         required = (
-            "automatically runs at most one incremental `codegraph sync`",
+            "before every proxy query",
+            "zero pending changes",
             "never runs `codegraph index`",
+            "never a source of truth",
             "UNKNOWN",
             "TREAT_AS_STALE",
             "source/Git fallback",

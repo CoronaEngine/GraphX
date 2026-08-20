@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-> 当前协议版本：`0.1.22`（开发中）；Workflow 版本：`0.1.3`
+> 当前协议版本：`0.1.23`（开发中）；Workflow 版本：`0.1.3`
 
 Polaris 是运行在 Coding Agent 宿主上的仓库原生工程工作流。它把需求、计划、实现、独立审查、验证和任务状态保存在 Git 仓库中，并通过确定性门禁防止需求漂移、证据过期和 Agent 自行宣布完成。
 
@@ -91,13 +91,13 @@ polaris code-intelligence add codegraph --repo .
 
 `codegraph init` 创建 `.codegraph/` marker；没有 marker 时 Polaris 直接使用源码和 Git，不生成阶段 record。Vendoring 会在 `.codex/config.toml` 与 `.mcp.json` 中非破坏地注册项目级 `polaris-codegraph` 代理，并保留其他设置。宿主可能要求信任项目或首次使用确认；是否批准仍由用户决定。
 
-Polaris 阶段只调用 `polaris_codegraph_explore`。代理先检查 status，存在 pending changes 时自动且至多执行一次有界增量 `codegraph sync`，再执行一次 explore、复查 status，并保证 freshness envelope 位于图内容之前；阶段没有独立的 status/sync MCP 调用。`CURRENT` 表示 `NON_AUTHORITATIVE_CONTEXT`；`STALE` 与 `UNKNOWN`/`TREAT_AS_STALE` 表示 `NAVIGATION_ONLY`，在使用任何结论前必须完成 envelope 指定的精确源码/Git 回退；`UNAVAILABLE` 表示没有图内容。当前具名文件使用 `READ_SOURCE`，已删除文件使用 `INSPECT_GIT_DIFF`，索引级或不安全结果使用 `SEARCH_SOURCE`。Validation 不调用 CodeGraph，仍以源码、Git、构建、测试、静态检查和 Human Check 为准。
+Polaris 阶段只调用 `polaris_codegraph_explore`。代理确认仓库身份安全后，会在每次代理查询前尝试并至多执行一次有界增量 `codegraph sync`，即使 status 报告零 pending changes 也不跳过；随后执行一次 explore、复查 status，并保证 freshness envelope 位于图内容之前。零 pending changes 不能证明索引已经对应 clean HEAD 或当前分支；阶段没有独立的 status/sync MCP 调用。CodeGraph 永远不是 source of truth：`CURRENT` 只表示 `NON_AUTHORITATIVE_CONTEXT`；`STALE` 与 `UNKNOWN`/`TREAT_AS_STALE` 表示 `NAVIGATION_ONLY`，在使用任何结论前必须完成 envelope 指定的精确源码/Git 回退；`UNAVAILABLE` 表示没有图内容。当前具名文件使用 `READ_SOURCE`，已删除文件使用 `INSPECT_GIT_DIFF`，索引级或不安全结果使用 `SEARCH_SOURCE`。Validation 不调用 CodeGraph，仍以源码、Git、构建、测试、静态检查和 Human Check 为准。
 
 当 status 无法验证但仓库身份安全时，代理仍执行 `polaris_codegraph_explore`，并返回 `UNKNOWN`/`TREAT_AS_STALE`。图只用于导航；在使用任何结论前，必须完成精确源码/Git 回退。
 
 CodeGraph 的安装、初始化、配置、raw MCP 注册、watcher、daemon 与每次全量 `codegraph index` 重建都归仓库所有者，而不是 Polaris；全量重建始终由用户主动执行。Polaris 绝不启动、配置、重新配置、等待或管理这些能力。raw `codegraph_explore` 或 `codegraph explore` 仍可作为带外工具使用，但不能支持 Polaris 的 `CURRENT` 证据。新 record 必须由保留的代理 bundle 与已完成回退投影为 v3；v1/v2 仅供历史读取。CodeGraph 始终可选，永远不是 Workflow 门禁。
 
-协议 `0.1.22` 保持 Workflow `0.1.3`，并新增从 `0.1.21` 出发的显式纯版本迁移；该迁移不清点也不重写 Code Intelligence record v3 证据。协议 `0.1.21` 引入项目级 Polaris CodeGraph 代理、Host Adapter v3 注册和可审计的 record v3；record v1/v2 仍仅作为不可变历史证据读取。
+协议 `0.1.23` 保持 Workflow `0.1.3`，要求每次安全的代理查询前执行一次增量同步尝试，发布 runtime bundle v3，并新增从 `0.1.22` 出发的显式纯版本迁移；该迁移不清点也不重写 Code Intelligence record v3 证据。runtime bundle v1/v2 与 durable record v1/v2 仍仅作为不可变历史证据读取。
 
 ## v0.1 边界
 

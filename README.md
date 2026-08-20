@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> Current protocol version: `0.1.22` (in development); workflow version: `0.1.3`
+> Current protocol version: `0.1.23` (in development); workflow version: `0.1.3`
 
 Polaris is a repo-native engineering workflow for coding agent hosts. It stores requirements, plans, implementation results, independent reviews, validation evidence, and task state in Git, then uses deterministic gates to prevent requirement drift, stale evidence, and agents declaring their own work complete.
 
@@ -91,13 +91,13 @@ polaris code-intelligence add codegraph --repo .
 
 Run these commands from the target repository as appropriate. `codegraph init` creates the `.codegraph/` marker; without it Polaris uses source and Git directly and creates no stage record. Vendoring registers the project-scoped `polaris-codegraph` proxy in `.codex/config.toml` and `.mcp.json` without replacing unrelated settings. The host may require project trust or first-use approval; that approval remains the user's decision.
 
-Polaris stages call only `polaris_codegraph_explore`. The proxy checks status and automatically runs at most one bounded incremental `codegraph sync` when pending changes exist, then runs one explore, rechecks status, and returns a freshness envelope before graph content. There is no separate stage status/sync MCP call. `CURRENT` means `NON_AUTHORITATIVE_CONTEXT`; `STALE` and `UNKNOWN`/`TREAT_AS_STALE` mean `NAVIGATION_ONLY` and require the exact source/Git fallback before a conclusion is used; `UNAVAILABLE` means no graph. A current named file uses `READ_SOURCE`, a deleted file uses `INSPECT_GIT_DIFF`, and an index-wide or unsafe result uses `SEARCH_SOURCE`. Validation remains graph-free and relies on source, Git, builds, tests, static checks, and Human Checks.
+Polaris stages call only `polaris_codegraph_explore`. After verifying repository identity, the proxy attempts exactly one bounded incremental `codegraph sync` before every proxy query, including when status reports zero pending changes, then runs one explore, rechecks status, and returns a freshness envelope before graph content. Zero pending changes do not prove that the index reflects clean HEAD or the current branch. There is no separate stage status/sync MCP call. CodeGraph is never a source of truth: `CURRENT` means only `NON_AUTHORITATIVE_CONTEXT`; `STALE` and `UNKNOWN`/`TREAT_AS_STALE` mean `NAVIGATION_ONLY` and require the exact source/Git fallback before a conclusion is used; `UNAVAILABLE` means no graph. A current named file uses `READ_SOURCE`, a deleted file uses `INSPECT_GIT_DIFF`, and an index-wide or unsafe result uses `SEARCH_SOURCE`. Validation remains graph-free and relies on source, Git, builds, tests, static checks, and Human Checks.
 
 When status cannot be verified but the project has a safe repository identity, the proxy still calls `polaris_codegraph_explore` and returns `UNKNOWN`/`TREAT_AS_STALE`. The graph remains navigation-only: use the exact source/Git fallback before any conclusion.
 
 The repository owner, not Polaris, owns CodeGraph installation, initialization, configuration, raw MCP registration, watcher, daemon, and every full `codegraph index` rebuild. Polaris never starts, configures, reconfigures, waits for, or manages them. Raw `codegraph_explore` or `codegraph explore` remains available out-of-band but cannot back `CURRENT` Polaris evidence. New records are v3 projections of the retained proxy bundle and completed fallbacks; v1/v2 are historical only. CodeGraph remains optional and never becomes a workflow gate.
 
-Protocol `0.1.22` keeps Workflow at `0.1.3` and adds an explicit version-only migration from `0.1.21` that neither inventories nor rewrites Code Intelligence record v3 evidence. Protocol `0.1.21` introduced the project-scoped Polaris CodeGraph proxy, host adapter v3 registration, and auditable record v3; record v1 and v2 remain immutable historical evidence only.
+Protocol `0.1.23` keeps Workflow at `0.1.3`, makes one incremental sync mandatory before each safe proxy query, publishes runtime bundle v3, and adds an explicit version-only migration from `0.1.22` that neither inventories nor rewrites Code Intelligence record v3 evidence. Runtime bundle v1/v2 and durable record v1/v2 remain readable as immutable historical evidence.
 
 ## v0.1 scope
 

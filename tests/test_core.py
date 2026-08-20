@@ -378,6 +378,8 @@ class PolarisCoreTests(unittest.TestCase):
         })
         responses = [
             subprocess.CompletedProcess([], 0, status, ""),
+            subprocess.CompletedProcess([], 0, "synced\n", ""),
+            subprocess.CompletedProcess([], 0, status, ""),
             subprocess.CompletedProcess([], 0, "graph context\n", ""),
             subprocess.CompletedProcess([], 0, status, ""),
         ]
