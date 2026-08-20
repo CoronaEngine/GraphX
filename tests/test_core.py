@@ -11,14 +11,17 @@ import sys
 import tempfile
 import unittest
 from collections.abc import Iterator
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(SCRIPTS))
+
+import polaris_cli  # noqa: E402
 
 from init_project import initialize as init_project  # noqa: E402
 from init_task import initialize as init_task  # noqa: E402
@@ -146,6 +149,83 @@ class PolarisCoreTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_cli_exposes_only_user_commands_and_forwards_to_locked_scripts(self) -> None:
+        """统一 CLI 只暴露用户命令，并透传参数、仓库根和退出码。"""
+        self.assertEqual(
+            {command: spec[0] for command, spec in polaris_cli.COMMANDS.items()},
+            {
+                "vendor": "vendor_project.py",
+                "init-project": "init_project.py",
+                "init-task": "init_task.py",
+                "doctor": "doctor_project.py",
+                "validate-project": "validate_project.py",
+                "validate-task": "validate_task.py",
+                "recover": "recover_task.py",
+                "migrate": "migrate_project.py",
+            },
+        )
+        completed = subprocess.CompletedProcess([], 7)
+        with mock.patch.object(
+            polaris_cli.subprocess, "run", return_value=completed
+        ) as invoked:
+            result = polaris_cli.dispatch("doctor", ["--json"], ROOT / "tests")
+        self.assertEqual(result, 7)
+        invoked.assert_called_once_with(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "doctor_project.py"),
+                "--json",
+                "--repo",
+                str(ROOT),
+            ]
+        )
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(polaris_cli.main(["--help"]), 0)
+        for command in polaris_cli.COMMANDS:
+            self.assertIn(command, output.getvalue())
+        self.assertNotIn("transition-task", output.getvalue())
+        self.assertNotIn("code-intelligence", output.getvalue())
+
+    def test_cli_preserves_explicit_locations_and_reports_dispatch_errors(self) -> None:
+        """显式 --repo/--source 不被改写，定位失败与中断使用固定退出码。"""
+        explicit_repo = ["--repo=" + str(ROOT), "--json"]
+        script, forwarded = polaris_cli._resolve_script(
+            "doctor", explicit_repo, self.repo
+        )
+        self.assertEqual(script, ROOT / "scripts" / "doctor_project.py")
+        self.assertEqual(forwarded, explicit_repo)
+
+        explicit_source = [str(self.repo), "--source", str(ROOT), "--force"]
+        script, forwarded = polaris_cli._resolve_script(
+            "vendor", explicit_source, self.repo
+        )
+        self.assertEqual(script, ROOT / "scripts" / "vendor_project.py")
+        self.assertEqual(forwarded, explicit_source)
+
+        errors = io.StringIO()
+        with tempfile.TemporaryDirectory(prefix="polaris-no-protocol-") as empty:
+            with redirect_stderr(errors):
+                self.assertEqual(polaris_cli.main(["doctor", "--repo", empty]), 2)
+        self.assertIn("cannot locate tools/polaris", errors.getvalue())
+
+        with mock.patch.object(
+            polaris_cli, "dispatch", side_effect=KeyboardInterrupt
+        ):
+            self.assertEqual(polaris_cli.main(["doctor"]), 130)
+
+    def test_cli_packaging_declares_no_runtime_dependencies(self) -> None:
+        """pip console script 使用独立分发名，且不声明运行时第三方依赖。"""
+        metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('name = "corona-polaris"', metadata)
+        self.assertIn(
+            'version = "' + (ROOT / "VERSION").read_text().strip() + '"',
+            metadata,
+        )
+        self.assertIn("dependencies = []", metadata)
+        self.assertIn('polaris = "polaris_cli:main"', metadata)
 
     @property
     def task(self) -> Path:
