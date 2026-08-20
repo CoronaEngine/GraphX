@@ -44,6 +44,8 @@ def _option_value(arguments: Sequence[str], option: str) -> str | None:
     value = None
     prefix = option + "="
     for index, argument in enumerate(arguments):
+        if argument == "--":
+            break
         if argument == option:
             if index + 1 >= len(arguments):
                 value = None
@@ -66,7 +68,14 @@ def _protocol_script(root: Path, script_name: str) -> tuple[Path, Path] | None:
     if vendored_script.is_file() and (root / "tools" / "polaris" / "VERSION").is_file():
         return vendored_script, root
     source_script = root / "scripts" / script_name
-    if source_script.is_file() and (root / "VERSION").is_file():
+    source_markers = (
+        root / "VERSION",
+        root / "polaris_cli.py",
+        root / "pyproject.toml",
+        root / "workflow" / "migrations.json",
+        source_script,
+    )
+    if all(marker.is_file() for marker in source_markers):
         vendored_root = root.parent.name == "tools" and root.name == "polaris"
         repository = root.parent.parent if vendored_root else root
         return source_script, repository

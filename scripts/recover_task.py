@@ -134,7 +134,7 @@ def recover(repo: Path, task_id: str) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("task_id")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--json", action="store_true")

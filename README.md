@@ -87,7 +87,7 @@ v0.1 明确不实现：
 - `0.1.16` 标准库薄 CLI：仅分发 `vendor`、`init-project`、`init-task`、`doctor`、`validate-project`、`validate-task`、`recover` 和 `migrate`
 - Failed Exploration 的任务内记录、项目级提升和按模块检索
 - 固定字段的对话检查点、UI 面板优先/文本回退的澄清问题、Work Item 预览确认和验收占位符门禁
-- 79 个带场景日志的自动化测试；GitHub Actions 使用 Python 3.10 在 Linux、Windows 和 macOS 运行，symlink 安全场景通过跨平台模拟覆盖
+- 89 个带场景日志的自动化测试；GitHub Actions 使用 Python 3.10 在 Linux、Windows 和 macOS 运行，symlink 安全场景通过跨平台模拟覆盖
 
 仍在建设：
 
@@ -253,7 +253,7 @@ polaris validate-task TASK-0001 --repo .
 - `1`：规则或门禁失败
 - `2`：输入、环境或系统错误
 
-所有脚本都支持 `--json`，便于由 Agent 或自动化程序读取结果。
+八个公开 CLI 命令都支持 `--json`，便于由 Agent 或自动化程序读取结果。
 
 需要一次查看全部健康状态时运行 Doctor：
 

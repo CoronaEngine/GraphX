@@ -153,7 +153,7 @@ def validate(repo: Path) -> dict[str, object]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()

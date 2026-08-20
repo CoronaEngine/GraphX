@@ -464,7 +464,7 @@ def vendor(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("target", type=Path)
     parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--force", action="store_true")

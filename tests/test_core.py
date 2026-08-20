@@ -239,6 +239,288 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertEqual(script, ROOT / "scripts" / "vendor_project.py")
         self.assertEqual(forwarded, repeated_source)
 
+    def test_cli_does_not_execute_generic_ancestor_script_as_polaris_source(self) -> None:
+        """仅含通用 VERSION 和同名脚本的祖先目录不是 Polaris 源。"""
+        false_root = self.repo / "generic-parent"
+        nested = false_root / "src" / "nested"
+        script = false_root / "scripts" / "doctor_project.py"
+        sentinel = false_root / "trap-executed"
+        nested.mkdir(parents=True)
+        script.parent.mkdir()
+        (false_root / "VERSION").write_text("unrelated\n", encoding="utf-8")
+        script.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(sentinel)!r}).write_text('executed', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "polaris_cli.py"), "doctor"],
+            cwd=nested,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(sentinel.exists())
+        self.assertIn("cannot locate tools/polaris", result.stderr)
+
+    def test_cli_does_not_resolve_incomplete_vendored_tree_as_source(self) -> None:
+        """缺少完整源标记的 tools/polaris 目录不能作为 --source。"""
+        damaged = self.repo / "tools" / "polaris"
+        script = damaged / "scripts" / "vendor_project.py"
+        sentinel = damaged / "trap-executed"
+        target = self.repo / "vendor-target"
+        script.parent.mkdir(parents=True)
+        target.mkdir()
+        (damaged / "VERSION").write_text("0.1.16\n", encoding="utf-8")
+        script.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(sentinel)!r}).write_text('executed', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "polaris_cli.py"),
+                "vendor",
+                str(target),
+                "--source",
+                str(damaged),
+            ],
+            cwd=self.repo,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(sentinel.exists())
+        self.assertIn("cannot locate a Polaris protocol source", result.stderr)
+
+    def test_cli_rejects_abbreviated_locations_for_all_public_commands(self) -> None:
+        """八个公开脚本都拒绝位置选项缩写，且不写入推断仓库。"""
+        inferred = self.repo / "inferred-repository"
+        inferred.mkdir()
+        run_git(inferred, "init", "-q")
+        run_git(inferred, "config", "user.email", "polaris@test.local")
+        run_git(inferred, "config", "user.name", "Polaris Test")
+        run_git(inferred, "commit", "-q", "--allow-empty", "-m", "seed")
+        init_project(inferred, "inferred-project")
+        init_task(inferred, "TASK-9000", "R1")
+        vendor(ROOT, inferred, False)
+        run_git(inferred, "add", ".")
+        run_git(inferred, "commit", "-q", "-m", "initialize inferred repository")
+
+        vendor_target = self.repo / "abbreviated-vendor-target"
+        vendor_target.mkdir()
+        run_git(vendor_target, "init", "-q")
+        invocations = {
+            "vendor": [str(vendor_target), "--sou", str(ROOT)],
+            "init-project": ["wrong-project", "--rep", str(self.repo)],
+            "init-task": ["TASK-9001", "--rep", str(self.repo)],
+            "doctor": ["--rep", str(self.repo)],
+            "validate-project": ["--rep", str(self.repo)],
+            "validate-task": ["TASK-9000", "--rep", str(self.repo)],
+            "recover": ["TASK-9000", "--rep", str(self.repo)],
+            "migrate": ["--rep", str(self.repo)],
+        }
+
+        results = {
+            command: subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "polaris_cli.py"),
+                    command,
+                    *arguments,
+                ],
+                cwd=inferred,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+            )
+            for command, arguments in invocations.items()
+        }
+
+        self.assertFalse((vendor_target / "tools" / "polaris").exists())
+        self.assertFalse(
+            (inferred / ".polaris" / "tasks" / "TASK-9001").exists()
+        )
+        for command, result in results.items():
+            with self.subTest(command=command):
+                self.assertEqual(result.returncode, 2, result.stderr)
+                abbreviation = "--sou" if command == "vendor" else "--rep"
+                self.assertIn(f"unrecognized arguments: {abbreviation}", result.stderr)
+
+    def test_cli_location_missing_values_and_sentinels_fail_without_writes(self) -> None:
+        """位置选项缺值或位于 -- 之后时安全失败，不执行其他仓库脚本。"""
+        vendor(ROOT, self.repo, False)
+        nested = self.repo / "src" / "nested"
+        nested.mkdir(parents=True)
+        missing_vendor_target = self.repo / "missing-vendor-target"
+        missing_vendor_target.mkdir()
+        run_git(missing_vendor_target, "init", "-q")
+
+        missing_repo = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "polaris_cli.py"),
+                "init-task",
+                "TASK-9002",
+                "--repo",
+            ],
+            cwd=nested,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+        missing_source = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "polaris_cli.py"),
+                "vendor",
+                str(missing_vendor_target),
+                "--source",
+            ],
+            cwd=nested,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+
+        trap_repo = self.repo / "trap-repository"
+        trap_repo_script = trap_repo / "tools" / "polaris" / "scripts" / "doctor_project.py"
+        trap_repo_sentinel = trap_repo / "executed"
+        trap_repo_script.parent.mkdir(parents=True)
+        (trap_repo / "tools" / "polaris" / "VERSION").write_text(
+            "0.1.16\n", encoding="utf-8"
+        )
+        trap_repo_script.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(trap_repo_sentinel)!r}).write_text('executed', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        sentinel_repo = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "polaris_cli.py"),
+                "doctor",
+                "--",
+                "--repo",
+                str(trap_repo),
+            ],
+            cwd=nested,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+
+        trap_source = self.repo / "trap-source"
+        trap_source_script = trap_source / "scripts" / "vendor_project.py"
+        trap_source_sentinel = trap_source / "executed"
+        trap_source_script.parent.mkdir(parents=True)
+        (trap_source / "workflow").mkdir()
+        for marker in ("VERSION", "polaris_cli.py", "pyproject.toml"):
+            (trap_source / marker).write_text("marker\n", encoding="utf-8")
+        (trap_source / "workflow" / "migrations.json").write_text(
+            "[]\n", encoding="utf-8"
+        )
+        trap_source_script.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(trap_source_sentinel)!r}).write_text('executed', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        sentinel_vendor_target = self.repo / "sentinel-vendor-target"
+        sentinel_vendor_target.mkdir()
+        run_git(sentinel_vendor_target, "init", "-q")
+        sentinel_source = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "polaris_cli.py"),
+                "vendor",
+                str(sentinel_vendor_target),
+                "--",
+                "--source",
+                str(trap_source),
+            ],
+            cwd=nested,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+
+        self.assertEqual(missing_repo.returncode, 2, missing_repo.stderr)
+        self.assertFalse((self.repo / ".polaris" / "tasks" / "TASK-9002").exists())
+        self.assertEqual(missing_source.returncode, 2, missing_source.stderr)
+        self.assertFalse((missing_vendor_target / "tools" / "polaris").exists())
+        self.assertEqual(sentinel_repo.returncode, 2, sentinel_repo.stderr)
+        self.assertFalse(trap_repo_sentinel.exists())
+        self.assertEqual(sentinel_source.returncode, 2, sentinel_source.stderr)
+        self.assertFalse(trap_source_sentinel.exists())
+        self.assertFalse((sentinel_vendor_target / "tools" / "polaris").exists())
+
+    def test_cli_repeated_full_locations_use_last_value_in_child_process(self) -> None:
+        """重复完整 --repo/--source 在分发器和子脚本中均以最后值为准。"""
+        vendor(ROOT, self.repo, False)
+        other = self.repo / "other-repository"
+        other.mkdir()
+        run_git(other, "init", "-q")
+        run_git(other, "config", "user.email", "polaris@test.local")
+        run_git(other, "config", "user.name", "Polaris Test")
+        run_git(other, "commit", "-q", "--allow-empty", "-m", "seed")
+        init_project(other, "other-project")
+        vendor(ROOT, other, False)
+
+        repeated_repo = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "polaris_cli.py"),
+                "init-task",
+                "TASK-9003",
+                "--repo",
+                str(other),
+                "--repo",
+                str(self.repo),
+            ],
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+
+        vendor_target = self.repo / "repeated-source-target"
+        vendor_target.mkdir()
+        run_git(vendor_target, "init", "-q")
+        repeated_source = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "polaris_cli.py"),
+                "vendor",
+                str(vendor_target),
+                "--source",
+                str(self.repo / "not-a-source"),
+                "--source",
+                str(ROOT),
+            ],
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+
+        self.assertEqual(repeated_repo.returncode, 0, repeated_repo.stderr)
+        self.assertTrue(
+            (self.repo / ".polaris" / "tasks" / "TASK-9003").is_dir()
+        )
+        self.assertFalse((other / ".polaris" / "tasks" / "TASK-9003").exists())
+        self.assertEqual(repeated_source.returncode, 0, repeated_source.stderr)
+        self.assertEqual(
+            (vendor_target / "tools" / "polaris" / "VERSION").read_text().strip(),
+            "0.1.16",
+        )
+
     def test_cli_packaging_declares_no_runtime_dependencies(self) -> None:
         """pip console script 使用独立分发名，且不声明运行时第三方依赖。"""
         metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")

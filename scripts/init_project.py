@@ -60,7 +60,7 @@ def initialize(repo: Path, project_id: str) -> dict[str, str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("project_id")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--json", action="store_true")

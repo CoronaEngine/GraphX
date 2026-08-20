@@ -93,7 +93,7 @@ def initialize(repo: Path, task_id: str, rigor: str) -> dict[str, str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("task_id")
     parser.add_argument("--rigor", choices=["R0", "R1", "R2"], default="R1")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
