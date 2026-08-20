@@ -1481,11 +1481,50 @@ class PolarisCoreTests(unittest.TestCase):
             for item in adapter["files"]:
                 self.assertTrue((self.repo / item["target"]).is_file())
         self.assertTrue((self.repo / "tools" / "polaris" / "VERSION").is_file())
+        self.assertEqual(
+            (self.repo / "tools" / "polaris" / "pyproject.toml").read_bytes(),
+            (ROOT / "pyproject.toml").read_bytes(),
+        )
+        self.assertEqual(
+            (self.repo / "tools" / "polaris" / "polaris_cli.py").read_bytes(),
+            (ROOT / "polaris_cli.py").read_bytes(),
+        )
+        manifest = read_json(self.repo / "tools" / "polaris" / "install-manifest.json")
+        managed = {entry["path"] for entry in manifest["managed_files"]}
+        self.assertIn("tools/polaris/pyproject.toml", managed)
+        self.assertIn("tools/polaris/polaris_cli.py", managed)
         self.assertTrue(
             (self.repo / "tools" / "polaris" / "hosts" / "codex" / "adapter.json").is_file()
         )
         result = validate_project(self.repo)
         self.assertEqual(result["active_tasks"], 1)
+
+    def test_cli_runs_vendored_protocol_from_nested_and_explicit_repositories(self) -> None:
+        """CLI 从子目录或 --repo 定位 vendored 协议，并保持原脚本 JSON 语义。"""
+        vendor(ROOT, self.repo, False)
+        nested = self.repo / "src" / "nested path"
+        nested.mkdir(parents=True)
+        command = [
+            sys.executable,
+            str(ROOT / "polaris_cli.py"),
+            "validate-project",
+            "--json",
+        ]
+        nested_result = subprocess.run(
+            command, cwd=nested, text=True, encoding="utf-8", capture_output=True
+        )
+        self.assertEqual(nested_result.returncode, 0, nested_result.stderr)
+        self.assertEqual(json.loads(nested_result.stdout)["status"], "PASS")
+
+        explicit_result = subprocess.run(
+            [*command, "--repo", str(self.repo)],
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+        self.assertEqual(explicit_result.returncode, 0, explicit_result.stderr)
+        self.assertEqual(json.loads(explicit_result.stdout)["status"], "PASS")
 
     def test_doctor_reports_a_healthy_vendored_project_without_writing(self) -> None:
         """Doctor 聚合健康检查并通过报告 Schema，且诊断前后项目文件完全不变。"""
