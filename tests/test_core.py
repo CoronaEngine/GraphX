@@ -1439,6 +1439,28 @@ class PolarisCoreTests(unittest.TestCase):
         self.assertIn('dependencies = []', metadata)
         self.assertIn('polaris = "polaris_cli:main"', metadata)
 
+    def test_0123_authorities_publish_one_version_only_adjacent_migration(self) -> None:
+        self.assertEqual((ROOT / "VERSION").read_text(encoding="utf-8").strip(), "0.1.23")
+        self.assertIn('version = "0.1.23"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        for relative in [
+            "templates/project.json",
+            "templates/task/state.json",
+            "templates/task-sources/state.json",
+        ]:
+            self.assertEqual(read_json(ROOT / relative)["polaris_version"], "0.1.23")
+        step = read_json(ROOT / "workflow/migrations.json")["steps"][-1]
+        self.assertEqual(step, {
+            "migration_id": "0.1.22-to-0.1.23",
+            "from_polaris_version": "0.1.22",
+            "to_polaris_version": "0.1.23",
+            "from_workflow_version": "0.1.3",
+            "to_workflow_version": "0.1.3",
+            "project_strategy": "replace_version",
+            "task_strategy": "append_version_event",
+        })
+        workflow = read_json(ROOT / "workflow/default-workflow.json")
+        self.assertEqual(workflow["workflow_version"], "0.1.3")
+
     def test_artifact_protocol_rejects_escape_and_registered_hash_drift(self) -> None:
         """共享 artifact 引用层拒绝越界路径和注册后的内容漂移。"""
         with self.assertRaises(RuleFailure):
@@ -2608,6 +2630,19 @@ class PolarisCoreTests(unittest.TestCase):
     def test_0122_version_only_migration_rejects_workflow_change(self) -> None:
         self.set_protocol_version("0.1.21")
         with protocol_source_at("0.1.22") as source:
+            migrations_path = source / "workflow/migrations.json"
+            migrations = read_json(migrations_path)
+            migrations["steps"][-1]["to_workflow_version"] = "0.1.4"
+            write_json_atomic(migrations_path, migrations)
+            vendor(source, self.repo, False)
+        with self.assertRaisesRegex(
+            RuleFailure, "workflow migration requires replacement"
+        ):
+            migrate_project(self.repo)
+
+    def test_0123_version_only_migration_rejects_workflow_change(self) -> None:
+        self.set_protocol_version("0.1.22")
+        with protocol_source_at("0.1.23") as source:
             migrations_path = source / "workflow/migrations.json"
             migrations = read_json(migrations_path)
             migrations["steps"][-1]["to_workflow_version"] = "0.1.4"

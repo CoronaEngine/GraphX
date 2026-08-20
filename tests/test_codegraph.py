@@ -2534,6 +2534,28 @@ else:
         with self.assertRaisesRegex(RuleFailure, "inventory changed"):
             migrate_project(self.repo)
 
+    def test_0123_migration_preserves_v3_code_intelligence_records(self) -> None:
+        recorded, _query = self.record_current_v3_fixture()
+        actual_path = (
+            self.repo
+            / ".polaris/tasks/TASK-0001/code-intelligence/r001/planning.json"
+        )
+        self.assertEqual(
+            json.loads(actual_path.read_text(encoding="utf-8")), recorded
+        )
+        before = actual_path.read_bytes()
+        self.set_protocol_version("0.1.22")
+
+        with protocol_source_at("0.1.23") as source:
+            vendor(source, self.repo, False)
+        result = migrate_project(self.repo)
+
+        self.assertEqual(result["from"], "0.1.22")
+        self.assertEqual(result["to"], "0.1.23")
+        self.assertEqual(actual_path.read_bytes(), before)
+        migration = json.loads(Path(result["record"]).read_text(encoding="utf-8"))
+        self.assertEqual(migration["retired_code_intelligence_records"], [])
+
     def test_legacy_v1_records_remain_readable_but_cannot_be_written(self) -> None:
         self.initialize_task()
         protocol = importlib.import_module("internal.code_intelligence_protocol")

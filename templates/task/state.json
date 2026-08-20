@@ -1,6 +1,6 @@
 {
     "task_id": "TASK-0001",
-    "polaris_version": "0.1.22",
+    "polaris_version": "0.1.23",
     "workflow_version": "0.1.3",
     "current_revision": 1,
     "status": "DRAFT",
