@@ -3905,6 +3905,66 @@ else:
         self.assertEqual(result["freshness"]["status"], "CURRENT_AT_CHECK")
         self.assertIn("SYNC_ACKNOWLEDGED", result["freshness"]["basis"])
 
+    def test_clean_status_can_force_one_sync_and_recheck(self) -> None:
+        adapter = self.adapter_module()
+        (self.repo / ".codegraph").mkdir()
+        initial = adapter._status_result(
+            self.repo,
+            json.loads(healthy_status(self.repo)),
+            "2026-08-20T00:00:00Z",
+            "a" * 64,
+        )
+        responses = iter(
+            [
+                completed("Synced clean committed changes\n"),
+                completed(healthy_status(self.repo)),
+            ]
+        )
+        calls: list[list[str]] = []
+
+        def runner(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return next(responses)
+
+        result = adapter.synchronize_observed_status(
+            self.repo,
+            load_providers(ROOT)["codegraph"],
+            initial,
+            runner=runner,
+            force_attempt=True,
+        )
+
+        self.assertEqual([call[1] for call in calls], ["sync", "status"])
+        self.assertEqual(result["sync"]["status"], "SUCCESS")
+        self.assertEqual(result["freshness"]["status"], "CURRENT_AT_CHECK")
+        self.assertIn("SYNC_ACKNOWLEDGED", result["freshness"]["basis"])
+
+    def test_forced_sync_rejects_non_boolean_policy_without_running_codegraph(self) -> None:
+        adapter = self.adapter_module()
+        (self.repo / ".codegraph").mkdir()
+        initial = adapter._status_result(
+            self.repo,
+            json.loads(healthy_status(self.repo)),
+            "2026-08-20T00:00:00Z",
+            "a" * 64,
+        )
+
+        result = adapter.synchronize_observed_status(
+            self.repo,
+            load_providers(ROOT)["codegraph"],
+            initial,
+            runner=lambda *_args, **_kwargs: self.fail(
+                "invalid policy must not run CodeGraph"
+            ),
+            force_attempt="yes",
+        )
+
+        self.assertEqual(result["freshness"]["status"], "NOT_VERIFIED")
+        self.assertEqual(result["sync"]["status"], "SKIPPED")
+        self.assertIsNone(result["post_sync_status"])
+
     def test_pending_changes_still_sync_once_with_an_index_stale_reason(self) -> None:
         _, sync_if_needed = self.adapter_functions()
         (self.repo / ".codegraph").mkdir()

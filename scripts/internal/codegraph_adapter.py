@@ -823,9 +823,12 @@ def synchronize_observed_status(
     runner: Runner = subprocess.run,
     status_timeout_seconds: float = 15,
     sync_timeout_seconds: float = 120,
+    force_attempt: bool = False,
 ) -> dict[str, Any]:
     """Synchronize one already-observed status at most once, then recheck once."""
     try:
+        if type(force_attempt) is not bool:
+            raise ValueError("CodeGraph forced sync policy must be a boolean")
         status_timeout = _validated_timeout(status_timeout_seconds)
         sync_timeout = _validated_timeout(sync_timeout_seconds)
     except ValueError as error:
@@ -839,7 +842,7 @@ def synchronize_observed_status(
     unavailable = _sync_result("UNAVAILABLE", None, None)
     if initial["status"] == "UNAVAILABLE" or _marker_path(repo, descriptor) is None:
         return {"freshness": initial, "sync": unavailable, "post_sync_status": None}
-    if not initial["needs_sync"]:
+    if not force_attempt and not initial["needs_sync"]:
         return {"freshness": initial, "sync": skipped, "post_sync_status": None}
 
     try:
