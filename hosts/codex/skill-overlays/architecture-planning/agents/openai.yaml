@@ -1,7 +1,0 @@
-interface:
-  display_name: "Architecture Planning"
-  short_description: "Plan a scoped engineering change"
-  default_prompt: "Use $architecture-planning to plan this frozen Polaris Work Item."
-
-policy:
-  allow_implicit_invocation: false

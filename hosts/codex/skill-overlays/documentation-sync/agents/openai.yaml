@@ -1,7 +1,0 @@
-interface:
-  display_name: "Documentation Sync"
-  short_description: "Finish Implementer documentation sync"
-  default_prompt: "Use $documentation-sync to continue the Polaris Implementer task and reconcile project documentation."
-
-policy:
-  allow_implicit_invocation: false

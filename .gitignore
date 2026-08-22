@@ -4,9 +4,9 @@ __pycache__/
 .vscode/
 .pytest_cache/
 .coverage
+htmlcov/
 build/
 dist/
 *.egg-info/
-.transition.lock
-.polaris-host-smoke/
-.polaris/tasks/*/runtime/
+.superpowers/
+.polaris/
