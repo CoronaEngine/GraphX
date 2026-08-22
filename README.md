@@ -1,5 +1,7 @@
 # Polaris
 
+[简体中文](README.zh-CN.md) | English
+
 > Clean-slate architecture phase. The new runtime is not implemented or usable yet.
 
 Polaris is a controlled Agent Harness for one long-running software-engineering task.
