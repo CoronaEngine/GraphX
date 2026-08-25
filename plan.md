@@ -1,661 +1,859 @@
-# Polaris Clean-Slate 实施计划
+# Polaris 长任务可靠性实施计划
 
-> 状态：Architecture approved; implementation not started
->
-> 产品形态：单任务、前台运行的受控 Agent Harness
->
-> 核心目标：让 Agent 能够稳定、正确、可恢复地执行长时间软件工程任务
->
-> 兼容策略：不兼容旧 Polaris，不提供旧任务、旧协议或旧版本迁移
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-## 1. 产品定义
+**Goal:** 构建一个面向单个长时间软件工程任务的受控 Agent Harness，使任务在上下文增长、进程中断、工作区变化、工具失败和模型过早宣布完成时，仍能稳定、正确、可恢复地执行。
 
-Polaris 是围绕一个长任务运行的确定性监督器。它控制：
+**Architecture:** Polaris 采用路线 C：不把能力做成提示词集合或 Codex 外层补丁，而是由独立 Controller 掌握模型调用、上下文投影、工具执行、状态持久化、恢复和完成权限。第一条实现纵切面先证明主动 Context Working Set 的价值，随后补齐 Task Contract、Observation Ledger、Action Boundary 和 Independent Verifier，形成完整闭环。
 
-- 每次模型调用前构造什么 Context View；
-- 模型提出的动作是否允许执行；
-- 工具结果如何登记、持久化和恢复；
-- 何时建立 durability checkpoint；
-- 崩溃、上下文压缩或会话中断后如何继续；
-- 任务何时有资格进入独立验证；
-- 谁可以宣布任务完成。
+**Tech Stack:** Python 3.12、标准库 dataclasses/json/pathlib、file-based storage、OpenAI Python SDK、pytest、pytest-asyncio、Hypothesis、uv；所有依赖写入 pyproject.toml 并锁定到 uv.lock。
 
-模型负责语义工作：理解需求和代码、形成假设、选择方案、编写修改、分析失败并提出下一动作。
+**Spec:** 本文件同时是 Polaris 的产品规格、架构权威与分阶段实施计划。
 
-Polaris 负责事实、资源和生命周期：任务合同、运行状态、上下文路由、工具边界、provenance、checkpoint、恢复和完成门禁。
+## Global Constraints
 
-一句话定义：
+- 只优化一个结果：一个长时间软件工程任务的正确完成率。
+- 第一版仅支持 macOS、一个可信本地仓库、一个活动任务、一个前台 Controller 和 OpenAI 一个模型提供方。
+- 不兼容旧 Polaris 的任务、协议、命令、Skills、Schemas、目录或迁移。
+- 模型只能提出语义动作；只有 Controller 可以执行工具、修改机械状态和写入 DONE。
+- 所有 mutation 串行执行；每次 mutation 后、下次模型调用前必须建立耐久 Action Boundary。
+- 每次模型请求都从权威状态重新构建 Context View，不把追加式聊天记录当作运行时上下文模型。
+- 可变仓库观察必须绑定 provenance 和 version identity；旧观察不得作为当前事实恢复。
+- eviction、compaction、暂停和退出前，必须持久化 dirty 且难以恢复的关键语义。
+- 任何状态转换、恢复分支、action gate、context routing 和 completion gate 都必须有测试。
+- 第一版不引入数据库服务、向量库、知识图谱、队列、daemon、scheduler、Dashboard、TUI、IDE、多任务、多 Agent 或插件系统。
+- 没有 benchmark 证据的复杂机制不进入第一版。
 
-> **Polaris 是一个为单个长任务维护可行动状态、受控上下文和可验证完成条件的 Agent Harness。**
+---
 
-## 2. 唯一目标与成功含义
+## 1. 决策背景：Codex 已有能力与 Polaris 的边界
 
-Polaris 的唯一产品目标是提高长任务的正确完成率。
+Polaris 不以“Codex 完全没有长任务能力”为前提。当前 Codex 已经具备：
 
-“稳定、正确执行”至少包含：
+- 持久化 Goal、token budget、自动续跑和任务恢复；
+- token 阈值、模型切换、用户请求等触发的 compaction；
+- 本地或服务端摘要，以及 compaction 前后 hook；
+- 工具输出截断和有限的上下文容量保护；
+- World State 的结构化快照与增量注入；
+- rollout、线程历史和工具事件的持久化。
 
-1. **合同不漂移**：目标、范围和硬约束不会被对话摘要或模型自行修改。
-2. **状态不丢失**：任一已完成外部动作和下一动作在进入下一轮前已经持久化。
-3. **上下文不污染**：模型只看到当前动作需要的高密度 Working Set。
-4. **恢复不陈旧**：源码和工具观察绑定版本身份；恢复时能够区分历史内容与当前内容。
-5. **失败有边界**：相同前置条件下的同一失败动作不会无界重复。
-6. **Mutation 可解释**：每个工作区修改都有动作、输入、输出和前后版本。
-7. **完成不自证**：执行模型只能提出完成候选，不能直接写入终态。
-8. **中断可恢复**：进程退出后无需依赖旧聊天即可继续。
+因此，Polaris 不重复实现“更长的聊天记录”“另一种 Goal 文本”或“context 快满时做摘要”。Polaris 只针对当前公开实现中仍不具备通用、机械保证的部分：
 
-任何不能直接改善上述性质，或无法通过 benchmark 证明价值的机制，不进入第一版。
+1. **弱结构任务契约**：Codex Goal 主要是自由文本 objective，没有独立的 scope、hard constraints、acceptance criteria、revision 和证据失效关系。
+2. **缺少主动语义维护**：compaction 主要由容量和运行事件触发，不会在 context 尚未接近上限时持续清理已过期、已取代或低价值内容。
+3. **缺少通用 provenance/recoverability**：被截断或摘要的信息通常没有统一的 source、version、content hash、恢复配方和恢复成本。
+4. **缺少 stale-safe fault-in**：文件修改后，旧观察仍可能以文本存在；没有通用机制保证恢复的是指定历史版本或当前版本。
+5. **缺少动作感知的上下文路由**：没有按当前 read/edit/test/review 动作构造最小任务知识集合的通用策略。
+6. **缺少 compaction 前语义落盘协议**：hook 存在，但 root cause、decision、invariant、blocker 等关键语义没有内置 dirty-state flush 保证。
+7. **摘要无法机械验证**：多次摘要可能漂移，摘要事实通常没有逐项绑定原始证据。
+8. **缺少通用耐久 mutation 生命周期**：没有覆盖所有有副作用工具的 PREPARED、RUNNING、SUCCEEDED、FAILED、AMBIGUOUS 协议及恢复 reconciliation。
+9. **完成仍主要由执行模型触发**：Codex 倡导 evidence-based completion，但 Goal complete 接口本身不要求独立 Verifier 提交结构化证据。
+10. **缺少机械失败熔断**：相同前置条件下的相同失败没有统一 fingerprint 门禁。
 
-## 3. 第一版边界
+这些结论只描述当前可验证的公开行为，不假设未公开 hosted backend 的内部能力。
 
-### 3.1 必须实现
+## 2. 产品定义与成功标准
 
-- 一个本地仓库中的一个活动任务；
-- 一个前台运行、由 Polaris 控制的模型调用循环；
-- OpenAI 这一个模型提供方，以及一个最小的内部 Model Client 边界；
-- 冻结且可修订的 Task Contract；
-- 原子 Runtime State 和 append-only Action Events；
-- 每轮重新生成的 Context View；
-- recoverability-aware Storage Policy；
-- attention-aware Context Routing；
-- 最小 Tool Gateway；
-- mutation 前门禁和 mutation 后 Action Boundary；
-- provenance、版本身份和 stale recovery 检测；
-- event、state 和 durability checkpoint 三层持久化；
-- 崩溃恢复和 ambiguous mutation 处理；
-- 干净上下文中的独立 Verifier；
-- microbenchmark、trace replay 和端到端长任务 benchmark。
-
-### 3.2 明确不做
-
-- 兼容旧 Polaris 文件、任务、命令、版本或迁移；
-- Codex、Claude Code 等多宿主 Skill 适配；
-- 通用 Agent Runtime、插件市场或任意工具平台；
-- 多任务调度、Task DAG、队列、scheduler 或 daemon；
-- 多项目管理、远程执行、自动 push、merge 或发布；
-- Dashboard、TUI、IDE 或复杂交互界面；
-- 数据库、向量库或知识图谱服务；
-- R0/R1/R2 治理等级；
-- 多阶段 Workflow Skills；
-- Implementation/Review handoff 文件体系；
-- Documentation Sync、Knowledge Delta 或 Failed Exploration 提升流程；
-- 安装清单、vendoring、Doctor 或协议迁移；
-- Windows、macOS、Linux 同时产品化。
-
-第一版只支持 macOS 上的可信本地仓库。可移植性只有在核心机制通过真实 benchmark 后再处理。
-
-## 4. 核心不变量
-
-以下规则必须由代码和测试保证，不能只依赖 prompt：
-
-1. 模型不能直接写 Task Contract、Runtime State 或终态。
-2. 所有有副作用动作由 Polaris 串行执行。
-3. 每次 mutation 后，下一次模型调用前必须形成耐久 Action Boundary。
-4. 多个只读动作只有在目的相同且无副作用时才允许并行。
-5. 所有工具结果必须记录来源、参数、结果和恢复路径。
-6. 引用可变仓库内容时必须记录 source identity 和 version identity。
-7. Dirty semantic state 在 eviction、compaction、暂停或退出前必须落盘。
-8. 相同 action fingerprint 在前置条件不变时，第三次执行前必须触发重复失败门禁。
-9. 进程恢复时不得盲目重放状态未知的 mutation。
-10. 只有 Controller 在 Verifier 通过后可以写入 DONE。
-
-## 5. 总体架构
+Polaris 是围绕一个长任务运行的确定性监督器：
 
 ~~~text
 Human
   ↓
-Task Contract
+Versioned Task Contract
   ↓
 Polaris Controller
   ├── Runtime State / Event Store
-  ├── Context Manager
+  ├── Observation & Artifact Ledger
+  ├── Context Working-Set Manager
   ├── Model Client
-  ├── Action Gate
-  ├── Tool Gateway
+  ├── Action Gate / Tool Gateway
   ├── Checkpoint / Recovery
   └── Independent Verifier
         ↓
 Local Repository + Tests + Git
 ~~~
 
-### 5.1 Task Contract
+模型负责理解、推理、生成方案、编写变更、解释失败和提出下一动作。Polaris 负责事实、资源和生命周期：冻结合同、生成上下文、校验并执行动作、记录版本、恢复中断以及裁决完成。
 
-保存人类意图的唯一权威版本：
+“稳定、正确、可恢复”必须同时满足：
 
-- goal；
-- motivation；
-- scope in/out；
-- hard constraints；
-- acceptance criteria；
-- human-owned decisions；
-- revision。
+1. 合同不漂移：摘要和模型不能静默修改目标、范围或硬约束。
+2. 状态不丢失：外部动作和 next action 在下一轮模型调用前已经持久化。
+3. 上下文不污染：模型看到的是当前动作所需的高密度 Working Set。
+4. 恢复不陈旧：观察绑定明确版本；历史版本与当前版本不可混淆。
+5. 失败有边界：相同前提下的同一失败动作最多实际执行两次。
+6. Mutation 可解释：每次修改都有前后 workspace identity、输入、输出和 changed paths。
+7. 完成不自证：执行模型只能提出完成候选，独立 Verifier 决定是否满足合同。
+8. 中断可恢复：进程退出后不依赖旧聊天即可继续或安全停止。
 
-合同冻结后不得静默覆盖。目标、范围、硬约束或验收标准变化时创建新 revision，并使旧完成候选失效。
+## 3. 第一版范围与非目标
 
-### 5.2 Controller
+第一版必须交付：
 
-拥有执行循环和状态转换。它接收模型动作，执行门禁，调用工具，持久化事实，并决定继续、等待、验证或终止。
+- 冻结且可修订的 Task Contract；
+- append-only Action Event 与原子 Runtime State；
+- content-addressed Artifact Store；
+- 带 provenance、version 和 recoverability 的 Observation Ledger；
+- 即使 context 未满也会运行的主动 Context Working-Set policy；
+- 最小文件读取、搜索、Patch、Shell、Git Tool Gateway；
+- mutation 前 Action Gate 和 mutation 后 Action Boundary；
+- crash recovery 与 ambiguous mutation reconciliation；
+- 干净上下文中的独立 Verifier；
+- microbenchmark、trace replay、端到端 baseline/full/ablation 比较。
 
-Controller 不承担代码语义判断，也不实现通用任务规划器。
+第一版明确不做：
 
-### 5.3 Context Manager
+- 旧版兼容与迁移；
+- 多模型、多宿主、多任务、多项目和 Task DAG；
+- 自动 push、merge、发布或远程执行；
+- 完整 OS sandbox；
+- 额外 LLM context router；
+- 长期知识库、团队记忆或跨项目个性化；
+- UI、插件市场、安装生态或跨平台产品化。
 
-内部严格分成两层：
+## 4. 核心数据模型
 
-- **Storage Policy**：决定信息是否持久、能否恢复、恢复成本和版本身份。
-- **Attention Policy**：决定当前模型调用应该看到什么、放在哪里以及占用多少预算。
-
-Stored State 不等于 Model-visible State。模型看到的是权威状态生成的临时 projection。
-
-### 5.4 Model Client
-
-只负责：
-
-- 接收构造完成的 Context View；
-- 调用一个具体模型提供方；
-- 返回标准化的模型消息和工具调用；
-- 记录模型、用量、延迟和请求身份。
-
-第一版只有 OpenAI Model Client 这一个实现。该边界用于隔离外部 API，不建设多模型适配平台。
-
-### 5.5 Tool Gateway
-
-第一版仅提供：
-
-- 文件局部读取；
-- 代码或文本搜索；
-- Patch 应用；
-- Shell 命令；
-- Git 状态和 diff 查询。
-
-测试、构建和静态检查通过 Shell 调用现有项目工具。模型不能绕过 Tool Gateway 直接接触文件系统或进程。
-
-### 5.6 State Store
-
-使用普通文件而不是数据库：
+权威数据保存在目标仓库的 .polaris 目录：
 
 ~~~text
 .polaris/
 ├── task.json
 ├── state.json
 ├── events.jsonl
-├── memory/
-├── outputs/
+├── observations.jsonl
+├── artifacts/
+│   └── sha256/
 └── checkpoints/
 ~~~
 
-- task.json：当前冻结 Task Contract。
-- state.json：当前可行动状态的原子 snapshot。
-- events.jsonl：append-only 动作和状态事实。
-- memory/：不可可靠重建或恢复昂贵的语义。
-- outputs/：大型工具输出及其 hash。
-- checkpoints/：阶段性 durability metadata。
+### 4.1 Task Contract
 
-目录和文件只在实际实现需要时创建；不要预先建设模板系统。
+TaskContract 必须包含：
 
-### 5.7 Independent Verifier
+~~~python
+@dataclass(frozen=True)
+class TaskContract:
+    task_id: str
+    revision: int
+    goal: str
+    motivation: str
+    scope_in: tuple[str, ...]
+    scope_out: tuple[str, ...]
+    hard_constraints: tuple[str, ...]
+    acceptance_criteria: tuple[AcceptanceCriterion, ...]
+    human_decisions: tuple[str, ...]
+    supersedes_revision: int | None
+~~~
 
-Verifier 使用冻结合同、最终工作区事实和证据，在干净上下文中运行。它只读审查，不能修改 subject。
+revision 增加时，旧 revision 绑定的 completion candidate 和 verification verdict 自动失效。合同文件只能由 Controller 根据明确用户输入写入。
 
-Verifier 负责：
+### 4.2 Observation 与 Artifact
 
-- 逐项检查 acceptance criteria；
-- 运行或核对确定性证据；
-- 检查越界修改；
-- 检查未解释的工作区变化；
-- 构造关键反例；
-- 输出 PASS 或结构化返工要求。
+~~~python
+class Recoverability(StrEnum):
+    EXACT = "exact"
+    EXPENSIVE = "expensive"
+    POOR = "poor"
 
-Controller 验证 Verifier 输出后才能写入 DONE。
+@dataclass(frozen=True)
+class SourceIdentity:
+    kind: str
+    locator: str
+    content_hash: str
+    workspace_version: str | None
+    observed_at: str
 
-## 6. 受控执行循环
+@dataclass(frozen=True)
+class RecoveryRecipe:
+    method: str
+    arguments: Mapping[str, JSONValue]
+    expected_content_hash: str | None
 
-每轮执行：
+@dataclass(frozen=True)
+class ContextItem:
+    item_id: str
+    kind: str
+    content: str | None
+    artifact_hash: str | None
+    provenance: SourceIdentity
+    recovery: RecoveryRecipe | None
+    recoverability: Recoverability
+    recovery_cost: int
+    freshness: str
+    salience: int
+    phase_tags: tuple[str, ...]
+    action_tags: tuple[str, ...]
+    persistent_pin: bool
+    attention_pin: bool
+    dirty: bool
+    supersedes: tuple[str, ...]
+~~~
+
+Persistent Pin 表示内容必须有耐久 backing；Attention Pin 只表示下一次特定动作必须看见。两者不得合并成一个 pin。
+
+### 4.3 Runtime State 与 Action
+
+~~~python
+class RunStatus(StrEnum):
+    READY = "ready"
+    RUNNING = "running"
+    WAITING = "waiting"
+    VERIFYING = "verifying"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+class ActionStatus(StrEnum):
+    PREPARED = "prepared"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    AMBIGUOUS = "ambiguous"
+
+@dataclass(frozen=True)
+class RuntimeState:
+    state_version: int
+    task_id: str
+    contract_revision: int
+    run_status: RunStatus
+    active_action_id: str | None
+    workspace_version: str
+    blocker: str | None
+    next_action: str | None
+    completion_candidate_id: str | None
+~~~
+
+每个 Action Event 记录 run ID、action ID、action fingerprint、precondition fingerprint、state version、workspace before/after、tool input、result reference、changed paths、recovery status 和 next action。
+
+## 5. Context Working-Set Policy
+
+上下文窗口是临时工作集，不是数据库。Storage Policy 与 Attention Policy 必须独立。
+
+### 5.1 主动维护触发器
+
+Working-Set maintenance 在以下任一事件后运行，不等待 token 接近上限：
+
+- action 完成；
+- workspace version 改变；
+- 新 item supersede 旧 item；
+- phase 或 next action 改变；
+- observation freshness 失效；
+- Context View 预计超过 soft budget；
+- checkpoint、暂停、退出或 compaction 前。
+
+### 5.2 机械策略
+
+处理顺序固定为：
+
+1. flush dirty 且 EXPENSIVE/POOR 的语义项；
+2. 将大型内容写入 Artifact Store，并用 hash reference 替换；
+3. 失效与当前 workspace version 不匹配的当前事实；
+4. 移除已被 supersede 且没有独立历史价值的内容；
+5. 淘汰 EXACT 且恢复便宜的正文，只保留 recovery recipe；
+6. 根据 action tags、path、risk、constraint scope 和 freshness 选择 Foreground Set；
+7. 在 hard token budget 内生成 Context View manifest；
+8. fault-in 时校验 hash，不匹配则返回 STALE，不把内容注入模型。
+
+第一版不调用额外 LLM 评价 relevance。机械排序使用：
+
+~~~text
+keep_score =
+    5 * hard_constraint_match
+  + 4 * active_action_match
+  + 3 * changed_path_match
+  + 3 * poor_recoverability
+  + 2 * explicit_attention_pin
+  + salience
+  - recovery_cost_discount
+  - staleness_penalty
+  - superseded_penalty
+~~~
+
+权重通过 benchmark 调整，不能凭直觉继续增加特征。
+
+### 5.3 Context View 布局
+
+每次请求按固定顺序生成：
+
+1. 当前 Task Contract revision 的相关 projection；
+2. Runtime State、active blocker 和 next action；
+3. 当前动作必须满足的硬约束；
+4. Foreground observations 与必要源码片段；
+5. 最近的有界 causal suffix；
+6. 可恢复内容的 manifest，不注入正文；
+7. 当前可调用工具和输出协议。
+
+任何单项不得超过 10K tokens；整个 View 必须有 hard cap。历史对话只有在它已转化为权威事实或属于有界 causal suffix 时才可进入 View。
+
+## 6. 受控执行与恢复
+
+每轮流程：
 
 ~~~text
 Load authoritative state
-→ Build minimal Context View
+→ Maintain working set
+→ Build Context View
 → Call model
 → Normalize proposed action
-→ Check action gate
-→ Execute tool or control action
-→ Capture provenance and workspace effects
-→ Append event
+→ Validate action gate
+→ Persist PREPARED
+→ Execute tool
+→ Capture output and workspace effects
+→ Persist terminal action event
 → Atomically update state
 → Continue / Wait / Verify
 ~~~
 
-模型输出被归一为四类：
+Action Gate 必须拒绝：
 
-- TOOL：请求文件、搜索、Patch、Shell 或 Git 操作；
-- CHECKPOINT：提交 root cause、约束、不变量、假设或决策理由；
-- ASK_USER：请求必须由人提供的信息或授权；
-- PROPOSE_DONE：提交完成候选。
+- 工作区路径逃逸；
+- 超出 contract scope 的 mutation；
+- 模型观察的 workspace version 与当前版本不同；
+- 上一个 mutation 尚未达到耐久终态；
+- 存在未解决 AMBIGUOUS action；
+- 相同 precondition 下第三次执行相同失败 fingerprint；
+- 未获明确授权的不可逆、凭据、权限或网络副作用。
 
-### 6.1 Action Boundary
+进程在 RUNNING 后中断时，Recovery Reconciler 检查工作区和工具证据：
 
-一次 Action Boundary 至少绑定：
+- 能证明未执行：记录 FAILED/NOT_EXECUTED，允许重新规划；
+- 能证明已完整执行：补写 SUCCEEDED 和 workspace effects；
+- 无法证明：写入 AMBIGUOUS，进入 WAITING，禁止自动 mutation。
 
-- run ID；
-- action ID；
-- action type 和 fingerprint；
-- state version；
-- workspace version before/after；
-- tool input；
-- result、exit code 和 output reference；
-- changed paths；
-- recovery status；
-- next action。
+## 7. 独立完成裁决
 
-有副作用动作一次只执行一个。只读批次可以并行，但必须共享一个明确目的，并分别登记结果。
-
-### 6.2 Action Gate
-
-执行前机械检查：
-
-- 路径是否位于允许仓库；
-- 动作是否超出 Task Contract；
-- 是否触碰高风险或不可逆边界；
-- 模型看到的 workspace version 是否仍然有效；
-- 前一 mutation 是否已经完成持久化；
-- 是否存在 unresolved ambiguous action；
-- 是否在无新条件下重复相同失败动作；
-- 当前动作是否需要 foreground 特定约束。
-
-Action Gate 判断合法性，不判断方案质量。
-
-## 7. Context Management
-
-### 7.1 Context Item
-
-内部 Context Item 至少包含：
-
-- stable ID；
-- kind；
-- content 或 backing reference；
-- provenance；
-- source version；
-- recoverability；
-- recovery cost；
-- freshness；
-- salience；
-- phase/action tags；
-- pin level；
-- dirty flag。
-
-### 7.2 Recoverability
-
-第一版使用三档：
-
-- EXACT：有明确来源和版本，可精确恢复；
-- EXPENSIVE：理论可重建，但需要显著调试或计算；
-- POOR：无法可靠从仓库重新推导。
-
-策略：
+执行模型只能返回 PROPOSE_DONE。Controller 随后：
 
 ~~~text
-EXACT + cheap
-→ aggressive eviction
-
-EXPENSIVE
-→ persist high-density semantic result
-
-POOR + high impact
-→ persistent pin
+Freeze completion candidate
+→ Bind contract revision and workspace version
+→ Run deterministic acceptance evidence
+→ Build clean verifier context
+→ Run read-only independent verifier
+→ PASS or structured corrective actions
 ~~~
 
-### 7.3 Attention Tiers
+VerificationVerdict 必须逐项绑定 acceptance criterion、evidence command、exit/result、artifact hash、contract revision、workspace version 和 final diff hash。
 
-- **Tier 0 — Authoritative Core**：goal、当前相关硬约束、acceptance、active blocker。
-- **Tier 1 — Foreground Set**：当前 action 直接需要的信息。
-- **Tier 2 — Hot Working Set**：近期源码、观察和调试结果。
-- **Tier 3 — Recoverable Cache**：只在需要时 fault-in。
-- **Tier 4 — Archive**：日志、旧证据和历史事件。
+以下任一条件禁止 DONE：
 
-Tier 0 的内容长期存在，但只把与当前 action 相关的 projection 放进模型请求。
+- acceptance criterion 没有证据；
+- evidence 对应旧 contract 或旧 workspace；
+- 存在 blocker、AMBIGUOUS action 或 dirty semantic state；
+- final diff 包含未解释或越界修改；
+- Verifier 返回 reject；
+- Verifier 后工作区再次变化。
 
-### 7.4 Routing
+## 8. 代码结构
 
-机械 routing 优先：
-
-- phase/action tag；
-- changed path；
-- tool type；
-- risk kind；
-- constraint scope；
-- freshness；
-- provenance match。
-
-第一版不增加额外 LLM 调用来选择上下文。语义判断只用于模型在正常执行过程中主动提交的 CHECKPOINT。
-
-### 7.5 Context Pressure
-
-发生上下文压力时：
-
-1. 扫描 Dirty items；
-2. 持久化没有 backing store 的关键语义；
-3. 淘汰 EXACT 且恢复便宜的内容；
-4. 将大型输出替换为引用；
-5. 检查引用是否 stale；
-6. 重新生成最小 Context View。
-
-PreCompact 是最后安全屏障，不是整个 Context Manager。
-
-## 8. 状态、事件与恢复
-
-### 8.1 最小状态
-
-业务状态只保留：
-
-- READY
-- RUNNING
-- WAITING
-- VERIFYING
-- DONE
-- CANCELLED
-
-调查、实现、测试等属于 active action kind，不扩展成治理状态机。
-
-state.json 必须直接回答：
-
-- 当前目标是什么；
-- 当前状态是什么；
-- 当前动作是什么；
-- 已完成的关键 checkpoint 是什么；
-- blocker 是什么；
-- next action 是什么；
-- 当前 workspace version 是什么。
-
-### 8.2 Event Store
-
-每个事件包含连续 sequence、时间、run/action identity、类型和 payload。至少记录：
-
-- run start/resume；
-- model request/result metadata；
-- tool prepared/started/succeeded/failed；
-- workspace changed；
-- semantic checkpoint；
-- user correction；
-- state transition；
-- verification verdict；
-- cancellation。
-
-state snapshot 与事件不一致时，从有效事件重建 state；不得猜测或跳过损坏事件。
-
-### 8.3 Action 生命周期
-
-Mutation 使用：
-
-- PREPARED
-- RUNNING
-- SUCCEEDED
-- FAILED
-- AMBIGUOUS
-
-如果进程在 RUNNING 后中断，恢复时先检查工作区事实：
-
-- 能证明未执行：允许重新执行；
-- 能证明已完成：补写结果；
-- 无法证明：进入 AMBIGUOUS，停止自动 mutation 并请求检查。
-
-不得盲目重放。
-
-### 8.4 Durability
-
-三层持久化：
-
-1. **Action Event**：每次工具调用追加；
-2. **Runtime State**：每个可观测动作后原子替换；
-3. **Durability Checkpoint**：重要语义、阶段变化、高风险修改、上下文压力、暂停或退出时写入。
-
-Git commit 只在项目本身需要阶段 checkpoint 时创建，不是每个 Action Boundary 的默认成本。
-
-## 9. 失败处理
-
-工具或测试失败时：
-
-1. 失败先成为权威事实；
-2. 保存命令、环境、退出码、输出引用和 workspace version；
-3. 判断是否产生新 observation；
-4. 更新假设、next action 或 blocker；
-5. 在条件未变化时阻止第三次相同 action fingerprint。
-
-失败只有三种出口：
-
-- 改变假设后继续；
-- 请求用户或外部条件；
-- 进入 WAITING 并记录 blocker。
-
-不设置通用 FAILED 终态；人工放弃使用 CANCELLED。
-
-## 10. 完成与验证
-
-模型不能直接完成任务：
+在对应任务开始时创建目录，不提前生成空模块：
 
 ~~~text
-PROPOSE_DONE
-→ Freeze completion candidate
-→ Build clean verification context
-→ Run deterministic evidence
-→ Run independent verifier
-→ PASS / return structured corrective action
-~~~
-
-验证结果必须绑定：
-
-- Task Contract revision；
-- workspace version；
-- final diff；
-- acceptance criterion；
-- evidence command/check；
-- result 和 output reference。
-
-任一验收项失败、越界修改、工作区事实变化或证据失效都会返回 RUNNING，并生成明确 next action。
-
-## 11. 安全边界
-
-第一版运行在可信本地仓库，但仍必须：
-
-- 拒绝工作区路径逃逸；
-- 默认拒绝明显不可逆或超范围命令；
-- 对删除、覆盖、权限、凭据和网络副作用设置显式门禁；
-- 不把秘密写入 events、outputs 或模型上下文；
-- 限制单次工具输出大小和运行时间；
-- 记录所有 mutation；
-- 在用户已有无关改动存在时避免混入任务修改。
-
-不建设完整沙箱；安全范围只覆盖实现核心目标所需的本地执行边界。
-
-## 12. 代码边界
-
-计划中的最小结构：
-
-~~~text
+pyproject.toml
 src/polaris/
 ├── contract/
-├── runtime/
+│   ├── model.py
+│   └── store.py
 ├── state/
+│   ├── model.py
+│   ├── event_store.py
+│   ├── state_store.py
+│   └── replay.py
+├── artifacts/
+│   ├── store.py
+│   └── observations.py
 ├── context/
+│   ├── policy.py
+│   ├── router.py
+│   ├── view.py
+│   └── tokens.py
+├── actions/
+│   ├── model.py
+│   ├── gate.py
+│   ├── fingerprint.py
+│   └── recovery.py
 ├── tools/
-└── verification/
-
+│   ├── protocol.py
+│   ├── filesystem.py
+│   ├── patch.py
+│   ├── shell.py
+│   └── git.py
+├── model/
+│   ├── protocol.py
+│   └── openai_client.py
+├── verification/
+│   ├── model.py
+│   ├── evidence.py
+│   └── verifier.py
+└── controller.py
 tests/
-├── unit/
+├── contract/
+├── state/
+├── artifacts/
+├── context/
+├── actions/
+├── tools/
+├── verification/
 ├── traces/
 └── end_to_end/
-
 benchmarks/
 ├── tasks/
 ├── traces/
-└── runner/
+├── runner.py
+└── report.py
 ~~~
 
-只有在对应模块进入当前 milestone 时才创建目录。
+## 9. 实施任务
 
-实现语言为 Python。运行时依赖不再要求标准库-only，但任何依赖必须直接服务模型调用、可靠性或测试，并锁定版本。第一版不引入 Web 框架、ORM、任务队列或向量数据库。
+### Task 1: 建立基线、项目骨架与版本化 Task Contract
 
-## 13. 测试策略
+**Files:**
+- Create: pyproject.toml
+- Create: src/polaris/contract/model.py
+- Create: src/polaris/contract/store.py
+- Create: tests/contract/test_contract_store.py
+- Create: benchmarks/tasks/constraint_recall.json
+- Modify: README.md
+- Modify: README.zh-CN.md
 
-### 13.1 Unit
+**Interfaces:**
+- Produces: TaskContract、AcceptanceCriterion、ContractStore.create、ContractStore.revise、ContractStore.load。
+- Produces: canonical_json(value) -> bytes，供后续 hash 和原子存储复用。
 
-- Task Contract freeze/revision；
-- state 原子写入和 event replay；
-- action lifecycle；
-- action fingerprint 和重复失败门禁；
-- provenance/version identity；
-- Context Item 分类；
-- routing、pin、budget 和 eviction；
-- stale recovery；
-- completion authority；
-- path 和 mutation gate。
+- [ ] **Step 1: 写 Task Contract 失败测试**
 
-### 13.2 Trace Replay
+  覆盖首次创建、冻结字段、revision 单调递增、supersedes_revision、非法直接覆盖、旧 completion binding 失效标记。
 
-用确定性模型和工具替身重放：
+- [ ] **Step 2: 运行测试并确认失败**
 
-- 正常多轮任务；
-- 每个 Action Boundary 注入崩溃；
-- mutation 中断；
-- event 写入中断；
-- state snapshot 损坏；
-- 文件在 eviction 后变化；
-- 上下文压力；
-- 用户中途修改合同；
-- 重复失败；
-- verifier reject 后返工。
+  Run: uv run pytest tests/contract/test_contract_store.py -q
 
-### 13.3 End-to-End
+  Expected: FAIL，因为 polaris.contract 尚不存在。
 
-使用同一模型、工具权限和任务预算比较：
+- [ ] **Step 3: 实现最小模型和原子 ContractStore**
 
-- baseline Agent；
-- Polaris 受控 Agent；
-- 关闭 Context Routing 的 Polaris；
-- 关闭 Recovery Policy 的 Polaris。
+  store.py 使用同目录临时文件、flush、os.fsync 和 os.replace；JSON 使用四空格缩进与稳定 key 排序。任何 revision 必须显式携带用户提供的变更原因。
 
-至少覆盖：
+- [ ] **Step 4: 添加第一个 baseline task**
 
-- 多文件实现任务；
-- 长调试任务；
-- 早期硬约束在后期才相关的任务；
-- 中途进程退出并恢复的任务；
-- 存在误导性旧日志或旧源码的任务；
-- 模型过早宣布完成的任务。
+  constraint_recall.json 包含早期硬约束、长干扰轨迹、最终修改目标和确定性评分规则；baseline runner 暂不实现。
 
-## 14. 第一版指标
+- [ ] **Step 5: 运行测试并提交**
 
-机械指标：
+  Run: uv run pytest tests/contract/test_contract_store.py -q
 
-- Action Boundary 崩溃恢复正确率：100%；
-- Hard Constraint 持久化存活率：100%；
-- stale recovery 检出率：100%；
-- 未经 Verifier 写入 DONE：0；
-- 工作区外 mutation：0；
-- 无新前置条件下同一失败动作执行超过两次：0；
+  Expected: PASS。
+
+  Commit: feat: add versioned task contracts
+
+### Task 2: 实现 append-only Event Store、原子 State Store 与 replay
+
+**Files:**
+- Create: src/polaris/state/model.py
+- Create: src/polaris/state/event_store.py
+- Create: src/polaris/state/state_store.py
+- Create: src/polaris/state/replay.py
+- Create: tests/state/test_event_replay.py
+- Create: tests/state/test_crash_consistency.py
+
+**Interfaces:**
+- Produces: ActionEvent、RuntimeState、EventStore.append、EventStore.read_valid_prefix、StateStore.replace、replay(events) -> RuntimeState。
+- Consumes: canonical_json from Task 1。
+
+- [ ] **Step 1: 写 event sequence 和 replay 失败测试**
+
+  覆盖连续 sequence、重复 action ID、非法状态转换、snapshot 与 replay 深度相等。
+
+- [ ] **Step 2: 写 crash consistency 失败测试**
+
+  在 JSONL 最后一行和 state 临时文件的每个写入边界注入截断；合法前缀必须可恢复，损坏不得静默跳过。
+
+- [ ] **Step 3: 运行测试并确认失败**
+
+  Run: uv run pytest tests/state -q
+
+  Expected: FAIL，因为 EventStore 和 StateStore 尚不存在。
+
+- [ ] **Step 4: 实现事件追加、原子状态替换和 replay**
+
+  EventStore 每次 append 后 flush 和 fsync；read_valid_prefix 返回最后合法 sequence 和明确 corruption result。StateStore 只缓存 replay 结果，不覆盖事件权威。
+
+- [ ] **Step 5: 运行测试并提交**
+
+  Run: uv run pytest tests/state -q
+
+  Expected: PASS。
+
+  Commit: feat: add durable event and state stores
+
+### Task 3: 实现 Artifact Store 与版本感知 Observation Ledger
+
+**Files:**
+- Create: src/polaris/artifacts/store.py
+- Create: src/polaris/artifacts/observations.py
+- Create: tests/artifacts/test_artifact_store.py
+- Create: tests/artifacts/test_observation_recovery.py
+
+**Interfaces:**
+- Produces: ArtifactStore.put(bytes) -> sha256、ArtifactStore.get_verified(hash) -> bytes。
+- Produces: ObservationLedger.record、recover_exact、mark_stale、supersede。
+- Produces: SourceIdentity、RecoveryRecipe、ContextItem、Recoverability。
+
+- [ ] **Step 1: 写 content-addressed storage 失败测试**
+
+  覆盖相同内容去重、hash 校验、损坏检测、单项硬大小上限和大型输出正文外置。
+
+- [ ] **Step 2: 写 stale recovery 失败测试**
+
+  记录文件观察后修改文件；recover_exact 必须恢复指定历史 artifact 或返回 STALE，绝不能把当前内容冒充历史内容。
+
+- [ ] **Step 3: 运行测试并确认失败**
+
+  Run: uv run pytest tests/artifacts -q
+
+  Expected: FAIL，因为 artifact 和 observation 模块尚不存在。
+
+- [ ] **Step 4: 实现 Artifact Store 和 Observation Ledger**
+
+  artifact 写入先计算 sha256，再原子 rename；Observation JSONL 保存 source identity、workspace version、recipe、recoverability、dirty 和 supersedes。
+
+- [ ] **Step 5: 运行测试并提交**
+
+  Run: uv run pytest tests/artifacts -q
+
+  Expected: PASS。
+
+  Commit: feat: add recoverable observation ledger
+
+### Task 4: 完成路线 C 的主动 Context Working-Set 纵切面
+
+**Files:**
+- Create: src/polaris/context/policy.py
+- Create: src/polaris/context/router.py
+- Create: src/polaris/context/view.py
+- Create: src/polaris/context/tokens.py
+- Create: tests/context/test_maintenance.py
+- Create: tests/context/test_routing.py
+- Create: tests/context/test_view_budget.py
+- Create: benchmarks/traces/context_pressure.jsonl
+- Create: benchmarks/runner.py
+
+**Interfaces:**
+- Produces: maintain_working_set(state, items, trigger) -> MaintenanceResult。
+- Produces: route_context(action, contract, state, items, budget) -> ContextManifest。
+- Produces: build_context_view(manifest, stores) -> ModelContext。
+- Consumes: ContractStore、ObservationLedger、ArtifactStore。
+
+- [ ] **Step 1: 写“context 未满也主动清理”的失败测试**
+
+  构造占用仅为 soft budget 40% 的 item 集合；当新 observation supersede 旧 observation、workspace version 变化或 action phase 改变时，maintenance 仍必须外置或驱逐旧正文。
+
+- [ ] **Step 2: 写 dirty flush 和 stale fault-in 失败测试**
+
+  POOR/EXPENSIVE dirty item 在 eviction 前必须写入 artifact/observation；hash 或 workspace identity 不匹配时不得进入 ModelContext。
+
+- [ ] **Step 3: 写 action-aware routing 和 hard-cap 失败测试**
+
+  edit 动作必须看到相关 path 的约束和源码；test 动作必须看到 acceptance evidence；无关旧日志只留 manifest。每个 item 和总 View 均必须遵守硬上限。
+
+- [ ] **Step 4: 运行测试并确认失败**
+
+  Run: uv run pytest tests/context -q
+
+  Expected: FAIL，因为 Context Manager 尚不存在。
+
+- [ ] **Step 5: 实现纯机械 maintenance、routing 和 View builder**
+
+  严格实现第 5 节触发器、处理顺序和 keep_score；不增加辅助 LLM 调用。ContextManifest 必须记录每个 include/exclude 的 reason code，供 benchmark 审计。
+
+- [ ] **Step 6: 实现 context microbenchmark**
+
+  runner 输出 constraint survival、stale injection、foreground precision/recall、input tokens 和 maintenance wall time；保存 baseline 与 Polaris 两组 JSON 报告。
+
+- [ ] **Step 7: 运行测试和 benchmark 并提交**
+
+  Run: uv run pytest tests/context -q
+
+  Run: uv run python benchmarks/runner.py --suite context
+
+  Expected: 所有测试 PASS；硬约束存活率 100%，stale injection 为 0，routing 不调用额外模型。
+
+  Commit: feat: add proactive context working set
+
+### Task 5: 实现 Action 模型、Gate、Tool Gateway 与耐久 mutation boundary
+
+**Files:**
+- Create: src/polaris/actions/model.py
+- Create: src/polaris/actions/fingerprint.py
+- Create: src/polaris/actions/gate.py
+- Create: src/polaris/tools/protocol.py
+- Create: src/polaris/tools/filesystem.py
+- Create: src/polaris/tools/patch.py
+- Create: src/polaris/tools/shell.py
+- Create: src/polaris/tools/git.py
+- Create: tests/actions/test_gate.py
+- Create: tests/actions/test_failure_fingerprint.py
+- Create: tests/tools/test_mutation_boundary.py
+
+**Interfaces:**
+- Produces: ProposedAction、PreparedAction、ActionResult、ActionStatus。
+- Produces: action_fingerprint(action) 和 precondition_fingerprint(state, workspace)。
+- Produces: ActionGate.validate(action, contract, state) -> GateDecision。
+- Produces: Tool.execute(prepared) -> ActionResult protocol。
+
+- [ ] **Step 1: 写 Gate 失败测试**
+
+  覆盖 path escape、scope 越界、stale workspace、pending mutation、AMBIGUOUS action、不可逆命令和未授权网络副作用。
+
+- [ ] **Step 2: 写重复失败熔断测试**
+
+  相同 action fingerprint 与 precondition fingerprint 允许两次实际执行；第三次必须返回 BLOCKED_REPEATED_FAILURE。任一相关前置条件变化后计数重新计算。
+
+- [ ] **Step 3: 写 mutation durability 失败测试**
+
+  断言 PREPARED 和 RUNNING 已 fsync 后工具才能执行；终态 event、workspace effects 和 state replacement 完成后才能再次调用模型。
+
+- [ ] **Step 4: 运行测试并确认失败**
+
+  Run: uv run pytest tests/actions tests/tools -q
+
+  Expected: FAIL，因为 action 和 tool 模块尚不存在。
+
+- [ ] **Step 5: 实现 Gate、fingerprint 和最小工具集**
+
+  Shell 接收 argv tuple、cwd、timeout 和 side_effect_class，不接收未解析 shell string。Patch 只能写 contract scope 内路径。Git 第一版仅暴露 status、diff 和 rev-parse。
+
+- [ ] **Step 6: 运行测试并提交**
+
+  Run: uv run pytest tests/actions tests/tools -q
+
+  Expected: PASS。
+
+  Commit: feat: enforce durable action boundaries
+
+### Task 6: 实现 crash recovery 与 ambiguous mutation reconciliation
+
+**Files:**
+- Create: src/polaris/actions/recovery.py
+- Create: tests/actions/test_recovery.py
+- Create: tests/traces/test_crash_injection.py
+- Create: benchmarks/traces/mutation_crashes.jsonl
+
+**Interfaces:**
+- Produces: RecoveryReconciler.reconcile(action, events, workspace) -> RecoveryDecision。
+- Consumes: Action Event、Artifact Store、Git workspace identity。
+
+- [ ] **Step 1: 为每个 Action Boundary 写 crash injection 失败测试**
+
+  在 PREPARED 前后、RUNNING 后、文件替换中、结果 artifact 写入后和 state 替换前注入退出。
+
+- [ ] **Step 2: 写三类 reconciliation 失败测试**
+
+  分别证明未执行、已完整执行和无法证明。第三类必须进入 AMBIGUOUS/WAITING，且后续 mutation 被 Gate 拒绝。
+
+- [ ] **Step 3: 运行测试并确认失败**
+
+  Run: uv run pytest tests/actions/test_recovery.py tests/traces/test_crash_injection.py -q
+
+  Expected: FAIL，因为 RecoveryReconciler 尚不存在。
+
+- [ ] **Step 4: 实现 read-only reconciliation**
+
+  Reconciler 只读取事件、artifact、文件 hash 和 Git diff；不能为了探测而重放原动作。
+
+- [ ] **Step 5: 运行测试并提交**
+
+  Run: uv run pytest tests/actions/test_recovery.py tests/traces/test_crash_injection.py -q
+
+  Expected: PASS，所有已定义崩溃点恢复正确率 100%。
+
+  Commit: feat: reconcile interrupted mutations
+
+### Task 7: 接入 Model Client 与 Controller 闭环
+
+**Files:**
+- Create: src/polaris/model/protocol.py
+- Create: src/polaris/model/openai_client.py
+- Create: src/polaris/controller.py
+- Create: tests/model/test_model_protocol.py
+- Create: tests/traces/test_controller_loop.py
+
+**Interfaces:**
+- Produces: ModelClient.complete(ModelContext) -> ModelTurn。
+- Produces: Controller.run_one_turn() -> TurnOutcome。
+- Consumes: Task Contract、State/Event Stores、Context Manager、Action Gate、Tool Gateway。
+
+- [ ] **Step 1: 写标准化模型输出失败测试**
+
+  只接受 TOOL、CHECKPOINT、ASK_USER、PROPOSE_DONE 四类结果；未知类型和缺失字段成为可恢复协议错误，不执行工具。
+
+- [ ] **Step 2: 写多轮 Controller trace 失败测试**
+
+  使用 deterministic fake ModelClient 完成 read、checkpoint、patch、test、propose_done 流程；断言每轮 View 都从 state 重新生成而非追加旧消息。
+
+- [ ] **Step 3: 运行测试并确认失败**
+
+  Run: uv run pytest tests/model tests/traces/test_controller_loop.py -q
+
+  Expected: FAIL，因为 ModelClient 和 Controller 尚不存在。
+
+- [ ] **Step 4: 实现 protocol、OpenAI adapter 和单轮 Controller**
+
+  OpenAI adapter 只负责请求转换、响应解析、usage/latency/request identity；业务状态和 tool execution 不进入 adapter。
+
+- [ ] **Step 5: 运行测试并提交**
+
+  Run: uv run pytest tests/model tests/traces/test_controller_loop.py -q
+
+  Expected: PASS。
+
+  Commit: feat: add controlled model execution loop
+
+### Task 8: 实现 Independent Verifier 与唯一 DONE 门禁
+
+**Files:**
+- Create: src/polaris/verification/model.py
+- Create: src/polaris/verification/evidence.py
+- Create: src/polaris/verification/verifier.py
+- Create: tests/verification/test_evidence_binding.py
+- Create: tests/verification/test_completion_gate.py
+- Create: tests/traces/test_verifier_rework.py
+
+**Interfaces:**
+- Produces: CompletionCandidate、CriterionEvidence、VerificationVerdict。
+- Produces: EvidenceRunner.run(candidate) -> tuple[CriterionEvidence, ...]。
+- Produces: IndependentVerifier.verify(clean_context) -> VerificationVerdict。
+- Produces: Controller.apply_verdict(verdict)；这是唯一允许写入 DONE 的入口。
+
+- [ ] **Step 1: 写 evidence binding 失败测试**
+
+  旧 contract revision、旧 workspace version、旧 diff hash 或缺少 artifact 的证据必须失效。
+
+- [ ] **Step 2: 写 completion authority 失败测试**
+
+  模型、Tool、StateStore 和 replay 都不能直接构造合法 DONE 转换；只有 Controller 在有效 PASS verdict 后可以写入。
+
+- [ ] **Step 3: 写 verifier reject/rework trace**
+
+  执行模型过早 PROPOSE_DONE；Verifier 发现未满足 criterion，返回结构化 corrective action，Controller 回到 RUNNING 并生成 next action。
+
+- [ ] **Step 4: 运行测试并确认失败**
+
+  Run: uv run pytest tests/verification tests/traces/test_verifier_rework.py -q
+
+  Expected: FAIL，因为 verification 模块尚不存在。
+
+- [ ] **Step 5: 实现证据运行器、clean-context verifier 和 DONE gate**
+
+  Verifier 只读；clean context 不包含执行模型的自我评价，只包含合同、final diff、当前 workspace facts 和证据引用。
+
+- [ ] **Step 6: 运行测试并提交**
+
+  Run: uv run pytest tests/verification tests/traces/test_verifier_rework.py -q
+
+  Expected: PASS。
+
+  Commit: feat: require independent completion verification
+
+### Task 9: 建立端到端 benchmark、ablation 与 release gate
+
+**Files:**
+- Create: benchmarks/tasks/multi_file_change.json
+- Create: benchmarks/tasks/long_debugging.json
+- Create: benchmarks/tasks/stale_observation.json
+- Create: benchmarks/tasks/interrupted_run.json
+- Create: benchmarks/tasks/premature_completion.json
+- Modify: benchmarks/runner.py
+- Create: benchmarks/report.py
+- Create: tests/end_to_end/test_benchmark_smoke.py
+- Modify: README.md
+- Modify: README.zh-CN.md
+
+**Interfaces:**
+- Produces: run_suite(mode, seed, budget) -> BenchmarkRun。
+- Produces: compare_runs(baseline, full, ablations) -> BenchmarkReport。
+- Modes: baseline、polaris、no_context_routing、no_recovery_policy、no_independent_verifier。
+
+- [ ] **Step 1: 写 benchmark schema 和 deterministic smoke test**
+
+  每个 task 固定 repository fixture、contract、budget、allowed tools、fault schedule 和 scorer；报告必须记录模型版本、seed、token、latency、成功、约束违反和恢复结果。
+
+- [ ] **Step 2: 运行 smoke test 并确认失败**
+
+  Run: uv run pytest tests/end_to_end/test_benchmark_smoke.py -q
+
+  Expected: FAIL，因为 suite/report 尚不完整。
+
+- [ ] **Step 3: 实现 baseline/full/ablation runner 和报告**
+
+  baseline 使用相同模型、工具权限、任务和预算，但关闭 Polaris 特有机制；ablation 每次只关闭一个机制。
+
+- [ ] **Step 4: 运行全部 deterministic tests**
+
+  Run: uv run pytest -q
+
+  Expected: PASS。
+
+- [ ] **Step 5: 运行真实模型 benchmark**
+
+  Run: uv run python benchmarks/runner.py --suite long-tasks --modes baseline,polaris,no_context_routing,no_recovery_policy,no_independent_verifier
+
+  Expected: 生成包含原始 run artifacts 和汇总统计的报告；不得只保留平均值。
+
+- [ ] **Step 6: 根据 release gate 决定继续或停止扩展**
+
+  仅当第 10 节所有机械指标满足，且正确完成率达到门槛时更新 README 为可试用状态。未达标则记录失败样本，删除无收益机制或回到对应任务修正，不增加新产品范围。
+
+  Commit: test: add long-task reliability benchmarks
+
+## 10. 测试矩阵与发布门槛
+
+### 10.1 必须机械达到
+
+- Action Boundary 崩溃恢复正确率：100%。
+- Hard Constraint 持久化存活率：100%。
+- stale observation 注入模型：0。
+- 未经有效 Verifier PASS 写入 DONE：0。
+- 工作区外 mutation：0。
+- 无新前置条件下同一失败动作执行超过两次：0。
 - Context Routing 额外 LLM 调用：0。
+- event/state replay 不一致静默通过：0。
 
-端到端 release gate：
+### 10.2 端到端 release gate
 
-- 长任务正确完成率相对 baseline 提升至少 10 个百分点；
-- 关键约束违反率相对 baseline 至少降低 50%；
-- 中断恢复任务正确完成率至少 95%；
-- 每个成功任务的输入 token 不超过 baseline 的 110%；
+- 长任务正确完成率相对 baseline 提升至少 10 个百分点。
+- 关键约束违反率相对 baseline 至少降低 50%。
+- 中断恢复任务正确完成率至少 95%。
+- 每个成功任务的输入 token 不超过 baseline 的 110%。
 - Context Manager 自身 wall-time overhead 低于 5%，不含模型、工具和独立验证时间。
 
-长期优化目标是在不降低正确完成率的前提下，将每个成功任务的输入 token 相对 baseline 降低至少 20%。
+长期目标是在不降低正确完成率的前提下，使每个成功任务的输入 token 相对 baseline 降低至少 20%。
 
-## 15. 实施里程碑
+## 11. 阶段门禁
 
-### M0 — 权威重置与 Benchmark 定义
+路线 C 按以下顺序推进：
 
-- 重写 plan.md、AGENTS.md、README、package metadata 和 CI；
-- 定义 Task Contract、Runtime State、Action Event 和 Context Item；
-- 建立 baseline 任务、trace 和指标计算；
-- 写出核心不变量的失败用例。
+1. **Foundation**：Task 1–3 建立权威数据、版本和恢复基础。
+2. **Context Vertical Slice**：Task 4 单独证明主动 working set 能减少污染且不丢失关键约束。
+3. **Controlled Runtime**：Task 5–7 把模型与工具纳入耐久 Controller 边界。
+4. **Completion Authority**：Task 8 建立执行者不能绕过的独立完成裁决。
+5. **Evidence Gate**：Task 9 用 baseline/full/ablation 决定哪些机制保留。
 
-完成标准：旧架构引用为零；benchmark 可以在无 Polaris 机制时运行并产生 baseline。
+每个阶段必须满足自己的 deterministic tests 后才能进入下一阶段。真实模型 benchmark 不能替代故障注入和状态机测试。
 
-### M1 — Durable Runtime Kernel
+## 12. 产品决策规则
 
-- 实现 State Store、Event Store 和 replay；
-- 实现单模型 Model Client；
-- 实现 Controller 和标准化动作；
-- 实现最小只读工具；
-- 用模拟模型完成多轮无 mutation trace。
-
-完成标准：进程可在任一只读 Action Boundary 后恢复，并产生一致状态。
-
-### M2 — Mutation Boundary
-
-- 增加 Patch、Shell 和 Git 工具；
-- 实现 Action Gate；
-- 实现 mutation lifecycle 和 workspace version；
-- 处理 ambiguous mutation；
-- 增加路径、超时、输出和破坏性动作限制。
-
-完成标准：所有 mutation 可追溯；故障注入不会盲目重放未知动作。
-
-### M3 — Context Manager
-
-- 实现 provenance tracking；
-- 实现 recoverability 和 dirty/clean classification；
-- 实现 Attention Tier、budget 和机械 routing；
-- 实现 eviction、fault-in 和 stale detection；
-- 实现 checkpoint 与恢复头。
-
-完成标准：microbenchmark 和 trace replay 达到第 14 节机械指标。
-
-### M4 — Verification Gate
-
-- 实现 PROPOSE_DONE；
-- 冻结 completion candidate；
-- 构造干净验证上下文；
-- 运行 acceptance evidence；
-- 实现只读 Verifier 和返工动作。
-
-完成标准：任何测试 trace 都无法绕过 Verifier 写入 DONE。
-
-### M5 — Long-Task Evaluation
-
-- 运行 baseline、完整 Polaris 和 ablation；
-- 统计成功率、约束违反、恢复、token、latency；
-- 分析失败样本；
-- 删除无收益机制；
-- 只在达到 release gate 后开始产品化。
-
-完成标准：第 14 节端到端 release gate 全部满足，或明确记录未满足项并停止扩展范围。
-
-## 16. 开工顺序
-
-严格按以下顺序：
-
-1. 冻结最小数据模型和 failure traces；
-2. 先写 Event/State replay 测试；
-3. 实现只读 Controller loop；
-4. 加入 mutation lifecycle；
-5. 加入 Context Manager；
-6. 加入 Verifier；
-7. 最后接真实模型跑端到端任务。
-
-不要先实现 CLI 体验、多宿主、安装、迁移、UI 或并行 Agent。
-
-## 17. 当前仓库状态
-
-refactor 分支已经删除旧 Polaris 的 Skills、Schemas、Scripts、Templates、Workflow、Tests、Hosts 和使用文档。旧实现仅存在于 Git 历史中，不建立 legacy/ 副本。
-
-当前保留文件将按 M0 重写。删除不代表新系统已经可运行；在 M1 之前仓库处于预期的 clean-slate 状态。
-
-## 18. 产品决策规则
-
-新增机制前必须回答：
+新增任何机制前必须回答：
 
 1. 它针对哪一种已观察到的长任务失败？
-2. 它由 Harness 机械完成还是要求模型记住？
-3. 如何单独 benchmark？
-4. 它增加多少 token、latency 和复杂度？
+2. 它由 Harness 机械完成，还是只要求模型记住？
+3. 它如何单独 benchmark 和 ablation？
+4. 它增加多少 token、latency、持久化成本和状态复杂度？
 5. 如果没有显著收益，能否完整删除？
 
-无法回答的问题不进入第一版。
+无法给出可测答案的机制不进入第一版。
 
-## 19. 一句话目标
+## 13. 最终产品判定
 
-> **让 Agent 在长任务中始终知道目标、状态和下一动作；在失败后能够恢复；在真正满足验收前无法宣布完成。**
+Polaris 的成功不是让任务无限续跑，也不是让上下文保存更多内容，而是：
+
+> **模型在每一步都基于当前、可追溯、足够且不过载的事实行动；任何外部修改都有耐久边界；中断后能够安全恢复；只有与当前合同和当前工作区绑定的独立证据才能结束任务。**
