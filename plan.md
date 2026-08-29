@@ -14,7 +14,6 @@
 
 - 只优化一个结果：一个长时间软件工程任务的正确完成率。
 - 第一版仅支持 macOS、一个可信本地仓库、一个活动任务、一个前台 Controller 和 OpenAI 一个模型提供方。
-- 不兼容旧 Polaris 的任务、协议、命令、Skills、Schemas、目录或迁移。
 - 模型只能提出语义动作；只有 Controller 可以执行工具、修改机械状态和写入 DONE。
 - 所有 mutation 串行执行；每次 mutation 后、下次模型调用前必须建立耐久 Action Boundary。
 - 每次模型请求都从权威状态重新构建 Context View，不把追加式聊天记录当作运行时上下文模型。
@@ -50,7 +49,128 @@ Polaris 不以“Codex 完全没有长任务能力”为前提。当前 Codex �
 9. **完成仍主要由执行模型触发**：Codex 倡导 evidence-based completion，但 Goal complete 接口本身不要求独立 Verifier 提交结构化证据。
 10. **缺少机械失败熔断**：相同前置条件下的相同失败没有统一 fingerprint 门禁。
 
-这些结论只描述当前可验证的公开行为，不假设未公开 hosted backend 的内部能力。
+### 1.1 证据口径与审计快照
+
+本节使用三种证据等级：
+
+- **DOC — 官方明确行为**：OpenAI 官方文档直接描述的产品或 API 行为。
+- **SRC — 源码直接事实**：固定 Codex commit 中可直接定位的类型、字段、分支或处理流程。
+- **AUDIT — 公开实现审计推断**：在明确范围和检索词下没有发现通用机制。它支持“当前公开实现中未发现”，不支持“所有 hosted backend 都不存在”。
+
+本次审计固定为：
+
+- 审计日期：2026-08-26；
+- 仓库：openai/codex；
+- commit：da4cf1cdeaf8fb44a18bb75fd8df0094097f90b8；
+- 本地源码根目录：../codex；
+- 官方 Goal 依据：[Using Goals in Codex](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex)；
+- 官方 compaction 依据：[Compaction](https://developers.openai.com/api/docs/guides/compaction)。
+
+源码位置全部相对于 Codex 仓库根目录，并绑定上述 commit。后续 Codex 更新后不得沿用旧行号直接声称结论仍然成立；必须重新执行第 1.3 节审计。
+
+### 1.2 逐项证据链
+
+#### E1 — Goals 已提供持久目标和续跑，但合同接口仍是弱结构
+
+- **事实**：Codex Goal 是持久化 thread state，带 objective、lifecycle、budget、progress accounting，并能在 idle 时继续、在 resume 后恢复。
+- **DOC**：官方 Goal 文档明确把 Goal 描述为 persistent objective、thread-scoped completion contract，并要求基于文件、测试、日志、benchmark 或 artifact 判断完成。
+- **SRC**：codex-rs/ext/goal/src/runtime.rs:195-211 在 active 状态触发 continue_if_idle；同文件 338-359 从 state DB 恢复 active Goal。
+- **SRC**：codex-rs/ext/goal/src/spec.rs:25-56 的 create_goal schema 只有 objective 与 token_budget；同文件 60-70 的 update_goal 输入只有 complete/blocked status。
+- **SRC**：codex-rs/ext/goal/src/tool.rs:49-60 的请求类型再次确认 create 输入是 objective/token_budget，update 输入是 status；185-240 的 handler 将这些值直接写入或更新持久状态。
+- **有界结论**：不能把 Codex 描述成“没有任务契约”；准确说法是它有 durable Goal，但公开 tool schema 没有独立的 scope、hard constraints、acceptance criteria、revision 和 evidence payload。
+- **Polaris 决策**：实现版本化 Task Contract，并让 completion evidence 显式绑定 contract revision，而不是复制 Goal 文本。
+
+#### E2 — 自动 compaction 的公开触发面以容量和运行事件为主
+
+- **事实**：Responses API 支持 server-side 和 standalone compaction；Codex 还支持用户请求、context limit、model downshift 和 compaction compatibility hash 变化等原因。
+- **DOC**：官方 Compaction 文档说明 server-side compaction 在 rendered token count 跨过 compact_threshold 时运行；standalone endpoint 由调用方显式触发。
+- **SRC**：codex-rs/core/src/session/context_window.rs:23-79 计算 active tokens、auto-compact limit 和 token_limit_reached。
+- **SRC**：codex-rs/core/src/session/turn.rs:1024-1037 在 token_limit_reached 时执行 pre-turn compaction。
+- **SRC**：codex-rs/analytics/src/facts.rs:419-423 枚举 UserRequested、ContextLimit、ModelDownshift、CompHashChanged 四类 CompactionReason。
+- **有界结论**：Codex 已经能提前配置低于物理窗口的 token threshold，也存在非容量运行事件；但当前公开触发原因中没有按 supersession、staleness、phase/action relevance 或 recoverability 持续维护 working set 的通用原因。
+- **Polaris 决策**：主动 maintenance 由 action 完成、workspace 变化、item supersede、phase 变化和 freshness 失效触发，即使 context 只占 soft budget 的少部分也运行。
+
+#### E3 — 运行时上下文仍以 transcript 为核心，工具输出采用截断而非通用外置恢复
+
+- **事实**：Codex 在历史项进入 ContextManager 时会对函数和自定义工具输出应用 truncation policy；context overflow 时还会重写较新的工具输出。
+- **SRC**：codex-rs/core/src/context_manager/history.rs:46-53 将 ContextManager 定义为 thread history transcript，主体是按时间排列的 ResponseItemEnvelope vector。
+- **SRC**：同文件 471-500 对 FunctionCallOutput 和 CustomToolCallOutput 调用 truncate_function_output_payload。
+- **SRC**：codex-rs/core/src/compact_remote.rs:457-487 在窗口溢出修剪中用 truncated_output_payload 重写工具输出。
+- **有界结论**：截断能控制 token，但上述通用路径没有同时返回 content-addressed artifact、expected hash 和 recovery recipe，因而不等价于“正文外置后可精确 fault-in”。个别工具自行持久化文件不推翻该结论。
+- **Polaris 决策**：大型结果先进入 Artifact Store，Context View 只持有 hash reference；恢复时校验内容身份。
+
+#### E4 — Codex 有 World State diff，但历史项没有通用 observation provenance schema
+
+- **事实**：Codex World State 能为类型化 section 持久化 snapshot，并相对上一快照生成 full/diff/history diff。
+- **SRC**：codex-rs/core/src/context/world_state/mod.rs:217-235 定义可持久化 typed WorldStateSection；397-434 实现 render_full、render_diff 和 render_history_diff。
+- **事实**：通用历史 envelope 的 harness metadata 当前只公开 client_authored 标志。
+- **SRC**：codex-rs/history/src/lib.rs:36-50 定义 ResponseItemEnvelope 和 CodexHarnessMetadata；metadata 字段只有 client_authored。
+- **AUDIT**：在 codex-rs/core/src/context_manager、codex-rs/core/src/context 和 codex-rs/history/src 范围检索 recoverability、recovery_recipe、attention_pin、source_version、workspace_version，没有发现统一的 Context Item 字段族。
+- **有界结论**：World State 是重要的增量上下文能力，不能被忽略；但它没有证明任意源码片段、日志和工具观察都绑定 source identity、content hash、workspace version、恢复成本和恢复配方。
+- **Polaris 决策**：保留 World State 的“typed snapshot/diff”思想，并将 provenance/recoverability 扩展成所有 Observation 的统一协议。
+
+#### E5 — 当前公开实现未发现 stale-safe、action-aware 的通用任务上下文路由
+
+- **事实**：ContextManager 管理 transcript，World State 管理注册 section 的当前设置投影；二者都不是按 read/edit/test/review 动作选择任务语义 item 的统一 Observation Ledger。
+- **SRC**：codex-rs/core/src/context_manager/history.rs:46-65 展示 transcript、reference context 和 world-state baseline 三类核心状态。
+- **SRC**：codex-rs/core/src/context/world_state/mod.rs:397-434 的 diff 决策基于 section snapshot 或 retained fragment，而不是 task action、changed path、constraint scope、recovery cost 和 stale source version 的联合路由。
+- **AUDIT**：上述 context/history 审计范围未发现 action_tags、attention_pin、recovery_recipe 或 workspace_version 组成的统一 routing contract。
+- **有界结论**：不能声称 Codex 完全不会按需注入上下文；准确结论是当前公开实现中未发现面向任意任务观察、同时执行 stale validation 与 action-aware routing 的通用层。
+- **Polaris 决策**：ContextManifest 为每个 include/exclude 记录 reason code，并在 fault-in 时验证 source/content/workspace identity。
+
+#### E6 — compaction 有 hook，但没有内置 dirty semantic state flush 协议
+
+- **事实**：Codex 在 compaction 前后提供 hook，调用方可以扩展行为。
+- **SRC**：codex-rs/core/src/compact.rs:185-221 在 compact task 前调用 run_pre_compact_hooks，成功后调用 post hook。
+- **AUDIT**：ContextManager、World State 和 history envelope 中没有发现统一的 dirty semantic item、recoverability 等级以及“root cause、decision、invariant、blocker 必须先持久化才能 eviction”的状态转换。
+- **有界结论**：hook 是扩展点，不等于内置语义 durability guarantee；用户可以自行构建类似机制，但 Codex 核心当前没有提供通用完成协议。
+- **Polaris 决策**：maintenance、compaction、pause 和 shutdown 共用同一个 flush_dirty_semantics gate，失败则禁止驱逐或结束。
+
+#### E7 — compaction 能续接状态，但摘要保真没有逐事实机械证明
+
+- **DOC**：官方 Compaction 文档说明返回的 compaction item 会用更少 token 携带关键先前状态，同时明确它是 opaque、not intended to be human-interpretable。
+- **SRC**：codex-rs/core/src/compact.rs:352-389 从历史和模型输出构造 summary_text，并用 compacted history 替换旧历史。
+- **SRC**：同文件 395 的用户警告明确提示 long threads 和 multiple compactions 可能降低模型准确性。
+- **有界结论**：这些证据证明 compaction 是有效的连续性机制，但没有证明摘要中的每个事实都绑定原始 artifact、source hash 或可自动验证的 claim ledger。
+- **Polaris 决策**：摘要只承载导航和高密度语义；关键事实必须保留 evidence reference，并可从权威 artifact 重新构建。
+
+#### E8 — mutation lifecycle、completion authority 和失败熔断属于公开实现审计缺口
+
+- **事实**：Goal 文档要求 evidence-based completion，但模型可见 update_goal tool 的请求只携带 complete/blocked status。
+- **SRC**：codex-rs/ext/goal/src/spec.rs:60-70 和 codex-rs/ext/goal/src/tool.rs:56-60、228-240 没有 criterion evidence、contract revision 或 workspace version 参数。
+- **AUDIT**：在 codex-rs/core/src、codex-rs/ext、codex-rs/history/src 和 codex-rs/state/src 检索通用 ActionStatus、PREPARED/RUNNING/SUCCEEDED/FAILED/AMBIGUOUS、action_fingerprint、precondition_fingerprint、failure_fingerprint，没有发现覆盖所有 workspace mutation 的统一持久状态机；命中项是局部 prepared 类型或 network approval 的 Ambiguous，不构成通用 Action Boundary。
+- **有界结论**：这不否定 rollout、审批、工具事件或特定工具的恢复能力；它只说明当前公开实现中未发现 Polaris 所要求的通用 mutation transaction、独立 evidence gate 和相同前置条件失败熔断。
+- **Polaris 决策**：由 Controller 独占 mutation 和 DONE 权限，把三项机制作为独立、可故障注入测试的运行时不变量。
+
+### 1.3 可复现审计方法与更新规则
+
+使用固定 commit 复核正向源码证据：
+
+~~~bash
+git -C ../codex show da4cf1cdeaf8fb44a18bb75fd8df0094097f90b8:codex-rs/core/src/session/context_window.rs
+git -C ../codex show da4cf1cdeaf8fb44a18bb75fd8df0094097f90b8:codex-rs/core/src/context_manager/history.rs
+git -C ../codex show da4cf1cdeaf8fb44a18bb75fd8df0094097f90b8:codex-rs/core/src/context/world_state/mod.rs
+git -C ../codex show da4cf1cdeaf8fb44a18bb75fd8df0094097f90b8:codex-rs/ext/goal/src/spec.rs
+~~~
+
+在固定 commit 复核通用机制缺口：
+
+~~~bash
+git -C ../codex grep -n -E 'recoverability|recovery_recipe|attention_pin|source_version|workspace_version' da4cf1cdeaf8fb44a18bb75fd8df0094097f90b8 -- codex-rs/core/src/context_manager codex-rs/core/src/context codex-rs/history/src
+git -C ../codex grep -n -E 'action_fingerprint|precondition_fingerprint|failure_fingerprint' da4cf1cdeaf8fb44a18bb75fd8df0094097f90b8 -- codex-rs/core/src codex-rs/ext codex-rs/history/src codex-rs/state/src
+~~~
+
+上述两个负向审计命令预期无输出并以 status 1 结束，表示在声明的 commit、目录和检索词范围内没有匹配；其他错误状态不能解释为“未发现”。
+
+负向检索只能支持其列出的目录、commit 和词汇范围。出现以下任一变化时必须更新本节：
+
+- Codex 新增 context item provenance/recovery schema；
+- compaction 新增 relevance、staleness、supersession 或 action-aware trigger；
+- Goal schema 新增结构化 contract revision 或 evidence payload；
+- 新增通用 mutation lifecycle、reconciliation 或 failure fingerprint；
+- 官方文档对 hosted behavior 作出新的明确说明。
+
+这些结论只描述当前可验证的公开行为，不假设未公开 hosted backend 的内部能力，也不把“源码中未发现”写成数学意义上的不存在证明。
 
 ## 2. 产品定义与成功标准
 
@@ -103,7 +223,6 @@ Local Repository + Tests + Git
 
 第一版明确不做：
 
-- 旧版兼容与迁移；
 - 多模型、多宿主、多任务、多项目和 Task DAG；
 - 自动 push、merge、发布或远程执行；
 - 完整 OS sandbox；
