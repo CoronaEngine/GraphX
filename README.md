@@ -1,172 +1,133 @@
 # Polaris
 
-[简体中文](README.zh-CN.md) | English
+Polaris is a deterministic Task Graph Executor for probabilistic coding agents.
 
-> Clean-slate architecture phase. The new runtime is not implemented or usable yet.
+It executes a workflow supplied as data. The workflow defines the nodes, dependencies, conditions, retries, and completion criteria; Polaris validates and enforces those rules without deciding what the workflow should be.
 
-Polaris is a controlled Agent Harness for one long-running software-engineering task.
+```text
+Config owns control.
+Polaris enforces control.
+Nodes perform work.
+```
 
-Its only product goal is:
+[中文说明](README.zh-CN.md)
 
-> **Make an Agent execute long tasks more reliably, correctly, and recoverably.**
+## Status
 
-The product and implementation authority is [plan.md](plan.md).
+Polaris is in early design and implementation. The authoritative implementation scope is [plan.md](plan.md); [Polaris_Design_ZH_v0.2.md](Polaris_Design_ZH_v0.2.md) contains the longer design rationale.
 
-## Why Polaris exists
+## What Polaris does
 
-Long tasks often fail even when the model is capable of solving each local step:
+```text
+Workflow JSON
+    -> compiler and static validation
+    -> immutable typed Workflow IR
+    -> persistent graph runtime
+    -> node runners
+    -> verified terminal outcome
+```
 
-- goals and constraints drift after many turns;
-- old source, logs, and observations pollute the active context;
-- important facts remain stored but stop influencing current decisions;
-- a process interruption destroys implicit progress;
-- stale repository observations are recovered as if they were current;
-- failed actions repeat without changed preconditions;
-- the executing model declares completion without independent evidence.
+Polaris owns:
 
-Polaris addresses these failures through runtime mechanisms instead of asking the model to remember more instructions.
+- workflow compilation and graph validation;
+- deterministic ready-node calculation and scheduling;
+- node and run state transitions;
+- typed inputs, outputs, and content-addressed artifacts;
+- bounded retries, timeouts, and conservative recovery;
+- durable action boundaries around side effects;
+- verification gates and terminal-state enforcement;
+- deterministic context materialization from declared node inputs.
 
-## Product model
+Polaris does not own:
 
-~~~text
-Human
-  ↓
-Task Contract
-  ↓
-Polaris Controller
-  ├── Runtime State / Event Store
-  ├── Context Manager
-  ├── Model Client
-  ├── Action Gate
-  ├── Tool Gateway
-  ├── Checkpoint / Recovery
-  └── Independent Verifier
-        ↓
-Local Repository + Tests + Git
-~~~
+- the business meaning or preferred shape of a workflow;
+- automatic workflow invention or optimization;
+- the reasoning policy inside an agent node;
+- token-level context compaction, transcript garbage collection, or model caching;
+- distributed scheduling or a general-purpose enterprise workflow platform.
 
-The model owns semantic work:
+## Workflow-agnostic, not semantics-free
 
-- understanding requirements and code;
-- forming and revising hypotheses;
-- choosing implementation strategies;
-- writing changes;
-- interpreting failures;
-- proposing the next action.
+Polaris does not need to know whether a node is planning, editing Rust, running tests, or reviewing a patch. It does need to understand the graph's execution semantics: node types, dependencies, typed data flow, conditions, retry policy, side effects, persistence, and terminal outcomes.
 
-Polaris owns facts, resources, and lifecycle:
+The same runtime should execute any valid v1 DAG without hard-coded stage names or workflow-specific branches.
 
-- freezing the task contract;
-- constructing every model-visible Context View;
-- validating and executing tools;
-- recording provenance and workspace effects;
-- establishing durable Action Boundaries;
-- recovering after interruption;
-- independently verifying completion.
+## Workflow IR
 
-## Controlled execution loop
+IR means Intermediate Representation: the normalized, typed, immutable form between user-authored configuration and runtime execution.
 
-Every externally observable action returns control to Polaris:
+```text
+Human-authored config
+        |
+        v
+Compiler + validator
+        |
+        v
+Workflow IR
+        |
+        v
+Graph Executor
+```
 
-~~~text
-Load authoritative state
-→ Build minimal Context View
-→ Call model
-→ Normalize proposed action
-→ Check action gate
-→ Execute tool or control action
-→ Capture provenance and workspace effects
-→ Append event
-→ Atomically update state
-→ Continue / Wait / Verify
-~~~
+The compiler resolves references, expands defaults, type-checks inputs and outputs, compiles conditions into a restricted AST, analyzes the graph, and assigns a stable IR hash. Runtime state is stored separately and can never mutate the IR.
 
-Read-only actions may run as a bounded parallel batch. Mutating actions are serialized, and each mutation must form a durable Action Boundary before the next model call.
+## Built-in node types in v1
 
-The model may request a tool, submit a semantic checkpoint, ask the user, or propose completion. It cannot directly mutate mechanical state or write DONE.
+- `agent`: run Codex or another compatible agent runtime against a structured task contract;
+- `command`: execute an argv-based local command with bounded output and timeout;
+- `verifier`: produce mechanical or probabilistic evidence about artifacts;
+- `gate`: evaluate a restricted condition over persisted data;
+- `terminal`: commit the declared workflow outcome when its prerequisites hold.
 
-## Context management
+Node runners perform local work and return structured results. They cannot rewrite the graph, commit runtime state directly, or declare the whole run complete.
 
-Polaris treats the context window as a working set, not a database.
+## Reliability model
 
-Storage Policy determines:
+Polaris persists the workflow IR, append-only events, materialized run state, node attempts, logs, and artifacts. Before a side-effecting attempt starts, it records a durable action boundary.
 
-- whether information has durable backing;
-- whether it can be recovered exactly;
-- how expensive recovery is;
-- which source and version it belongs to.
+After a crash, Polaris reconciles each unfinished attempt as one of:
 
-Attention Policy determines:
+- proven not executed, so policy may permit a retry;
+- proven successful, so the original result can be committed;
+- uncertain, so the node becomes `AMBIGUOUS` and later side effects stop pending intervention.
 
-- what the current action needs to see;
-- which constraints must be foregrounded;
-- what remains in the hot working set;
-- what becomes a compact recovery reference;
-- how the attention budget is spent.
+Polaris does not claim exactly-once execution where the underlying runner cannot prove it.
 
-Stored state and model-visible state are intentionally different. Each model request receives a fresh projection of authoritative state rather than append-only chat history.
+## Agent context boundary
 
-## Core invariants
+For an `agent` node, Polaris builds a Task Contract from the node specification, declared artifacts, workspace identity, output schema, and attempt policy. It does not replay the entire workflow history by default.
 
-1. **The contract does not drift.** Goals, scope, constraints, and acceptance criteria come from a frozen Task Contract.
-2. **State does not disappear.** Completed external actions and the next action are persisted before another model call.
-3. **Recovery is version-aware.** Mutable repository observations bind provenance and source version.
-4. **Failure is bounded.** An unchanged failed action cannot repeat indefinitely.
-5. **Mutations are controlled.** Only Polaris executes tools and changes mechanical state.
-6. **Completion is not self-certified.** Only the Controller can write DONE after independent verification.
+The underlying agent runtime—such as Codex—continues to own its model context window, compaction, tool protocol, and inference behavior. Polaris owns cross-node data routing, artifact identity, observation freshness, and recovery.
 
-## First release scope
+## v1 scope
 
-The first implementation intentionally supports only:
+The first release is intentionally narrow:
 
-- macOS;
-- one trusted local repository;
-- one active task;
-- OpenAI as the single model provider;
-- one foreground Controller process;
-- local files, search, Patch, Shell, and Git tools;
-- file-based state, events, memory, outputs, and checkpoints;
-- one clean-context Verifier;
-- microbenchmarks, trace replay, and end-to-end long-task evaluation.
+- one local foreground run;
+- JSON config plus JSON Schema;
+- immutable typed IR;
+- sequential execution of an acyclic graph in stable order;
+- five built-in node types;
+- typed artifacts and restricted conditions;
+- bounded timeout and retry policies;
+- append-only events, atomic checkpoints, and crash recovery;
+- CLI commands for validate, run, resume, and inspect.
 
-## Explicit non-goals
+Cycles, dynamic graph expansion, parallel joins, distributed runners, external side effects, visual workflow editing, and a plugin system are later candidates, not v1 commitments.
 
-The first release will not include:
+## Design invariants
 
-- compatibility with pre-refactor Polaris;
-- Codex or Claude Code Skill hosting;
-- multiple model providers;
-- multiple tasks or projects;
-- schedulers, queues, daemons, or Task DAGs;
-- dashboards, TUI, IDE integrations, or plugin systems;
-- databases, vector stores, or knowledge-graph services;
-- vendoring, installation manifests, migrations, or cross-platform packaging;
-- automatic merge, push, release, or remote execution.
+1. Configuration owns the workflow; runtime never invents business control flow.
+2. Invalid graphs fail before execution.
+3. Authoritative state lives outside model context.
+4. Only the executor commits state transitions.
+5. Cross-node data moves through typed, integrity-checked artifacts.
+6. Retries and timeouts are explicit and bounded.
+7. Uncertain side effects are surfaced as `AMBIGUOUS`, never silently replayed.
+8. Workflow completion requires an explicit verified terminal node.
 
-These capabilities require benchmark evidence and an approved change to [plan.md](plan.md).
+## Documentation
 
-## Current status
-
-The refactor branch has removed the previous workflow-system implementation. The old Skills, schemas, scripts, templates, host adapters, workflow graph, tests, and usage documentation remain available only through Git history.
-
-The repository is currently in the M0 authority-reset phase:
-
-- the clean-slate architecture is defined;
-- the old implementation has been removed;
-- the new runtime and tests have not been created;
-- there is no installation command or supported user workflow yet.
-
-Do not use old Polaris documentation, releases, or commands as guidance for the new system.
-
-## Roadmap
-
-The implementation proceeds in this order:
-
-1. define failure traces, minimal data models, and baseline benchmarks;
-2. build the durable State/Event kernel;
-3. add the controlled mutation boundary;
-4. add recoverability-aware and attention-aware context management;
-5. add the independent verification gate;
-6. run baseline, full-system, and ablation long-task evaluations.
-
-Detailed architecture, metrics, milestones, and release gates are maintained in [plan.md](plan.md).
+- [plan.md](plan.md): authoritative product scope, execution semantics, implementation tasks, and test gates.
+- [Polaris_Design_ZH_v0.2.md](Polaris_Design_ZH_v0.2.md): detailed Chinese design rationale and architectural exploration.
+- [AGENTS.md](AGENTS.md): repository rules for contributors and coding agents.

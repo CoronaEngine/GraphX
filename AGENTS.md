@@ -1,14 +1,21 @@
 # Polaris repository rules
 
-- Treat plan.md as the clean-slate product and implementation authority.
-- Optimize for one outcome: stable, correct, recoverable execution of one long software-engineering task.
-- Do not preserve compatibility with pre-refactor Polaris tasks, protocols, commands, Skills, schemas, layouts, or migrations.
-- The model may propose semantic actions, but only the Polaris Controller may execute tools, mutate mechanical state, or write DONE.
-- Serialize mutating actions and establish a durable Action Boundary before the next model call. Parallelism is allowed only for bounded read-only work.
-- Rebuild every model-visible Context View from authoritative state. Do not treat append-only chat history as the runtime context model.
-- Bind mutable repository observations to provenance and version identity. Never recover stale content as if it were current.
-- Persist dirty, poorly recoverable semantic information before eviction, compaction, pause, or shutdown.
-- Add or update tests for every state transition, recovery branch, action gate, context-routing rule, validator, and completion gate.
-- Dependencies are allowed when they directly serve model access, reliability, or testing. Do not add frameworks, services, databases, schedulers, dashboards, multi-host abstractions, or plugin systems without benchmark evidence and an approved plan.md change.
-- Prefer one four-space-indented JSON authority when content must be mechanically validated and human-readable. Use Markdown for independent natural-language design and explanation.
-- Keep files and modules small, single-purpose, and independently testable. Create directories only when their milestone begins.
+- Treat `plan.md` as the product and implementation authority. Use `Polaris_Design_ZH_v0.2.md` for rationale; resolve conflicts in favor of `plan.md`.
+- Polaris is a workflow-agnostic, deterministic Task Graph Executor for probabilistic coding agents. Do not reframe it as an autonomous workflow planner or token-level context manager.
+- Preserve the control rule: Config owns control, Polaris enforces control, and nodes perform work.
+- Keep workflow-specific stage names, node IDs, branching rules, prompts, and completion criteria in configuration or node inputs. Never hard-code a particular workflow into the Executor.
+- Compile user configuration into an immutable, typed Workflow IR before execution. Keep Config, Workflow IR, and RunState as distinct models.
+- Reject invalid schemas, references, types, cycles, unreachable terminals, unbounded policies, and unsupported side effects before execution begins.
+- Only the Executor may commit node or run state transitions. Node Runners return structured results and must not rewrite the graph, mutate RunState directly, or declare global completion.
+- Pass cross-node data through typed, integrity-checked Artifacts. Resolve inputs from declared references instead of implicit chat history or “latest file” lookup.
+- Treat authoritative state as independent of model context. Rebuild each Agent Task Contract from the node spec, declared Artifacts, workspace identity, output contract, and attempt metadata.
+- Leave token-level compaction, transcript garbage collection, model caching, and inference policy to the underlying Agent Runtime. Polaris owns cross-node context routing, Artifact identity, Observation freshness, and recovery.
+- Bind mutable observations to source, version identity, content hash, and producer attempt. Reject known stale observations when materializing downstream inputs.
+- Declare each node's side-effect class. Persist a durable Action Boundary before execution; serialize mutating work in v1; never automatically replay an unresolved side effect.
+- Use `AMBIGUOUS` when crash recovery cannot prove whether a side effect completed. Block later side effects until the ambiguity is explicitly resolved.
+- Keep retries and timeouts explicit and bounded. v1 executes an acyclic graph sequentially in stable node-ID order; parallelism, joins, cycles, and dynamic graph expansion require an approved `plan.md` change.
+- Distinguish mechanical evidence from probabilistic evidence. Prefer mechanical verification whenever available, and allow only a validated terminal node to commit the final run outcome.
+- Add or update tests for Schema validation, IR compilation, references and types, graph analysis, state transitions, ready-node calculation, retry limits, timeouts, Action Boundary crash points, Artifact integrity, stale Observation rejection, recovery, and terminal gates.
+- Do not add distributed schedulers, services, databases, dashboards, workflow UIs, plugin systems, or unrelated frameworks without benchmark evidence and an approved `plan.md` change.
+- Prefer one four-space-indented JSON authority when content must be mechanically validated and human-readable. Use Markdown for independent explanation.
+- Keep modules small, single-purpose, and independently testable. Separate compiler, graph analysis, runtime state, persistence, Artifact storage, context materialization, and Node Runners.
