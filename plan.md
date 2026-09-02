@@ -1,111 +1,132 @@
-# Polaris Task Graph Executor 实施计划
+# Polaris Python Task Graph Executor 实施计划
 
-> 本文档是 Polaris 的实现与范围权威。概念设计与论证见
-> `Polaris_Design_ZH_v0.2.md`；发生冲突时，以本文档为准。
+本文档是 Polaris 的产品范围、执行语义和实施顺序的唯一权威。
 
 ## 1. 产品定义
 
-Polaris 是一个面向概率型编码 Agent 的、确定性的 Task Graph Executor（任务图执行器）。
-
-它接收声明式工作流配置，将其编译为带类型的 Workflow IR，完成静态校验，然后以可恢复、可审计的方式执行图中的节点：
+Polaris 是一个严格执行声明式 Task Graph 的本地控制器。
 
 ```text
-Workflow Config
-    -> Compile to typed Workflow IR
-    -> Validate graph and contracts
-    -> Persist run state
-    -> Execute ready nodes
-    -> Verify outputs and transitions
-    -> Reach an explicit terminal state
+Workflow Config owns control.
+Polaris validates and advances the graph.
+Codex tasks perform semantic work.
 ```
 
-核心原则：
+Polaris 只负责：
 
-```text
-Config owns control.
-Polaris enforces control.
-Nodes perform work.
-```
+- 读取和校验 Workflow Config；
+- 编译不可变 Workflow IR；
+- 根据权威状态计算 ready node；
+- 派发节点、接收结果并执行合法状态转换；
+- 为每个 Agent attempt 记录独立 Codex task/thread；
+- 强制 mutation 节点串行；
+- 通过 SQLite 事务保存运行状态；
+- 只有满足 Graph 中声明的 terminal 条件才结束运行。
 
-- 工作流配置决定执行什么、依赖关系、条件、重试和完成条件。
-- Polaris 只理解通用图语义，不硬编码“计划、实现、测试、修复”等业务流程。
-- Agent、命令、验证器等节点负责完成局部工作，但无权绕过运行时改变图状态。
-- 底层 Codex 或其他 Agent Runtime 负责单个 Agent 节点内的推理、工具调用与模型上下文管理。
+Polaris 不负责：
 
-### 1.1 “不关心流程是什么”的准确含义
+- 决定工作流应该包含哪些业务阶段；
+- 替 Agent 理解需求、编写代码或判断技术方案；
+- 管理模型 token、compaction 或对话历史；
+- 重新实现 Codex 的文件、Shell、Git 或 sandbox 工具；
+- 让 Agent 自行修改 Graph 或宣布整个 Workflow 完成。
 
-Polaris 对工作流的领域含义无感，但对执行语义负责。
+### 1.1 产品目标
 
-它不需要知道一个节点是在“写需求”“修改 Rust”还是“部署服务”，但必须知道：
-
-- 节点类型与输入输出契约；
-- 节点之间的依赖和条件；
-- 节点是否就绪、成功、失败或需要人工介入；
-- 重试、超时和副作用策略；
-- 哪些产物可作为后续节点的输入；
-- 运行如何持久化、恢复和终止。
-
-因此 Polaris 不是业务流程生成器，也不是简单脚本包装器，而是通用的图执行内核。
+给定相同的 Workflow IR 和权威 RunState，Polaris 必须产生相同的调度决定，并且在重启后能够继续从已经提交的状态执行。
 
 ### 1.2 核心不变量
 
-1. **配置拥有控制权**：运行时不得自行增加、删除或重排业务节点。
-2. **执行前完整校验**：非法图、悬空引用、类型不匹配和不可达终点不得进入运行态。
-3. **状态独立于上下文**：权威运行状态必须持久化，不能只存在于模型对话中。
-4. **确定性调度**：同一 IR 和同一权威状态应产生同一组 ready nodes；v1 采用稳定顺序串行执行。
-5. **显式状态转换**：只有 Executor 可以提交节点和运行状态转换。
-6. **产物可寻址**：跨节点数据通过带身份与完整性信息的 Artifact 传递。
-7. **副作用受控**：可能修改工作区或外部世界的动作必须跨越持久化 Action Boundary。
-8. **失败有界**：重试、超时和恢复策略必须显式且有限。
-9. **完成可验证**：只有声明的 terminal 条件满足后，运行才能成功结束。
-10. **不伪造 exactly-once**：无法确认副作用结果时进入 `AMBIGUOUS`，不得盲目重放。
+1. Config 决定控制流，Polaris 不发明业务流程。
+2. Workflow 在执行前完成结构和语义校验。
+3. Workflow IR 在一次运行期间不可变。
+4. 只有 Polaris 可以提交 NodeState 和 RunState 转换。
+5. 一个 Agent attempt 对应一个独立、可见的 Codex task。
+6. Codex task 以持久化的 thread ID 标识，标题不是身份。
+7. 同一 workspace 同时最多有一个 mutation attempt。
+8. 前一个 mutation 未完成、未失败或未裁决前，后一个 mutation 不能开始。
+9. NodeResult 必须经过运行时校验，不能依赖类型注解或 Agent 自报。
+10. 重复请求和重复结果提交必须幂等。
+11. 不确定的 mutation 进入 `AMBIGUOUS`，不能自动重放。
+12. 只有 terminal node 可以提交 Workflow 最终结果。
 
-## 2. v1 范围
-
-v1 构建一个本地、前台、单运行实例的可靠 DAG 执行器。
+## 2. 初始范围
 
 ### 2.1 包含
 
-- JSON 工作流配置和 JSON Schema；
-- Config 到不可变、带类型 Workflow IR 的编译；
-- 引用、类型、图结构和 terminal 完整性校验；
-- 稳定顺序的串行 DAG 调度；
-- `agent`、`command`、`verifier`、`gate`、`terminal` 五类内置节点；
-- 带类型的输入、输出和 Artifact 引用；
-- 有限条件表达式；
-- 每节点超时与有界重试；
-- append-only 事件日志、物化 RunState 和原子 checkpoint；
-- 节点 attempt、日志、输出与验证证据的持久化；
-- Action Boundary 和崩溃后的保守恢复；
-- 面向 Agent 节点的声明式上下文物化；
-- Runner 协议与内置 Runner；
-- Schema、编译器、状态机、恢复和端到端测试。
+- Python 3.12 本地进程；
+- JSON Workflow Config 和 JSON Schema；
+- Config 到不可变 Workflow IR 的编译；
+- DAG 引用、类型、环、可达性和 terminal 校验；
+- 稳定、确定性的串行节点调度；
+- `agent`、`command`、`verifier`、`gate`、`terminal` 节点；
+- Codex Skill + MCP Host Adapter；
+- 每个 Agent attempt 一个独立 Codex task；
+- SQLite RunState、attempt、thread 映射和 mutation lease；
+- 有界 retry、blocked、cancel 和 ambiguous 语义；
+- `validate`、`start`、`next`、`inspect`、`resume`、`cancel` 操作；
+- 状态机、事务、恢复和端到端测试。
 
-### 2.2 明确不包含
+### 2.2 不包含
 
-- 自动发明、改写或优化用户工作流；
-- 硬编码的软件工程阶段；
-- 任意代码执行式条件表达式（例如 `eval`）；
-- 循环图、动态扩图和递归工作流；
-- 分布式调度、多主协调和跨机器执行；
-- 通用企业工作流平台、插件市场、可视化编排 UI；
-- 并行节点与 join 语义；
-- Polaris 自己实现通用 token 级压缩、对话 GC 或模型缓存策略；
-- 对任意 Agent 工具调用提供虚假的 exactly-once 保证。
+- Polaris 自己调用模型或维护模型对话上下文；
+- headless Codex Agent Runtime；
+- 通用工具网关或自定义 sandbox；
+- mutation 并行执行；
+- 分布式调度、队列、daemon 或多主协调；
+- Dashboard、Graph 编辑器或独立 UI；
+- 任意 `eval`、动态 Python 控制表达式或动态 Runner 导入；
+- 通用插件系统；
+- 自动产生未经配置授权的业务流程。
 
-这些能力只有在 v1 语义和恢复模型稳定后，才能通过本文档变更进入范围。
+## 3. 总体架构
 
-## 3. 责任边界
+```text
+Codex App
+    |
+    | Polaris Skill
+    v
+Codex Host Adapter
+    |
+    | short MCP calls
+    v
+Polaris Python Core
+    ├── Config Validator
+    ├── Workflow Compiler
+    ├── Graph Analyzer
+    ├── Deterministic Scheduler
+    ├── Transition Engine
+    └── SQLite Store
+```
 
-| 组件 | 负责 | 不负责 |
-|---|---|---|
-| Workflow Config | 节点、边、参数、条件、重试、完成条件 | 执行状态、恢复决策 |
-| Compiler / Validator | 生成 IR、解析引用、类型检查、图分析 | 执行节点、修改工作区 |
-| Graph Executor | ready 计算、状态转换、持久化、重试、恢复、终止 | 理解业务领域、代替节点完成工作 |
-| Node Runner | 执行一种通用节点类型并返回结构化结果 | 改图、直接提交 RunState、声明整个运行完成 |
-| Agent Runtime | 单个 Agent 节点内的推理、工具使用、上下文窗口管理 | 跨节点调度、全局恢复和图完成判定 |
+Codex App 是用户界面和 Agent Host。Polaris Python Core 是无 UI 的 Graph 权威。
 
-Codex 在该架构中是可替换的 `AgentRunner` 后端，而不是 Polaris 的控制平面。
+### 3.1 总控任务
+
+用户在一个 Codex 总控任务中启动或恢复 Polaris。总控任务：
+
+- 调用 Polaris MCP tools；
+- 显示 Graph 和节点状态；
+- 为 Agent 节点创建可见 Codex task；
+- 等待节点 task 完成；
+- 把结构化结果提交给 Polaris；
+- 不绕过 Polaris 自行推进 Graph。
+
+### 3.2 Agent 节点任务
+
+每个 Agent attempt 创建一个独立 Codex task：
+
+```text
+Polaris · <run-id> · <node-id> · attempt <n>
+```
+
+该 task 只接收当前节点的 Task Contract。它可以使用 Codex 原生工具完成工作，但不能直接修改 Polaris RunState。
+
+Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记录。
+
+### 3.3 机械节点
+
+`command`、`verifier`、`gate` 和 `terminal` 不要求独立对话。Host Adapter 按 NodeDispatch 执行或解释它们，并将结构化结果返回 Polaris。
 
 ## 4. Workflow Config 与 IR
 
@@ -115,50 +136,51 @@ Codex 在该架构中是可替换的 `AgentRunner` 后端，而不是 Polaris �
 {
     "version": 1,
     "workflow": {
-        "id": "implement-and-verify",
-        "entrypoints": ["implement"],
+        "id": "pt-renderer",
         "nodes": [
             {
-                "id": "implement",
+                "id": "develop-material-system",
                 "type": "agent",
-                "inputs": {
-                    "task": { "literal": "Implement the requested change" }
-                },
+                "sideEffect": "workspaceMutation",
+                "task": "Develop the material system",
                 "outputs": {
-                    "summary": "text",
-                    "workspace": "workspace_snapshot"
+                    "result": "agentResult"
                 },
-                "retry": { "maxAttempts": 2 },
-                "timeoutSeconds": 1800
+                "retry": {
+                    "maxAttempts": 2
+                }
             },
             {
-                "id": "test",
-                "type": "command",
-                "dependsOn": ["implement"],
+                "id": "verify-material-system",
+                "type": "verifier",
+                "dependsOn": [
+                    "develop-material-system"
+                ],
                 "inputs": {
-                    "workspace": { "from": "implement.workspace" },
-                    "command": { "literal": ["just", "test"] }
+                    "candidate": {
+                        "from": "develop-material-system.result"
+                    }
                 },
                 "outputs": {
-                    "report": "test_report"
-                },
-                "timeoutSeconds": 1800
-            },
-            {
-                "id": "accept",
-                "type": "gate",
-                "dependsOn": ["test"],
-                "condition": {
-                    "eq": [
-                        { "from": "test.report.status" },
-                        { "literal": "passed" }
-                    ]
+                    "evidence": "verificationEvidence"
                 }
             },
             {
                 "id": "done",
                 "type": "terminal",
-                "dependsOn": ["accept"],
+                "dependsOn": [
+                    "verify-material-system"
+                ],
+                "condition": {
+                    "eq": [
+                        {
+                            "from": "verify-material-system.evidence.status"
+                        },
+                        {
+                            "literal": "passed"
+                        }
+                    ]
+                },
                 "outcome": "success"
             }
         ]
@@ -166,510 +188,496 @@ Codex 在该架构中是可替换的 `AgentRunner` 后端，而不是 Polaris �
 }
 ```
 
-这只是一个输入示例，不是运行时内置流程。同一个 Executor 必须能执行任何通过校验的 DAG。
+示例不是内置流程。Polaris 不包含 `develop-material-system` 的业务逻辑。
 
-### 4.2 IR 的含义
-
-IR（Intermediate Representation，中间表示）是配置与执行器之间的内部、规范化、带类型表示。
+### 4.2 数据层次
 
 ```text
-Human-authored JSON
-        |
-        v
-Compiler + Validator
-        |
-        v
-Immutable Workflow IR
-        |
-        v
-Graph Executor
+Untrusted JSON
+    -> Runtime Schema Validation
+Validated WorkflowConfig
+    -> Semantic Compilation
+Immutable WorkflowIR
+    + RunState from SQLite
+    -> Deterministic Scheduling Decision
 ```
 
-IR 的目的不是再定义一种用户协议，而是消除执行期歧义：
+三类数据必须分开：
 
-- 所有默认值已经展开；
-- 节点 ID、边和 Artifact 引用已经解析；
-- 节点类型和输入输出类型已经确定；
-- 条件表达式已经编译为受限 AST；
-- 拓扑信息和稳定调度顺序已经计算；
-- 重试、超时和副作用策略已经规范化；
-- IR 一旦开始运行即不可变，并具有内容哈希。
-
-### 4.3 三类数据必须分离
-
-| 数据 | 含义 | 生命周期 |
+| 类型 | 含义 | 可变性 |
 |---|---|---|
-| Config | 用户声明的工作流 | 可编辑，运行前编译 |
-| Workflow IR | 规范化后的执行定义 | 单次运行期间不可变 |
-| RunState | 该 IR 的一次具体执行状态 | 随事务化状态转换演进 |
+| `WorkflowConfig` | 通过 Schema 的外部配置 | 运行前输入 |
+| `WorkflowIR` | 引用和默认值已解析的内部执行定义 | 运行期间不可变 |
+| `RunState` | 一次具体运行的节点和 attempt 状态 | 仅事务化更新 |
 
-不得把运行时状态回写进 Config，也不得让节点输出修改 IR。
+### 4.3 IR 包含
 
-## 5. 编译与静态校验
+- 稳定 workflow/node ID；
+- 节点类型和 side-effect class；
+- 已解析依赖和输出引用；
+- 输入输出类型；
+- 受限条件 AST；
+- 有界 retry policy；
+- 稳定调度顺序；
+- terminal 定义；
+- 内容哈希和 Schema 版本。
 
-Executor 启动前必须一次性拒绝以下错误：
+## 5. 运行时校验
 
-- Schema 不合法、未知字段或不支持的版本；
-- 重复、空白或非法节点 ID；
-- 缺失依赖、悬空输出引用或自依赖；
-- 有环图；
-- 不可达节点或不可达 terminal；
-- 输入输出类型不兼容；
-- 条件引用不存在的字段或不支持的运算符；
-- 无界重试、非正超时或非法退避；
-- 未声明副作用等级；
-- terminal outcome 非法或成功终点不完整。
+静态类型不能替代运行时校验。以下数据一律视为不可信：
 
-校验器输出稳定、可定位的诊断：错误码、JSON 路径、节点 ID 和说明。不得等到节点开始执行才发现结构错误。
+- Workflow JSON；
+- MCP 请求；
+- Codex NodeResult；
+- SQLite row；
+- 恢复时读取的状态；
+- workspace revision 和文件路径。
 
-## 6. 节点模型
+校验分为四层：
 
-### 6.1 通用 NodeSpec
+### 5.1 Schema 校验
 
-每个节点至少包含：
+- 版本受支持；
+- 必填字段存在；
+- 未知字段被拒绝；
+- 枚举、整数和字符串格式正确；
+- retry 和 timeout 有界；
+- NodeResult 与节点输出 Schema 匹配。
 
-- `id`：工作流内唯一、稳定的标识；
-- `type`：内置节点类型；
-- `dependsOn`：前驱集合；
-- `inputs`：literal 或上游 Artifact 引用；
-- `outputs`：命名输出及其类型；
-- `condition`：可选受限表达式；
-- `retry`：最大 attempt 数与可选退避；
-- `timeoutSeconds`：单次 attempt 的上限；
-- `sideEffect`：`readOnly`、`workspaceMutation` 或 `externalSideEffect`。
+### 5.2 Graph 语义校验
 
-### 6.2 v1 节点类型
+- node ID 唯一；
+- 依赖和输出引用存在；
+- 类型兼容；
+- Graph 无环；
+- terminal 可达；
+- 条件只使用受支持操作；
+- side-effect class 明确；
+- mutation 规则可执行。
 
-#### `agent`
+### 5.3 状态转换校验
 
-调用 Codex 或兼容 Agent Runtime，传入 Task Contract 和声明的输入，返回结构化输出、日志和 workspace 结果。
+- 当前状态允许目标转换；
+- attempt ID 和 thread ID 匹配；
+- NodeResult 属于当前派发；
+- retry 没有超过上限；
+- terminal 的依赖和条件已经满足。
 
-#### `command`
+### 5.4 数据库约束
 
-通过 argv 形式执行本地命令，不经 shell 字符串拼接；捕获退出码、stdout、stderr、超时和工作目录信息。
+- 主键和外键；
+- node attempt 唯一编号；
+- request/result 幂等键唯一；
+- 每个 workspace 至多一个 mutation lease；
+- 必填状态和 thread 映射非空；
+- 所有状态变化在单个事务中提交。
 
-#### `verifier`
+## 6. 节点和状态
 
-消费候选 Artifact，产出机械验证或概率验证证据。它不直接声明全局成功。
-
-#### `gate`
-
-只解释受限条件 AST，根据已经持久化的输入选择通过、失败或阻塞；不执行任意代码。
-
-#### `terminal`
-
-在依赖和条件满足时，将运行提交为 `SUCCEEDED` 或声明的失败结果；不执行工作负载。
-
-## 7. 执行语义
-
-### 7.1 节点状态
+### 6.1 NodeState
 
 ```text
 PENDING
 READY
-PREPARED
+DISPATCHING
 RUNNING
+VERIFYING
 SUCCEEDED
 FAILED
 SKIPPED
 BLOCKED
 AMBIGUOUS
+CANCELLED
 ```
 
-- `PENDING -> READY`：依赖满足，条件可求值且允许执行。
-- `READY -> PREPARED`：attempt 和意图已持久化，尚未执行副作用。
-- `PREPARED -> RUNNING`：Runner 已取得执行权。
-- `RUNNING -> SUCCEEDED`：输出和证据已经持久化并通过契约检查。
-- `RUNNING -> FAILED`：attempt 明确失败；若策略允许，可创建新 attempt。
-- `PENDING -> SKIPPED`：条件明确为 false，且跳过在该位置合法。
-- 任意非终态可因不可满足依赖进入 `BLOCKED`。
-- 崩溃后无法判断副作用是否完成时进入 `AMBIGUOUS`。
-
-终态为 `SUCCEEDED`、`FAILED`、`SKIPPED`、`BLOCKED`、`AMBIGUOUS`。终态不可原地回退；重试必须创建新的 attempt 记录。
-
-### 7.2 运行状态
+关键转换：
 
 ```text
-CREATED -> VALIDATED -> RUNNING
-RUNNING -> SUCCEEDED | FAILED | BLOCKED | AMBIGUOUS | CANCELLED
+PENDING -> READY
+READY -> DISPATCHING
+DISPATCHING -> RUNNING
+RUNNING -> VERIFYING
+VERIFYING -> SUCCEEDED | FAILED | BLOCKED | AMBIGUOUS
+FAILED -> READY                  only through a new attempt
 ```
 
-只有 Executor 可以提交这些转换。Runner 只能返回 `NodeResult`。
+状态不能由 Agent task 直接写入。
 
-### 7.3 Ready 计算与调度
+### 6.2 RunState
 
-节点可进入 `READY`，当且仅当：
+```text
+CREATED
+VALIDATED
+RUNNING
+SUCCEEDED
+FAILED
+BLOCKED
+AMBIGUOUS
+CANCELLED
+```
 
-1. 它仍为 `PENDING`；
-2. 所有依赖都处于该边允许的终态；
-3. 所需 Artifact 均存在且完整性校验通过；
-4. 条件可以只依赖权威状态求值；
-5. 没有未处理的 `AMBIGUOUS` 副作用阻断运行。
+只有 terminal node 可以把 `RUNNING` 转换为 `SUCCEEDED`。
 
-v1 每次选择稳定排序后的最小 node ID，串行执行。顺序是可复现机制，不是业务语义。
+### 6.3 确定性调度
 
-### 7.4 NodeResult
+初始版本每次只派发一个节点。ready node 按稳定 node ID 排序，选择第一个合法节点。
 
-Runner 返回结构化结果：
+```text
+same WorkflowIR + same RunState
+    -> same SchedulingDecision
+```
+
+这避免把并发顺序、共享工作区和多 Agent 竞态引入初始实现。
+
+## 7. Mutation 串行语义
+
+### 7.1 全局规则
+
+任何 `sideEffect = workspaceMutation` 的节点都必须获取 workspace-scoped mutation lease。规则适用于 Agent、Command 和任何未来节点类型。
+
+```text
+workspace
+    -> zero or one active mutation attempt
+```
+
+### 7.2 获取 lease
+
+单个 SQLite transaction 完成：
+
+1. 验证 node 为 `READY`；
+2. 验证 workspace 没有 lease；
+3. 创建 attempt；
+4. 写入 dispatch intent；
+5. 获取 lease；
+6. 将 node 转换为 `DISPATCHING`；
+7. 提交事务。
+
+Host Adapter 只有在该事务成功后才能创建 Codex task 或执行 mutation。
+
+### 7.3 释放 lease
+
+只有以下情况可以释放：
+
+- NodeResult 已校验并提交为 `SUCCEEDED`；
+- attempt 明确失败且 mutation 结果已经对账；
+- 用户明确裁决 `AMBIGUOUS`；
+- mutation 被证明没有开始。
+
+进程重启或超时本身不能释放 lease。
+
+## 8. Codex task 映射
+
+### 8.1 ExecutionHandle
+
+```text
+ExecutionHandle
+    run_id
+    node_id
+    attempt_id
+    host_kind = codex
+    thread_id
+    host_id
+    workspace_id
+    created_at
+```
+
+Host Adapter 创建 task 后，必须先调用 bind 操作保存 thread ID，再开始节点工作。重复 bind 只有在内容完全相同时才幂等成功。
+
+### 8.2 Task Contract
+
+Agent task 获得：
+
+- 当前 node ID 和 attempt ID；
+- 节点目标；
+- 声明输入；
+- workspace 路径和基线 revision；
+- side-effect class；
+- 输出 Schema；
+- 验收标准；
+- retry/timeout 信息。
+
+不自动注入整个 Workflow 对话历史。Codex 自己负责单个 task 的上下文管理。
+
+### 8.3 NodeResult
 
 ```text
 NodeResult
-    status: succeeded | failed | blocked
-    outputs: map<name, ArtifactDraft>
-    evidence: list<Evidence>
-    diagnostics: list<Diagnostic>
-    retry_class: never | transient | policy
+    run_id
+    node_id
+    attempt_id
+    thread_id
+    status
+    outputs
+    evidence
+    workspace_revision
+    diagnostics
 ```
 
-Executor 校验结果、提交 Artifact，再转换节点状态。Runner 不得直接写 RunState。
+Polaris 必须验证身份、状态、Schema 和 revision 后才能提交。
 
-## 8. 副作用与 Action Boundary
+## 9. SQLite 权威状态
 
-### 8.1 副作用等级
-
-- `readOnly`：只读取固定输入，可安全重试。
-- `workspaceMutation`：修改 Polaris 管理的工作区；只有具备隔离或可核验提交协议时才能自动恢复。
-- `externalSideEffect`：修改远端系统或向外部人员发送信息；v1 默认拒绝。
-
-### 8.2 持久化执行边界
-
-对每个 attempt，Executor 必须：
-
-1. 分配稳定 `attempt_id`；
-2. 持久化输入引用、IR 哈希、策略和 `PREPARED` 事件；
-3. 原子提交 checkpoint；
-4. 调用 Runner；
-5. 捕获结果、日志和产物；
-6. 原子提交 Artifact 与终态事件；
-7. 重新计算 ready nodes。
-
-崩溃恢复时只能得到三种结论：
-
-- 有证据表明未执行：可按策略重新开始；
-- 有可核验结果表明已成功：提交原结果；
-- 无法判定：标记 `AMBIGUOUS`，停止后续有副作用节点并要求人工裁决。
-
-### 8.3 Agent 节点的现实边界
-
-如果底层 Agent 可以不受控地修改工作区，Polaris 无法声称精确恢复。`AgentRunner` 至少采用一种可验证机制：
-
-- 每个 attempt 使用隔离工作区/worktree，成功后由 Polaris 提交结果；或
-- Agent 的写操作经过 Polaris 管理的工具网关并记录动作；或
-- 明确把该节点标为不可自动重放，崩溃后进入 `AMBIGUOUS`。
-
-v1 优先采用隔离工作区；不能隔离的外部副作用不进入自动重试路径。
-
-## 9. 持久化、Artifact 与恢复
-
-### 9.1 持久化布局
+建议表：
 
 ```text
-.polaris/runs/<run_id>/
-    workflow.json
-    workflow.ir.json
-    state.json
-    events.jsonl
-    attempts/<attempt_id>/
-        request.json
-        result.json
-        stdout.log
-        stderr.log
-    artifacts/<artifact_id>/
-        metadata.json
-        payload
+workflows
+runs
+run_nodes
+attempts
+execution_handles
+node_outputs
+events
+mutation_leases
+idempotency_keys
 ```
 
-- `events.jsonl` 是 append-only 审计记录；
-- `state.json` 是从事件物化出的原子 checkpoint；
-- 启动恢复时验证两者一致性，并以已提交事件为权威；
-- 临时文件写入后必须 flush、fsync，并通过原子 rename 提交。
+### 9.1 权威关系
 
-### 9.2 Artifact 身份
+- SQLite 是运行状态权威；
+- Workflow IR 以规范 JSON 和内容哈希保存；
+- Codex 对话是执行记录，不是 Graph 状态权威；
+- task 标题只用于展示；
+- thread ID 用于恢复和对账；
+- 日志可以丢失，已提交状态不能依赖日志恢复。
 
-每个 Artifact 至少包含：
+### 9.2 事务规则
 
-- `artifact_id`、`run_id`、producer node 与 attempt；
-- 声明类型和内容类型；
-- 内容哈希、字节数和创建时间；
-- 上游 Artifact 引用；
-- 可选 workspace revision / snapshot identity；
-- payload 的受控路径。
+- 所有状态转换在 transaction 中完成；
+- 读取当前状态与写入新状态必须处于同一 transaction；
+- 每个提交带 expected previous state；
+- 重复 request 通过 idempotency key 返回原结果；
+- 不允许模块绕过 Store 直接写数据库。
 
-后续节点按 Artifact ID 读取，不按“最近一次同名文件”猜测。
+## 10. Python 实施规范
 
-### 9.3 恢复算法
+### 10.1 技术栈
 
-1. 读取并验证 Workflow IR 哈希；
-2. 重放事件并验证 checkpoint；
-3. 检查 Artifact 元数据和内容哈希；
-4. 对未完成 attempt 调用对应 Runner 的 reconcile；
-5. 将可证实结果提交为终态；
-6. 将不可判定副作用标为 `AMBIGUOUS`；
-7. 重新计算 ready nodes；
-8. 从下一个安全节点继续。
+- Python 3.12；
+- `pyproject.toml` 管理项目；
+- Pyright strict 作为强制静态检查；
+- Ruff 负责 lint 和格式；
+- pytest 负责测试；
+- Pydantic strict model 或等价 JSON Schema validator 负责外部输入；
+- 标准库 `sqlite3` 负责权威状态；
+- Python MCP server 提供 Codex Host Adapter 工具。
 
-恢复不得依赖模型“回忆上次做到哪里”。
+### 10.2 类型规则
 
-## 10. Task Contract、Observation 与上下文物化
+核心目录：
 
-### 10.1 Task Contract
+- 禁止 `Any` 和 `dict[str, Any]`；
+- 禁止用 `cast()` 代替校验；
+- 禁止无说明的 `# type: ignore`；
+- 所有生产函数完整标注参数和返回值；
+- ID 使用 `NewType` 或 frozen value object；
+- 状态使用 `Enum` 和 tagged dataclass union；
+- `assert_never()` 检查联合类型分支；
+- Config、IR、RunState 使用不同类型；
+- IR 使用 frozen dataclass、tuple 和不可变映射；
+- 外部依赖返回值在 adapter 边界重新校验。
 
-Agent 节点接收结构化 Task Contract，而不是整段历史对话：
+类型检查用于减少实现错误；运行时 Schema、Graph Validator 和数据库约束保护权威状态。
 
-- 节点目标；
-- 可用输入 Artifact；
-- 工作区身份；
-- 允许的工具和副作用；
-- 输出 Schema；
-- 完成与验证标准；
-- timeout 和 attempt 信息。
+### 10.3 禁止的动态能力
 
-### 10.2 Observation
+- `eval`、`exec`；
+- 从 Workflow 导入 Python module/class；
+- monkey patch 核心状态机；
+- 动态 `setattr()` 修改状态；
+- pickle 作为持久协议；
+- 通过异常文本猜测状态；
+- 把未校验 JSON cast 成领域模型。
 
-Observation 是描述外部可变事实的特殊 Artifact，例如某文件内容、Git revision 或测试结果。它必须绑定：
-
-- 来源；
-- 观测时的版本身份；
-- 内容哈希；
-- producer attempt；
-- 可选有效性条件。
-
-Polaris 在物化下游输入时拒绝已知 stale observation。v1 只实现声明输入链上的局部版本校验，不构建全局知识图谱。
-
-### 10.3 Context Materialization
-
-Polaris 的上下文职责是路由，不是 token 管理：
+### 10.4 建议包结构
 
 ```text
-NodeSpec + declared Artifacts + current attempt metadata
-    -> deterministic Task Contract / Context View
-    -> AgentRunner
-```
-
-规则：
-
-- 默认只注入节点显式声明的输入；
-- 每项输入有大小上限，超限时传引用和摘要元数据；
-- Materializer 输出稳定排序和内容哈希；
-- 不把完整运行日志或历史对话自动注入每个节点；
-- 不修改底层 Agent Runtime 的 compaction 或缓存策略；
-- 模型窗口不足是 Runner 层错误，Executor 按显式策略处理。
-
-## 11. 验证与完成语义
-
-验证证据分为：
-
-- **机械证据**：退出码、Schema、测试报告、哈希、静态检查；
-- **概率证据**：Agent/模型评审，必须记录模型、输入 Artifact 和输出。
-
-原则：
-
-- 能机械验证的条件不得只依赖模型判断；
-- Verifier 输出证据，Gate 解释条件，Terminal 提交运行结果；
-- Agent 自报“完成”不是全局完成条件；
-- 成功 terminal 必须消费配置中声明的全部必要证据；
-- 缺失、过期或类型错误的证据导致阻塞或失败，不能静默通过。
-
-## 12. 建议代码结构
-
-```text
-polaris/
-    cli.py
+src/polaris/
     config/
+        models.py
         schema.py
         loader.py
     ir/
-        model.py
+        models.py
         compiler.py
-        expressions.py
+        conditions.py
     graph/
-        analysis.py
+        validation.py
         scheduler.py
     runtime/
-        executor.py
-        state.py
+        models.py
         transitions.py
-        recovery.py
-    runners/
+        service.py
+    store/
+        schema.py
+        sqlite.py
+        migrations.py
+    host/
         protocol.py
-        agent.py
-        command.py
-        verifier.py
-        gate.py
-        terminal.py
-    artifacts/
-        model.py
-        store.py
-    persistence/
-        events.py
-        checkpoint.py
-        atomic.py
-    context/
-        contract.py
-        materializer.py
-    diagnostics.py
+        codex.py
+    mcp/
+        server.py
+        tools.py
+    cli.py
 tests/
+    unit/
     integration/
 ```
 
-模块名不是公共 API 承诺，但责任边界必须保留。避免把编译、调度、执行和持久化集中在一个 Controller 大类中。
+编译、Graph 分析、状态转换、存储和 Host Adapter 必须保持独立。
 
-## 13. 实施任务
+## 11. MCP 操作
 
-### 任务 1：Schema 与领域模型
+每次 MCP 调用应短小、事务化，不提供一个阻塞数小时的 `run` tool。
 
-交付：
+初始操作：
 
-- Workflow Config JSON Schema；
-- Node、Input、Output、Retry、Timeout、SideEffect 模型；
-- 稳定诊断格式；
-- 合法/非法配置 fixture。
+```text
+polaris_validate_workflow
+polaris_start_run
+polaris_next
+polaris_bind_task
+polaris_submit_result
+polaris_fail_attempt
+polaris_inspect_run
+polaris_resume_run
+polaris_cancel_run
+```
 
-完成条件：Schema 能拒绝未知字段、非法版本、无界策略和所有结构性错误。
+### 11.1 Host 循环
 
-### 任务 2：Compiler、IR 与静态分析
+```text
+start/resume
+    -> next
+    -> receive NodeDispatch
+    -> create visible Codex task when node.type == agent
+    -> bind thread ID
+    -> execute or wait
+    -> submit NodeResult
+    -> next
+    -> repeat until terminal
+```
 
-交付：
+Host Adapter 不能请求跳过 mandatory node，也不能提交不是当前 attempt 的结果。
 
-- Config -> Workflow IR；
-- 引用解析与类型检查；
-- 环检测、可达性、terminal 完整性；
-- 受限条件 AST；
-- 稳定 IR 序列化与内容哈希。
+## 12. 受控任务拆分
 
-完成条件：等价配置产生稳定 IR；任何非法图在执行前失败。
+初始版本允许 Agent 在自己的 Codex task 内部拆分实施步骤，但这些步骤不成为 Polaris Node。
 
-### 任务 3：内存 Executor 与 Runner 协议
+需要让子任务分别拥有独立对话时，使用后续的受控 child workflow：
 
-交付：
+- 只有 Config 明确允许的节点可以请求 child workflow；
+- Agent 只能提出 child Workflow Config；
+- Polaris 完整校验后生成独立、不可变的 child IR；
+- parent node 等待 child run terminal；
+- child 中的 Agent attempt 继续一一映射到独立 Codex task；
+- 不允许原地修改正在执行的 parent IR。
 
-- 节点/运行状态机；
-- ready 计算和稳定串行调度；
-- NodeRunner / NodeResult 协议；
-- 重试分类和超时接口。
+Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
 
-完成条件：使用 fake runners 可完整执行分支 DAG，并精确断言每个状态转换。
+## 13. 实施阶段
 
-### 任务 4：内置 Runners
-
-交付：
-
-- `command`、`gate`、`terminal`；
-- `verifier` 的机械验证基础；
-- `agent` 适配 Codex 或兼容 runtime；
-- argv、工作目录、环境和输出上限控制。
-
-完成条件：节点不能直接改图或 RunState，所有结果经过 Executor 校验后提交。
-
-### 任务 5：事件、Artifact 与持久状态
-
-交付：
-
-- append-only events；
-- 原子 checkpoint；
-- content-addressed Artifact store；
-- attempt 目录和日志；
-- 重放与一致性验证。
-
-完成条件：在任一提交点杀死进程后，重启可恢复到最后一个完整状态。
-
-### 任务 6：Action Boundary、重试与恢复
+### Phase 1：Python 骨架和 Workflow Compiler
 
 交付：
 
-- `PREPARED/RUNNING` 协议；
-- bounded retry/backoff；
-- Runner reconcile；
-- `AMBIGUOUS` 阻断语义；
-- Agent 隔离工作区策略。
+- `pyproject.toml`；
+- Pyright/Ruff/pytest 配置；
+- Config Schema 和严格边界模型；
+- immutable IR；
+- Graph 引用、类型、环、可达性和 terminal 校验；
+- 稳定 IR 序列化和哈希。
 
-完成条件：未确认副作用不会自动重复；只读 transient failure 可安全重试。
+完成条件：任何非法 Workflow 在创建 RunState 前被拒绝。
 
-### 任务 7：输入解析与 Context Materialization
-
-交付：
-
-- Artifact reference resolver；
-- Task Contract；
-- 稳定、受限的 Context View；
-- Observation 版本校验与 stale rejection。
-
-完成条件：Agent 节点仅看到声明输入；可检测并拒绝已知 stale observation。
-
-### 任务 8：强制验证、端到端测试与发布门
+### Phase 2：纯状态机和确定性 Scheduler
 
 交付：
 
-- verifier/gate/terminal 组合语义；
-- CLI `validate`、`run`、`resume`、`inspect`；
-- 崩溃注入测试；
-- 参考工作流和操作文档。
+- NodeState/RunState；
+- 显式 transition function；
+- ready 计算；
+- 稳定串行调度；
+- retry、blocked、cancel 和 terminal；
+- NodeDispatch/NodeResult 模型。
 
-完成条件：参考工作流可以在多次故障注入后恢复并只由 terminal 提交最终结果。
+完成条件：纯内存测试覆盖所有合法和非法转换。
+
+### Phase 3：SQLite Store 和 Mutation Lease
+
+交付：
+
+- 数据库 Schema；
+- transaction API；
+- attempt 和 event；
+- idempotency key；
+- workspace mutation lease；
+- 启动恢复和一致性检查。
+
+完成条件：进程在每个 transaction 边界终止后，恢复结果保持一致，mutation 不会重复派发。
+
+### Phase 4：Codex Skill 和 MCP Host Adapter
+
+交付：
+
+- MCP tools；
+- 总控 Skill；
+- Agent NodeDispatch；
+- 独立 Codex task 创建、bind、等待和结果提交协议；
+- inspect/resume/cancel 用户流程。
+
+完成条件：一个多节点 Workflow 能在 Codex App 中为每个 Agent attempt 显示独立任务，并严格串行推进 mutation。
+
+### Phase 5：验证和端到端故障测试
+
+交付：
+
+- NodeResult Schema 校验；
+- workspace revision 对账；
+- stale/duplicate result 拒绝；
+- task 丢失、超时和 ambiguous 恢复；
+- 参考 PT Renderer Workflow；
+- 端到端测试和操作文档。
+
+完成条件：故障注入不会绕过节点、重复 mutation 或提前提交 terminal。
+
+### Phase 6：受控 Child Workflow
+
+在基础版本稳定后实现第 12 节定义的嵌套拆分，不修改 parent IR。
 
 ## 14. 测试门槛
 
-每次改变执行语义，至少覆盖：
+必须覆盖：
 
-- Schema 和版本兼容拒绝；
-- 引用、类型、环、可达性和 terminal 分析；
-- ready 计算与稳定调度；
-- 所有合法及非法状态转换；
-- 条件为 true、false、缺失和类型错误；
-- timeout、可重试失败、永久失败和 attempt 上限；
-- 崩溃发生在 Action Boundary 前、执行中、结果提交前后；
-- Artifact 缺失、损坏和哈希不一致；
-- Observation current/stale 判定；
-- Runner 返回非法输出；
-- `AMBIGUOUS` 阻止后续副作用；
+- Schema 接受和拒绝；
+- 未知字段、版本和枚举；
+- 重复 node ID、悬空引用和类型不匹配；
+- 环、不可达节点和不可达 terminal；
+- ready-node 稳定排序；
+- 每个合法和非法状态转换；
+- attempt 上限；
+- thread bind 幂等性和冲突；
+- stale、重复和错误身份的 NodeResult；
+- mutation lease 唯一性；
+- 多个 mutation node 永不并行；
+- transaction 前后进程终止；
+- 未确认 mutation 进入 `AMBIGUOUS`；
 - Agent 自报完成但 terminal 条件不满足；
-- 从持久状态恢复后与未中断运行得到相同最终状态。
+- 恢复前后得到相同调度决定；
+- 每个 Agent attempt 对应独立 Codex task。
 
-## 15. 里程碑
+发布门禁：
 
-### Phase 1：图与控制语义
+```text
+pyright
+ruff check
+ruff format --check
+pytest
+```
 
-完成任务 1-4。目标是证明 Polaris 能以统一内核执行任意合法 v1 DAG，而不硬编码工作流。
+全部必须成功。
 
-### Phase 2：持久化、Artifact 与恢复
+## 15. 最终产品边界
 
-完成任务 5-6。目标是把执行从“可运行”提升为“崩溃后可安全判断和继续”。
+Polaris 不是另一个 Coding Agent，也不是上下文管理器。
 
-### Phase 3：上下文物化与版本化 Observation
-
-完成任务 7。目标是让 Agent 节点获得最小、可追踪、与当前状态一致的输入。
-
-### Phase 4：验证闭环与发布
-
-完成任务 8。目标是以明确证据和 terminal 条件结束长任务。
-
-### Phase 5：后续候选
-
-只有在 v1 基准和故障数据支持时考虑：
-
-- 有界并行与 join；
-- 动态扩图或子图；
-- 人工审批节点；
-- 分布式 Runner；
-- 更丰富的 Observation 失效传播；
-- UI 和可视化诊断；
-- 工作流模板库。
-
-## 16. 产品决策规则
-
-新增能力必须回答：
-
-1. 它是通用图执行语义，还是某个具体工作流的业务逻辑？
-2. 它是否改变 Config、IR 或 RunState 的边界？
-3. 它在崩溃后如何判定已发生、未发生或不确定？
-4. 它如何被结构化验证，而不是依赖模型自报？
-5. 它是否让相同输入的调度更难复现？
-6. 它是否能先作为节点或 Runner 实现，而不污染 Executor 内核？
-
-属于具体流程的逻辑应留在工作流配置或节点实现中；只有通用、可验证的执行语义才能进入内核。
-
-## 17. 最终定义
-
-Polaris 的目标不是替代 Codex 的模型上下文管理，也不是决定软件工程应该采用什么流程。
-
-它提供的是一个窄而坚固的控制层：把外部声明的 Task Graph 编译成不可变 IR，以确定性调度、持久化状态、受控副作用、版本化 Artifact 和显式验证来执行，直到到达可证明的 terminal 状态。
+它是一个小型 Python Graph authority：严格校验并推进声明式 Workflow，把每个语义 Agent attempt 交给独立、可见的 Codex task，并通过 SQLite 事务确保状态、幂等性和 mutation 串行。

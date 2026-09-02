@@ -1,133 +1,97 @@
 # Polaris
 
-Polaris is a deterministic Task Graph Executor for probabilistic coding agents.
-
-It executes a workflow supplied as data. The workflow defines the nodes, dependencies, conditions, retries, and completion criteria; Polaris validates and enforces those rules without deciding what the workflow should be.
+Polaris is a strict Task Graph Executor for Codex.
 
 ```text
-Config owns control.
-Polaris enforces control.
-Nodes perform work.
+Workflow Config owns control.
+Polaris validates and advances the graph.
+Codex tasks perform semantic work.
 ```
 
 [中文说明](README.zh-CN.md)
 
 ## Status
 
-Polaris is in early design and implementation. The authoritative implementation scope is [plan.md](plan.md); [Polaris_Design_ZH_v0.2.md](Polaris_Design_ZH_v0.2.md) contains the longer design rationale.
+Polaris is in early implementation design. [plan.md](plan.md) is the single authority for product scope, execution semantics, implementation order, and release gates.
 
 ## What Polaris does
 
-```text
-Workflow JSON
-    -> compiler and static validation
-    -> immutable typed Workflow IR
-    -> persistent graph runtime
-    -> node runners
-    -> verified terminal outcome
-```
+Polaris:
 
-Polaris owns:
+- validates a declarative Workflow Config;
+- compiles it into an immutable typed Workflow IR;
+- calculates the next ready node deterministically;
+- dispatches nodes and validates structured results;
+- maps every Agent attempt to an independent, visible Codex task;
+- serializes every workspace mutation;
+- persists run state, attempts, thread IDs, and mutation leases in SQLite;
+- finishes only through a validated terminal node.
 
-- workflow compilation and graph validation;
-- deterministic ready-node calculation and scheduling;
-- node and run state transitions;
-- typed inputs, outputs, and content-addressed artifacts;
-- bounded retries, timeouts, and conservative recovery;
-- durable action boundaries around side effects;
-- verification gates and terminal-state enforcement;
-- deterministic context materialization from declared node inputs.
+Polaris does not:
 
-Polaris does not own:
+- invent or optimize the business workflow;
+- perform coding work itself;
+- manage model context, compaction, or chat history;
+- reimplement Codex tools or sandboxing;
+- allow an Agent to rewrite the graph or declare the workflow complete.
 
-- the business meaning or preferred shape of a workflow;
-- automatic workflow invention or optimization;
-- the reasoning policy inside an agent node;
-- token-level context compaction, transcript garbage collection, or model caching;
-- distributed scheduling or a general-purpose enterprise workflow platform.
-
-## Workflow-agnostic, not semantics-free
-
-Polaris does not need to know whether a node is planning, editing Rust, running tests, or reviewing a patch. It does need to understand the graph's execution semantics: node types, dependencies, typed data flow, conditions, retry policy, side effects, persistence, and terminal outcomes.
-
-The same runtime should execute any valid v1 DAG without hard-coded stage names or workflow-specific branches.
-
-## Workflow IR
-
-IR means Intermediate Representation: the normalized, typed, immutable form between user-authored configuration and runtime execution.
+## Execution model
 
 ```text
-Human-authored config
-        |
-        v
-Compiler + validator
-        |
-        v
-Workflow IR
-        |
-        v
-Graph Executor
+Codex controller task
+    -> Polaris Skill
+    -> short MCP call
+    -> Python Graph Executor
+    -> NodeDispatch
+    -> independent visible Codex task for an Agent attempt
+    -> validated NodeResult
+    -> next graph transition
 ```
 
-The compiler resolves references, expands defaults, type-checks inputs and outputs, compiles conditions into a restricted AST, analyzes the graph, and assigns a stable IR hash. Runtime state is stored separately and can never mutate the IR.
+The Codex controller task shows overall graph progress. Every `agent` attempt has its own Codex task and persisted thread ID. Retries create new attempts and new tasks.
 
-## Built-in node types in v1
+Mechanical nodes such as `command`, `verifier`, `gate`, and `terminal` do not require their own conversation.
 
-- `agent`: run Codex or another compatible agent runtime against a structured task contract;
-- `command`: execute an argv-based local command with bounded output and timeout;
-- `verifier`: produce mechanical or probabilistic evidence about artifacts;
-- `gate`: evaluate a restricted condition over persisted data;
-- `terminal`: commit the declared workflow outcome when its prerequisites hold.
+## Mutation rule
 
-Node runners perform local work and return structured results. They cannot rewrite the graph, commit runtime state directly, or declare the whole run complete.
+Any node declared as `workspaceMutation` must acquire a durable workspace-scoped mutation lease. The initial executor dispatches one node at a time, so mutating Agents and commands can never overlap.
 
-## Reliability model
+The next mutation cannot begin until the previous attempt is committed, proven not to have run, or explicitly resolved. An uncertain mutation becomes `AMBIGUOUS` and is never replayed automatically.
 
-Polaris persists the workflow IR, append-only events, materialized run state, node attempts, logs, and artifacts. Before a side-effecting attempt starts, it records a durable action boundary.
+## Runtime validation
 
-After a crash, Polaris reconciles each unfinished attempt as one of:
+Static typing does not validate runtime data. Workflow JSON, MCP messages, Codex results, SQLite rows, and recovered state are untrusted until checked.
 
-- proven not executed, so policy may permit a retry;
-- proven successful, so the original result can be committed;
-- uncertain, so the node becomes `AMBIGUOUS` and later side effects stop pending intervention.
+Polaris uses four layers:
 
-Polaris does not claim exactly-once execution where the underlying runner cannot prove it.
+1. JSON Schema and strict boundary models;
+2. semantic graph validation;
+3. explicit state-transition validation;
+4. SQLite constraints and transactions.
 
-## Agent context boundary
+## Python implementation
 
-For an `agent` node, Polaris builds a Task Contract from the node specification, declared artifacts, workspace identity, output schema, and attempt policy. It does not replay the entire workflow history by default.
+The initial implementation uses:
 
-The underlying agent runtime—such as Codex—continues to own its model context window, compaction, tool protocol, and inference behavior. Polaris owns cross-node data routing, artifact identity, observation freshness, and recovery.
+- Python 3.12;
+- Pyright strict;
+- Ruff;
+- pytest;
+- strict Pydantic models or an equivalent JSON Schema validator;
+- standard-library SQLite;
+- a Python MCP server and a Codex Skill.
 
-## v1 scope
+Core code forbids unvalidated `Any`, unsafe casts, arbitrary evaluation, dynamic Runner imports, mutable IR, and direct database writes outside the Store.
 
-The first release is intentionally narrow:
+## Initial node types
 
-- one local foreground run;
-- JSON config plus JSON Schema;
-- immutable typed IR;
-- sequential execution of an acyclic graph in stable order;
-- five built-in node types;
-- typed artifacts and restricted conditions;
-- bounded timeout and retry policies;
-- append-only events, atomic checkpoints, and crash recovery;
-- CLI commands for validate, run, resume, and inspect.
-
-Cycles, dynamic graph expansion, parallel joins, distributed runners, external side effects, visual workflow editing, and a plugin system are later candidates, not v1 commitments.
-
-## Design invariants
-
-1. Configuration owns the workflow; runtime never invents business control flow.
-2. Invalid graphs fail before execution.
-3. Authoritative state lives outside model context.
-4. Only the executor commits state transitions.
-5. Cross-node data moves through typed, integrity-checked artifacts.
-6. Retries and timeouts are explicit and bounded.
-7. Uncertain side effects are surfaced as `AMBIGUOUS`, never silently replayed.
-8. Workflow completion requires an explicit verified terminal node.
+- `agent`: dispatch an independent visible Codex task;
+- `command`: ask the Host Adapter to run a declared command;
+- `verifier`: produce structured verification evidence;
+- `gate`: evaluate a restricted condition over persisted outputs;
+- `terminal`: commit the declared workflow outcome.
 
 ## Documentation
 
-- [plan.md](plan.md): authoritative product scope, execution semantics, implementation tasks, and test gates.
-- [Polaris_Design_ZH_v0.2.md](Polaris_Design_ZH_v0.2.md): detailed Chinese design rationale and architectural exploration.
+- [plan.md](plan.md): authoritative product scope, architecture, Python implementation plan, and tests.
 - [AGENTS.md](AGENTS.md): repository rules for contributors and coding agents.

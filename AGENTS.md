@@ -1,21 +1,21 @@
 # Polaris repository rules
 
-- Treat `plan.md` as the product and implementation authority. Use `Polaris_Design_ZH_v0.2.md` for rationale; resolve conflicts in favor of `plan.md`.
-- Polaris is a workflow-agnostic, deterministic Task Graph Executor for probabilistic coding agents. Do not reframe it as an autonomous workflow planner or token-level context manager.
-- Preserve the control rule: Config owns control, Polaris enforces control, and nodes perform work.
-- Keep workflow-specific stage names, node IDs, branching rules, prompts, and completion criteria in configuration or node inputs. Never hard-code a particular workflow into the Executor.
-- Compile user configuration into an immutable, typed Workflow IR before execution. Keep Config, Workflow IR, and RunState as distinct models.
-- Reject invalid schemas, references, types, cycles, unreachable terminals, unbounded policies, and unsupported side effects before execution begins.
-- Only the Executor may commit node or run state transitions. Node Runners return structured results and must not rewrite the graph, mutate RunState directly, or declare global completion.
-- Pass cross-node data through typed, integrity-checked Artifacts. Resolve inputs from declared references instead of implicit chat history or “latest file” lookup.
-- Treat authoritative state as independent of model context. Rebuild each Agent Task Contract from the node spec, declared Artifacts, workspace identity, output contract, and attempt metadata.
-- Leave token-level compaction, transcript garbage collection, model caching, and inference policy to the underlying Agent Runtime. Polaris owns cross-node context routing, Artifact identity, Observation freshness, and recovery.
-- Bind mutable observations to source, version identity, content hash, and producer attempt. Reject known stale observations when materializing downstream inputs.
-- Declare each node's side-effect class. Persist a durable Action Boundary before execution; serialize mutating work in v1; never automatically replay an unresolved side effect.
-- Use `AMBIGUOUS` when crash recovery cannot prove whether a side effect completed. Block later side effects until the ambiguity is explicitly resolved.
-- Keep retries and timeouts explicit and bounded. v1 executes an acyclic graph sequentially in stable node-ID order; parallelism, joins, cycles, and dynamic graph expansion require an approved `plan.md` change.
-- Distinguish mechanical evidence from probabilistic evidence. Prefer mechanical verification whenever available, and allow only a validated terminal node to commit the final run outcome.
-- Add or update tests for Schema validation, IR compilation, references and types, graph analysis, state transitions, ready-node calculation, retry limits, timeouts, Action Boundary crash points, Artifact integrity, stale Observation rejection, recovery, and terminal gates.
-- Do not add distributed schedulers, services, databases, dashboards, workflow UIs, plugin systems, or unrelated frameworks without benchmark evidence and an approved `plan.md` change.
-- Prefer one four-space-indented JSON authority when content must be mechanically validated and human-readable. Use Markdown for independent explanation.
-- Keep modules small, single-purpose, and independently testable. Separate compiler, graph analysis, runtime state, persistence, Artifact storage, context materialization, and Node Runners.
+- Treat `plan.md` as the single product, architecture, and implementation authority.
+- Polaris is a strict Task Graph Executor. Do not turn it into a Coding Agent, workflow planner, context manager, tool gateway, sandbox, distributed scheduler, or general workflow platform.
+- Preserve the control rule: Workflow Config owns control, Polaris validates and advances the graph, and Codex tasks perform semantic work.
+- Keep workflow-specific stages, prompts, node IDs, dependencies, conditions, and completion criteria in configuration. Never hard-code a particular engineering workflow into the Executor.
+- Implement the initial system in Python 3.12. Use Pyright strict, Ruff, pytest, strict runtime models, standard-library SQLite, a Python MCP server, and a Codex Skill.
+- Treat static typing as an implementation aid, not a runtime trust boundary. Validate Workflow JSON, MCP inputs, Codex results, SQLite rows, and recovered state before use.
+- Keep `WorkflowConfig`, immutable `WorkflowIR`, and `RunState` as separate types. Only the Compiler may construct a valid IR, and an IR must not change during a run.
+- In core code, do not use unvalidated `Any`, `dict[str, Any]`, `cast()` as validation, unexplained type-ignore comments, `eval`, `exec`, monkey patching, dynamic Runner imports, pickle protocols, or dynamic state mutation with `setattr()`.
+- Use enums, tagged frozen dataclasses, immutable containers, strong ID types, and `assert_never()` for state unions. Do not use bare strings for node or run states.
+- Only the transition service may commit NodeState or RunState changes. Host adapters and Codex tasks return structured requests or results and never write state directly.
+- Persist authoritative run state in SQLite. Enforce keys, references, uniqueness, mutation leases, and idempotency with database constraints and transactions, not Python checks alone.
+- The initial scheduler dispatches one node at a time in stable node-ID order. Every `workspaceMutation` node must hold the single workspace-scoped mutation lease.
+- Never release a mutation lease merely because of timeout, process exit, or restart. Reconcile the attempt; unresolved mutation becomes `AMBIGUOUS` and blocks later mutation.
+- Map every Agent attempt to one independent, visible Codex task. Persist its thread ID before work begins; titles are display labels, not identity. A retry creates a new attempt and a new task.
+- Leave model context windows, compaction, conversation history, native tools, and sandboxing to Codex. Agent tasks receive only their declared Task Contract and cannot rewrite the Graph.
+- Require runtime Schema checks for NodeResult identity, output shape, workspace revision, and evidence before committing success. An Agent saying “done” never satisfies a terminal condition by itself.
+- Keep MCP operations short and transactional. Do not implement a single tool call that blocks for an entire long-running workflow.
+- Add or update tests for Schema rejection, Graph analysis, deterministic scheduling, every transition, retry limits, thread binding, duplicate/stale results, transaction recovery, mutation lease exclusivity, `AMBIGUOUS`, and terminal gates.
+- Keep compiler, graph analysis, transition logic, SQLite storage, MCP protocol, and Codex host integration in separate small modules.
