@@ -1,7 +1,0 @@
-interface:
-  display_name: "Implementation"
-  short_description: "Execute a frozen implementation handoff"
-  default_prompt: "Use $implementation to execute the registered Polaris Implementation handoff and record live progress."
-
-policy:
-  allow_implicit_invocation: false

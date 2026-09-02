@@ -1,8 +1,21 @@
-# Polaris repository rules
+# Custos repository rules
 
-- Treat `plan.md` as the current v0.1 product and implementation authority.
-- Keep the runtime dependency-free beyond the Python standard library.
-- When content must be both mechanically validated and human-readable, prefer one four-space-indented JSON representation and format it on demand. Use Markdown only when it carries independent natural-language content that JSON would represent poorly.
-- Add or update tests for every workflow gate, state transition, and validator rule.
-- Keep the user-facing `polaris` CLI a standard-library-only thin dispatcher over the existing scripts. Do not move protocol logic into it or add a daemon, scheduler, database, Dashboard, Task DAG, or custom Agent Runtime in v0.1.
-- Do not let an Agent write `VERIFIED` or `CLOSED` directly; route state changes through `transition_task.py`.
+- Treat `plan.md` as the single product, architecture, and implementation authority.
+- Custos is a strict Task Graph Executor. Do not turn it into a Coding Agent, workflow planner, context manager, tool gateway, sandbox, distributed scheduler, or general workflow platform.
+- Preserve the control rule: Workflow Config owns control, Custos validates and advances the graph, and Codex tasks perform semantic work.
+- Keep workflow-specific stages, prompts, node IDs, dependencies, conditions, and completion criteria in configuration. Never hard-code a particular engineering workflow into the Executor.
+- Implement the initial system in Python 3.12. Use Pyright strict, Ruff, pytest, strict runtime models, standard-library SQLite, a Python MCP server, and a Codex Skill.
+- Treat static typing as an implementation aid, not a runtime trust boundary. Validate Workflow JSON, MCP inputs, Codex results, SQLite rows, and recovered state before use.
+- Keep `WorkflowConfig`, immutable `WorkflowIR`, and `RunState` as separate types. Only the Compiler may construct a valid IR, and an IR must not change during a run.
+- In core code, do not use unvalidated `Any`, `dict[str, Any]`, `cast()` as validation, unexplained type-ignore comments, `eval`, `exec`, monkey patching, dynamic Runner imports, pickle protocols, or dynamic state mutation with `setattr()`.
+- Use enums, tagged frozen dataclasses, immutable containers, strong ID types, and `assert_never()` for state unions. Do not use bare strings for node or run states.
+- Only the transition service may commit NodeState or RunState changes. Host adapters and Codex tasks return structured requests or results and never write state directly.
+- Persist authoritative run state in SQLite. Enforce keys, references, uniqueness, mutation leases, and idempotency with database constraints and transactions, not Python checks alone.
+- The initial scheduler dispatches one node at a time in stable node-ID order. Every `workspaceMutation` node must hold the single workspace-scoped mutation lease.
+- Never release a mutation lease merely because of timeout, process exit, or restart. Reconcile the attempt; unresolved mutation becomes `AMBIGUOUS` and blocks later mutation.
+- Map every Agent attempt to one independent, visible Codex task. Persist its thread ID before work begins; titles are display labels, not identity. A retry creates a new attempt and a new task.
+- Leave model context windows, compaction, conversation history, native tools, and sandboxing to Codex. Agent tasks receive only their declared Task Contract and cannot rewrite the Graph.
+- Require runtime Schema checks for NodeResult identity, output shape, workspace revision, and evidence before committing success. An Agent saying “done” never satisfies a terminal condition by itself.
+- Keep MCP operations short and transactional. Do not implement a single tool call that blocks for an entire long-running workflow.
+- Add or update tests for Schema rejection, Graph analysis, deterministic scheduling, every transition, retry limits, thread binding, duplicate/stale results, transaction recovery, mutation lease exclusivity, `AMBIGUOUS`, and terminal gates.
+- Keep compiler, graph analysis, transition logic, SQLite storage, MCP protocol, and Codex host integration in separate small modules.

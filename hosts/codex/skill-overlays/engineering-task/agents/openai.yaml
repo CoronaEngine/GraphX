@@ -1,7 +1,0 @@
-interface:
-  display_name: "Engineering Task"
-  short_description: "Orchestrate Polaris workers and workflow"
-  default_prompt: "Use $engineering-task to qualify, dispatch, track, review, and validate this engineering request through Polaris."
-
-policy:
-  allow_implicit_invocation: false
