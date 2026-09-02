@@ -128,6 +128,60 @@ Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记
 
 `command`、`verifier`、`gate` 和 `terminal` 不要求独立对话。Host Adapter 按 NodeDispatch 执行或解释它们，并将结构化结果返回 GraphX。
 
+### 3.4 与 Superpowers 的职责边界和交接
+
+Superpowers 与 GraphX 处于不同层次：Superpowers 提供需求澄清、工程计划和单个任务内的软件工程方法；GraphX 提供跨节点的控制权、持久化状态、调度、恢复和完成门。二者的标准交接点是 Superpowers 的 implementation plan 已经获得用户批准之后、`executing-plans` 或 `subagent-driven-development` 开始之前。
+
+```text
+Superpowers brainstorming
+    -> approved Spec
+    -> Superpowers writing-plans
+    -> approved Implementation Plan
+    -> GraphX Skill drafts Workflow Config
+    -> graphx_validate_workflow
+    -> user confirms the compiled graph
+    -> graphx_start_run
+```
+
+交接遵循以下规则：
+
+- GraphX Skill 可以读取已批准的 Spec 和 Implementation Plan，辅助生成候选 Workflow Config；该 Config 仍是不可信输入，必须经过正常 Schema 和 Graph 编译校验，且不能未经用户确认自动启动。
+- Implementation Plan 中的两到五分钟步骤通常进入 Agent Node 的 Task Contract，不要求每一步都成为 GraphX Node。只有需要独立状态、独立 attempt、独立审查、显式依赖或恢复边界的交付单元才成为 Node。
+- GraphX 开始控制 Run 后，Agent Node 不能在内部再启动 `executing-plans`、`subagent-driven-development` 等顶层执行控制器，避免产生 GraphX 无法观察、恢复和裁决的隐藏子工作流。
+- Agent Node 可以在环境提供时使用 task-local Superpowers 方法，例如 `test-driven-development`、`systematic-debugging` 和 `verification-before-completion`；这些方法不能修改 Workflow IR、RunState 或绕过后续 Verifier/Gate。
+- 正式的测试、独立代码审查和用户批准若影响终态，必须在 Workflow Config 中表现为显式 `command`、`verifier`、独立 `agent` 或 `gate` 节点。Agent 内部自检只能作为提前反馈。
+- Superpowers 风格的实现、测试、审查和修复流程可以作为可复用 Workflow 模板或 GraphX Skill 资产提供，但不能硬编码进 GraphX Core。
+
+如果一个 Agent Node 需要在内部运行完整的多任务执行计划，通常说明该 Node 过大；应在 Run 启动前继续拆分 Config，或在后续版本使用第 12 节的受控 child workflow。
+
+Superpowers 是可选集成而不是 GraphX 的运行时依赖；未安装 Superpowers 时，合法 Workflow 仍可由普通 Codex task 执行。
+
+### 3.5 CodeGraph 支持边界
+
+CodeGraph 是 Codex 工作环境中的代码导航能力，不是 GraphX Core 的子系统。是否为仓库创建 `.codegraph/` 索引由用户决定；仓库未建立索引时，GraphX 不自动初始化索引，也不改变 Agent 的普通文件导航行为。
+
+默认更新流程完全由 CodeGraph 管理：
+
+```text
+source changes --------> watcher / debounced incremental sync --+
+                                                               +-> refreshed graph
+MCP start or reconnect -> stat/hash catch-up -------------------+
+```
+
+GraphX 不实现文件 watcher、不解析 CodeGraph 数据库、不维护 CodeGraph 新鲜度状态，也不增加专用 `CodeGraphNode`。Codex 是否优先使用 CodeGraph，由仓库 `AGENTS.md` 等项目指令和可用工具决定；Host Adapter 只需保证 Agent Node 在其声明的 workspace 中运行，并获得该环境原本可用的指令和工具。没有显式 CodeGraph Command Node 时，CodeGraph 不可用不得成为 GraphX Run 的隐式失败条件。
+
+普通代码导航不需要额外 Workflow Node。只有后续节点对“刚完成 mutation 后的最新代码图”存在明确的强一致性前置条件时，Workflow Config 才显式加入一个普通 Command Node：
+
+```text
+workspace mutation
+    -> command: codegraph sync --quiet
+    -> graph-dependent analysis or verification
+```
+
+该节点只是用户配置的通用命令和依赖屏障。GraphX 只执行命令、记录退出状态和推进 Graph，不理解命令语义；Host Adapter 必须把命令工作目录设置为 Node 声明的 workspace，不能继承 Adapter 进程自己的当前目录。同步失败时后续依赖节点不得运行。禁止通过固定 `sleep` 猜测 watcher 已经完成。强制全量索引属于 CodeGraph 的异常恢复行为，不是每次节点执行的常规步骤。
+
+每个 checkout 或 worktree 必须使用与 Agent 实际 workspace 对应的 CodeGraph 根和索引。索引的并发、锁和数据库恢复由 CodeGraph 自己负责。
+
 ## 4. Workflow Config 与 IR
 
 ### 4.1 配置示例
@@ -156,6 +210,12 @@ Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记
                 "dependsOn": [
                     "develop-material-system"
                 ],
+                "check": {
+                    "id": "material-system-tests",
+                    "kind": "command",
+                    "argv": ["pytest", "tests/material_system"],
+                    "successExitCodes": [0]
+                },
                 "inputs": {
                     "candidate": {
                         "from": "develop-material-system.result"
@@ -216,6 +276,8 @@ Immutable WorkflowIR
 - 节点类型和 side-effect class；
 - 已解析依赖和输出引用；
 - 输入输出类型；
+- verifier 的 tagged check spec、稳定 check ID 和规范化 check hash；
+- Run 开始前固定的 workspace revision policy；
 - 受限条件 AST；
 - 有界 retry policy；
 - 稳定调度顺序；
@@ -242,6 +304,7 @@ Immutable WorkflowIR
 - 未知字段被拒绝；
 - 枚举、整数和字符串格式正确；
 - retry 和 timeout 有界；
+- verifier check spec 的 kind-specific 字段、命令参数和成功条件合法；
 - NodeResult 与节点输出 Schema 匹配。
 
 ### 5.2 Graph 语义校验
@@ -271,6 +334,33 @@ Immutable WorkflowIR
 - 每个 workspace 至多一个 mutation lease；
 - 必填状态和 thread 映射非空；
 - 所有状态变化在单个事务中提交。
+
+### 5.5 验证权威和保证边界
+
+Agent Node 内部运行的测试、自审或 Superpowers verification 属于 Agent 提供的候选证据，不具有独立的机械执行保证。是否要求正式 Verifier、独立 Review 或 Human Gate 由 Workflow Config 决定；Agent 自检不能冒充或替代 Config 已声明的这些节点。GraphX 必须区分“候选产物已经生成”和“Workflow 按其 Config 验收了该产物”。
+
+```text
+Agent Node
+    -> candidate output + workspace revision + claimed evidence
+    -> optional Host-executed Command/Verifier
+    -> optional independent Review Agent
+    -> optional Human Gate
+    -> Terminal condition
+```
+
+各层保证如下：
+
+| 层级 | 作用 | 权威性 |
+|---|---|---|
+| Agent task-local 自检 | 尽早发现缺陷并降低返工 | Agent 提供的证据；不能冒充已声明的 Host Verifier |
+| Host 执行的 `command` / `verifier` | 执行 IR 中固定的检查并采集退出码和输出 | 对“声明的检查确实在绑定 revision 上执行”提供机械证据 |
+| 独立 Review Agent | 检查需求符合性和代码质量 | 独立但仍是概率性的语义判断 |
+| Human Gate | 记录需要人工负责的批准或裁决 | 对批准事件权威，不自动证明技术正确性 |
+| Terminal | 汇总 Graph 中声明的必要条件 | 只有所有依赖和条件满足后才能提交 Run 成功 |
+
+正式 Verifier 的 tagged check spec 来自 Workflow Config；Compiler 必须校验其 kind-specific 字段，并在不可变 Workflow IR 中保存稳定 check ID 和规范化 check hash，不能由被验证 Agent 在结果中临时指定。Verification Evidence 必须绑定 run、node、attempt、被验证 workspace revision、check ID/hash 和结构化结果；stale revision、错误身份、check hash 不匹配或仅有自然语言成功声明都必须拒绝。
+
+GraphX 能机械保证 Config 声明的验证步骤被正确调度、执行、绑定和记录，但不能证明测试覆盖了全部需求、测试本身正确或 Agent 的语义判断必然正确。需要更高置信度时，Config 应组合受保护的验收命令、独立 Review Agent 和 Human Gate，而不是扩大 GraphX Core 的业务判断能力。
 
 ## 6. 节点和状态
 
@@ -364,6 +454,12 @@ Host Adapter 只有在该事务成功后才能创建 Codex task 或执行 mutati
 - mutation 被证明没有开始。
 
 进程重启或超时本身不能释放 lease。
+
+### 7.4 权威 workspace revision 与派生数据
+
+workspace revision 只描述 Workflow 声明的权威项目内容，不能把缓存、索引、日志或其他派生元数据的变化当成源码 mutation。revision provider 不得简单依赖 workspace 目录时间或无差别哈希所有文件；它必须覆盖 tracked 文件的修改和删除，以及 revision policy 声明为权威的 untracked 新文件，同时排除该 policy 声明的派生路径。revision policy 在 Run 开始前固定并随 IR 保存。
+
+`.codegraph/` 是派生索引的一个例子。CodeGraph watcher 或显式 `codegraph sync` 对该目录的写入不得改变权威源码 revision，也不得单独触发 mutation 对账失败。排除规则必须通过通用 revision policy 实现，不能在 GraphX Core 中写入 CodeGraph 专属状态逻辑。
 
 ## 8. Codex task 映射
 
@@ -585,6 +681,8 @@ Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
 - Config Schema 和严格边界模型；
 - immutable IR；
 - Graph 引用、类型、环、可达性和 terminal 校验；
+- verifier tagged check spec、check identity/hash 和成功条件校验；
+- workspace revision policy 的规范化和校验；
 - 稳定 IR 序列化和哈希。
 
 完成条件：任何非法 Workflow 在创建 RunState 前被拒绝。
@@ -623,7 +721,10 @@ Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
 - 总控 Skill；
 - Agent NodeDispatch；
 - 独立 Codex task 创建、bind、等待和结果提交协议；
-- inspect/resume/cancel 用户流程。
+- inspect/resume/cancel 用户流程；
+- 在用户引导下通过模板把已批准 Superpowers Spec/Plan 映射为候选 Workflow Config、显示映射结果、调用校验并等待用户显式确认；
+- Task Contract 中 task-local 方法与隐藏顶层执行控制器的边界；
+- 保持节点实际 workspace、项目指令和原生工具环境，不自动初始化或管理 CodeGraph。
 
 完成条件：一个多节点 Workflow 能在 Codex App 中为每个 Agent attempt 显示独立任务，并严格串行推进 mutation。
 
@@ -636,7 +737,10 @@ Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
 - stale/duplicate result 拒绝；
 - task 丢失、超时和 ambiguous 恢复；
 - 参考 PT Renderer Workflow；
-- 端到端测试和操作文档。
+- 端到端测试和操作文档；
+- Host 执行的 Verification Evidence 及其 check ID/hash 和 workspace revision 绑定；
+- 权威 workspace revision policy 与派生数据排除；
+- 通用 Command Node 可表达外部新鲜度屏障，无需专用集成节点。
 
 完成条件：故障注入不会绕过节点、重复 mutation 或提前提交 terminal。
 
@@ -663,7 +767,12 @@ Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
 - 未确认 mutation 进入 `AMBIGUOUS`；
 - Agent 自报完成但 terminal 条件不满足；
 - 恢复前后得到相同调度决定；
-- 每个 Agent attempt 对应独立 Codex task。
+- 每个 Agent attempt 对应独立 Codex task；
+- 缺失或非法 verifier check spec 在创建 RunState 前被拒绝；
+- Agent task-local 自检不能替代 Config 声明的正式 Verifier；
+- Verification Evidence 的 check ID/hash 和 workspace revision 绑定，以及 stale evidence 拒绝；
+- tracked 修改、删除和权威 untracked 新文件会改变 revision，派生索引变化不会；
+- 通用 Command Node 失败会阻止其依赖节点，且不需要 CodeGraph 专属逻辑。
 
 发布门禁：
 
@@ -681,3 +790,5 @@ pytest
 GraphX 不是另一个 Coding Agent，也不是上下文管理器。
 
 它是一个小型 Python Graph authority：严格校验并推进声明式 Workflow，把每个语义 Agent attempt 交给独立、可见的 Codex task，并通过 SQLite 事务确保状态、幂等性和 mutation 串行。
+
+Superpowers 交接、task-local 工程方法和 CodeGraph 导航都位于 Skill、Workflow Config 或 Host 环境边界；它们可以增强 GraphX 的可用性，但不改变 GraphX Core 作为通用 Graph authority 的职责。
