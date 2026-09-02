@@ -1,10 +1,10 @@
-# Polaris
+# Custos
 
-Polaris is a strict Task Graph Executor for Codex.
+Custos is a strict Task Graph Executor for Codex.
 
 ```text
 Workflow Config owns control.
-Polaris validates and advances the graph.
+Custos validates and advances the graph.
 Codex tasks perform semantic work.
 ```
 
@@ -12,11 +12,11 @@ Codex tasks perform semantic work.
 
 ## Status
 
-Polaris is in early implementation design. [plan.md](plan.md) is the single authority for product scope, execution semantics, implementation order, and release gates.
+Custos is in early implementation design. [plan.md](plan.md) is the single authority for product scope, execution semantics, implementation order, and release gates.
 
-## What Polaris does
+## What Custos does
 
-Polaris:
+Custos:
 
 - validates a declarative Workflow Config;
 - compiles it into an immutable typed Workflow IR;
@@ -27,7 +27,7 @@ Polaris:
 - persists run state, attempts, thread IDs, and mutation leases in SQLite;
 - finishes only through a validated terminal node.
 
-Polaris does not:
+Custos does not:
 
 - invent or optimize the business workflow;
 - perform coding work itself;
@@ -39,7 +39,7 @@ Polaris does not:
 
 ```text
 Codex controller task
-    -> Polaris Skill
+    -> Custos Skill
     -> short MCP call
     -> Python Graph Executor
     -> NodeDispatch
@@ -62,7 +62,7 @@ The next mutation cannot begin until the previous attempt is committed, proven n
 
 Static typing does not validate runtime data. Workflow JSON, MCP messages, Codex results, SQLite rows, and recovered state are untrusted until checked.
 
-Polaris uses four layers:
+Custos uses four layers:
 
 1. JSON Schema and strict boundary models;
 2. semantic graph validation;

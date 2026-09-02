@@ -1,18 +1,18 @@
-# Polaris Python Task Graph Executor 实施计划
+# Custos Python Task Graph Executor 实施计划
 
-本文档是 Polaris 的产品范围、执行语义和实施顺序的唯一权威。
+本文档是 Custos 的产品范围、执行语义和实施顺序的唯一权威。
 
 ## 1. 产品定义
 
-Polaris 是一个严格执行声明式 Task Graph 的本地控制器。
+Custos 是一个严格执行声明式 Task Graph 的本地控制器。
 
 ```text
 Workflow Config owns control.
-Polaris validates and advances the graph.
+Custos validates and advances the graph.
 Codex tasks perform semantic work.
 ```
 
-Polaris 只负责：
+Custos 只负责：
 
 - 读取和校验 Workflow Config；
 - 编译不可变 Workflow IR；
@@ -23,7 +23,7 @@ Polaris 只负责：
 - 通过 SQLite 事务保存运行状态；
 - 只有满足 Graph 中声明的 terminal 条件才结束运行。
 
-Polaris 不负责：
+Custos 不负责：
 
 - 决定工作流应该包含哪些业务阶段；
 - 替 Agent 理解需求、编写代码或判断技术方案；
@@ -33,14 +33,14 @@ Polaris 不负责：
 
 ### 1.1 产品目标
 
-给定相同的 Workflow IR 和权威 RunState，Polaris 必须产生相同的调度决定，并且在重启后能够继续从已经提交的状态执行。
+给定相同的 Workflow IR 和权威 RunState，Custos 必须产生相同的调度决定，并且在重启后能够继续从已经提交的状态执行。
 
 ### 1.2 核心不变量
 
-1. Config 决定控制流，Polaris 不发明业务流程。
+1. Config 决定控制流，Custos 不发明业务流程。
 2. Workflow 在执行前完成结构和语义校验。
 3. Workflow IR 在一次运行期间不可变。
-4. 只有 Polaris 可以提交 NodeState 和 RunState 转换。
+4. 只有 Custos 可以提交 NodeState 和 RunState 转换。
 5. 一个 Agent attempt 对应一个独立、可见的 Codex task。
 6. Codex task 以持久化的 thread ID 标识，标题不是身份。
 7. 同一 workspace 同时最多有一个 mutation attempt。
@@ -69,7 +69,7 @@ Polaris 不负责：
 
 ### 2.2 不包含
 
-- Polaris 自己调用模型或维护模型对话上下文；
+- Custos 自己调用模型或维护模型对话上下文；
 - headless Codex Agent Runtime；
 - 通用工具网关或自定义 sandbox；
 - mutation 并行执行；
@@ -84,13 +84,13 @@ Polaris 不负责：
 ```text
 Codex App
     |
-    | Polaris Skill
+    | Custos Skill
     v
 Codex Host Adapter
     |
     | short MCP calls
     v
-Polaris Python Core
+Custos Python Core
     ├── Config Validator
     ├── Workflow Compiler
     ├── Graph Analyzer
@@ -99,34 +99,34 @@ Polaris Python Core
     └── SQLite Store
 ```
 
-Codex App 是用户界面和 Agent Host。Polaris Python Core 是无 UI 的 Graph 权威。
+Codex App 是用户界面和 Agent Host。Custos Python Core 是无 UI 的 Graph 权威。
 
 ### 3.1 总控任务
 
-用户在一个 Codex 总控任务中启动或恢复 Polaris。总控任务：
+用户在一个 Codex 总控任务中启动或恢复 Custos。总控任务：
 
-- 调用 Polaris MCP tools；
+- 调用 Custos MCP tools；
 - 显示 Graph 和节点状态；
 - 为 Agent 节点创建可见 Codex task；
 - 等待节点 task 完成；
-- 把结构化结果提交给 Polaris；
-- 不绕过 Polaris 自行推进 Graph。
+- 把结构化结果提交给 Custos；
+- 不绕过 Custos 自行推进 Graph。
 
 ### 3.2 Agent 节点任务
 
 每个 Agent attempt 创建一个独立 Codex task：
 
 ```text
-Polaris · <run-id> · <node-id> · attempt <n>
+Custos · <run-id> · <node-id> · attempt <n>
 ```
 
-该 task 只接收当前节点的 Task Contract。它可以使用 Codex 原生工具完成工作，但不能直接修改 Polaris RunState。
+该 task 只接收当前节点的 Task Contract。它可以使用 Codex 原生工具完成工作，但不能直接修改 Custos RunState。
 
 Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记录。
 
 ### 3.3 机械节点
 
-`command`、`verifier`、`gate` 和 `terminal` 不要求独立对话。Host Adapter 按 NodeDispatch 执行或解释它们，并将结构化结果返回 Polaris。
+`command`、`verifier`、`gate` 和 `terminal` 不要求独立对话。Host Adapter 按 NodeDispatch 执行或解释它们，并将结构化结果返回 Custos。
 
 ## 4. Workflow Config 与 IR
 
@@ -188,7 +188,7 @@ Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记
 }
 ```
 
-示例不是内置流程。Polaris 不包含 `develop-material-system` 的业务逻辑。
+示例不是内置流程。Custos 不包含 `develop-material-system` 的业务逻辑。
 
 ### 4.2 数据层次
 
@@ -413,7 +413,7 @@ NodeResult
     diagnostics
 ```
 
-Polaris 必须验证身份、状态、Schema 和 revision 后才能提交。
+Custos 必须验证身份、状态、Schema 和 revision 后才能提交。
 
 ## 9. SQLite 权威状态
 
@@ -491,7 +491,7 @@ idempotency_keys
 ### 10.4 建议包结构
 
 ```text
-src/polaris/
+src/custos/
     config/
         models.py
         schema.py
@@ -532,15 +532,15 @@ tests/
 初始操作：
 
 ```text
-polaris_validate_workflow
-polaris_start_run
-polaris_next
-polaris_bind_task
-polaris_submit_result
-polaris_fail_attempt
-polaris_inspect_run
-polaris_resume_run
-polaris_cancel_run
+custos_validate_workflow
+custos_start_run
+custos_next
+custos_bind_task
+custos_submit_result
+custos_fail_attempt
+custos_inspect_run
+custos_resume_run
+custos_cancel_run
 ```
 
 ### 11.1 Host 循环
@@ -561,13 +561,13 @@ Host Adapter 不能请求跳过 mandatory node，也不能提交不是当前 att
 
 ## 12. 受控任务拆分
 
-初始版本允许 Agent 在自己的 Codex task 内部拆分实施步骤，但这些步骤不成为 Polaris Node。
+初始版本允许 Agent 在自己的 Codex task 内部拆分实施步骤，但这些步骤不成为 Custos Node。
 
 需要让子任务分别拥有独立对话时，使用后续的受控 child workflow：
 
 - 只有 Config 明确允许的节点可以请求 child workflow；
 - Agent 只能提出 child Workflow Config；
-- Polaris 完整校验后生成独立、不可变的 child IR；
+- Custos 完整校验后生成独立、不可变的 child IR；
 - parent node 等待 child run terminal；
 - child 中的 Agent attempt 继续一一映射到独立 Codex task；
 - 不允许原地修改正在执行的 parent IR。
@@ -678,6 +678,6 @@ pytest
 
 ## 15. 最终产品边界
 
-Polaris 不是另一个 Coding Agent，也不是上下文管理器。
+Custos 不是另一个 Coding Agent，也不是上下文管理器。
 
 它是一个小型 Python Graph authority：严格校验并推进声明式 Workflow，把每个语义 Agent attempt 交给独立、可见的 Codex task，并通过 SQLite 事务确保状态、幂等性和 mutation 串行。
