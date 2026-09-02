@@ -1,10 +1,10 @@
-# Custos
+# GraphX
 
-Custos is a strict Task Graph Executor for Codex.
+GraphX is a strict Task Graph Executor for Codex.
 
 ```text
 Workflow Config owns control.
-Custos validates and advances the graph.
+GraphX validates and advances the graph.
 Codex tasks perform semantic work.
 ```
 
@@ -12,11 +12,11 @@ Codex tasks perform semantic work.
 
 ## Status
 
-Custos is in early implementation design. [plan.md](plan.md) is the single authority for product scope, execution semantics, implementation order, and release gates.
+GraphX is in early implementation design. [plan.md](plan.md) is the single authority for product scope, execution semantics, implementation order, and release gates.
 
-## What Custos does
+## What GraphX does
 
-Custos:
+GraphX:
 
 - validates a declarative Workflow Config;
 - compiles it into an immutable typed Workflow IR;
@@ -27,7 +27,7 @@ Custos:
 - persists run state, attempts, thread IDs, and mutation leases in SQLite;
 - finishes only through a validated terminal node.
 
-Custos does not:
+GraphX does not:
 
 - invent or optimize the business workflow;
 - perform coding work itself;
@@ -39,7 +39,7 @@ Custos does not:
 
 ```text
 Codex controller task
-    -> Custos Skill
+    -> GraphX Skill
     -> short MCP call
     -> Python Graph Executor
     -> NodeDispatch
@@ -62,7 +62,7 @@ The next mutation cannot begin until the previous attempt is committed, proven n
 
 Static typing does not validate runtime data. Workflow JSON, MCP messages, Codex results, SQLite rows, and recovered state are untrusted until checked.
 
-Custos uses four layers:
+GraphX uses four layers:
 
 1. JSON Schema and strict boundary models;
 2. semantic graph validation;

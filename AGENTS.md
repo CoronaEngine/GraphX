@@ -1,8 +1,8 @@
-# Custos repository rules
+# GraphX repository rules
 
 - Treat `plan.md` as the single product, architecture, and implementation authority.
-- Custos is a strict Task Graph Executor. Do not turn it into a Coding Agent, workflow planner, context manager, tool gateway, sandbox, distributed scheduler, or general workflow platform.
-- Preserve the control rule: Workflow Config owns control, Custos validates and advances the graph, and Codex tasks perform semantic work.
+- GraphX is a strict Task Graph Executor. Do not turn it into a Coding Agent, workflow planner, context manager, tool gateway, sandbox, distributed scheduler, or general workflow platform.
+- Preserve the control rule: Workflow Config owns control, GraphX validates and advances the graph, and Codex tasks perform semantic work.
 - Keep workflow-specific stages, prompts, node IDs, dependencies, conditions, and completion criteria in configuration. Never hard-code a particular engineering workflow into the Executor.
 - Implement the initial system in Python 3.12. Use Pyright strict, Ruff, pytest, strict runtime models, standard-library SQLite, a Python MCP server, and a Codex Skill.
 - Treat static typing as an implementation aid, not a runtime trust boundary. Validate Workflow JSON, MCP inputs, Codex results, SQLite rows, and recovered state before use.

@@ -1,10 +1,10 @@
-# Custos
+# GraphX
 
-Custos 是一个面向 Codex 的严格 Task Graph Executor。
+GraphX 是一个面向 Codex 的严格 Task Graph Executor。
 
 ```text
 Workflow Config owns control.
-Custos validates and advances the graph.
+GraphX validates and advances the graph.
 Codex tasks perform semantic work.
 ```
 
@@ -12,11 +12,11 @@ Codex tasks perform semantic work.
 
 ## 状态
 
-Custos 正处于早期实施设计阶段。[plan.md](plan.md) 是产品范围、执行语义、实施顺序和发布门禁的唯一权威。
+GraphX 正处于早期实施设计阶段。[plan.md](plan.md) 是产品范围、执行语义、实施顺序和发布门禁的唯一权威。
 
-## Custos 做什么
+## GraphX 做什么
 
-Custos 负责：
+GraphX 负责：
 
 - 校验声明式 Workflow Config；
 - 编译不可变、带类型的 Workflow IR；
@@ -27,7 +27,7 @@ Custos 负责：
 - 在 SQLite 中持久化运行状态、attempt、thread ID 和 mutation lease；
 - 只通过经过校验的 terminal node 结束运行。
 
-Custos 不负责：
+GraphX 不负责：
 
 - 发明或优化业务工作流；
 - 亲自完成编码工作；
@@ -39,7 +39,7 @@ Custos 不负责：
 
 ```text
 Codex 总控任务
-    -> Custos Skill
+    -> GraphX Skill
     -> 短事务 MCP 调用
     -> Python Graph Executor
     -> NodeDispatch
@@ -62,7 +62,7 @@ Codex 总控任务展示 Graph 总体进度。每个 `agent` attempt 都有自�
 
 静态类型不能验证运行时数据。Workflow JSON、MCP 消息、Codex 结果、SQLite row 和恢复状态在检查前都不可信。
 
-Custos 使用四层防线：
+GraphX 使用四层防线：
 
 1. JSON Schema 和严格边界模型；
 2. Graph 语义校验；
