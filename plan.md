@@ -156,6 +156,55 @@ Superpowers brainstorming
 
 Superpowers 是可选集成而不是 GraphX 的运行时依赖；未安装 Superpowers 时，合法 Workflow 仍可由普通 Codex task 执行。
 
+#### 3.4.1 Agent 内部执行方法与 Skill 边界
+
+Agent Node 内部不再引入一个由 GraphX Core 实现的二级编排器。节点的 `task` 是 Workflow Config 声明的、不透明的用户执行指引；它可以要求普通提示词流程、引用一个或多个当前 Host 可用的 Skill，或声明 Skill 不可用时的 fallback。GraphX Core 只校验该字段的结构和边界、将其编译进不可变 IR，并原样交给 Host Adapter，不解析 Skill 名称、不选择方法论、不加载 Skill，也不提供内置 Superpowers runtime。
+
+例如，一个 Agent Node 可以声明：
+
+```json
+{
+    "id": "implement-auth",
+    "type": "agent",
+    "sideEffect": "workspaceMutation",
+    "task": "Implement authentication. If superpowers:test-driven-development is available, use it. Otherwise write a failing test, confirm the expected failure, implement the minimal change, rerun the relevant tests, and report the commands and results. Work only on this node; do not invoke executing-plans or subagent-driven-development.",
+    "outputs": {
+        "result": "agentResult"
+    },
+    "retry": {
+        "maxAttempts": 2
+    }
+}
+```
+
+Skill 使用遵循以下规则：
+
+- `task` 中引用 Skill 是执行指导，不改变 Graph 结构、NodeState、重试、lease、Verifier、Gate 或 Terminal 语义；相同 IR 和 RunState 的调度决定不能依赖 Skill 是否安装。
+- Skill 可选时，fallback 必须由 Workflow Config 或其模板写进 `task`；GraphX Core 不生成、推断或维护 fallback。
+- Skill 必需但不可用时，Agent 或 Host Adapter 必须提交结构化的 capability failure/blocked 请求，由 Transition Service 决定合法状态转换；不得静默换用别的方法并声称满足要求。
+- `test-driven-development`、`systematic-debugging`、`verification-before-completion` 等 task-local 方法可以在当前 task/thread 内使用；`executing-plans`、`subagent-driven-development` 等会建立第二套顶层控制流的方法不得在运行中的 Agent Node 内启动。
+- Prompt 中的“不得调用其他 Skill”只是行为约束，不构成硬隔离保证。只有 Host 原生提供的逐 task Skill/tool capability allowlist 才能提供能力层限制；应使用 allowlist，而不是维护易漏项的 denylist。
+- 如果 Host 支持逐 task capability policy，Host Adapter 可以应用一个 Host 侧的静态 allowlist policy，禁止 task/thread 创建与管理能力；成功实施后，把 policy ID、policy hash、实际 capability snapshot 和 enforcement result 记录到 attempt 元数据。该 policy 由 Host 执行，不进入 Scheduler、Transition Engine 或 GraphX Core 的 Skill 语义。
+- 对要求硬隔离的 policy，Host 无法实施时必须在 attempt 创建、mutation lease 获取和任何 workspace mutation 开始前阻止派发，记录 node 诊断，并通过 Transition Service 执行 `READY -> BLOCKED`；best-effort policy 只能记录明确的降级诊断，不能声称其他 Skill 已被禁止。
+- GraphX 不得通过卸载 Skill、移动 Skill 文件、修改用户全局 Codex 配置或自行实现 Skill loader/sandbox 来制造隔离。
+
+白名单的所有权属于用户或 workspace 管理员，而不是 GraphX Core。用户在 Host/工作区配置中定义具名 Skill/capability profile，例如不暴露可选 Skill 的 `strict` profile，或只暴露 TDD、调试和完成前验证等 task-local Skill 的 `coding-safe` profile；Host 配置必须显式指定默认 profile，不能隐式退化为 unrestricted。初始版本在 Run 启动时由用户选择一个 profile，未显式选择时使用该 Host 配置的默认 profile；不在 Agent Node JSON 中增加 Skill 列表，避免把 Host 安装状态和产品特定 Skill 名称写入 Workflow IR。
+
+GraphX 同时定义一个不可由用户放宽的控制面安全上限：Agent Node 永远不能获得提交状态转换、管理 mutation lease、改写 IR、绕过 Verifier/Gate/Terminal，或创建和管理隐藏 task/thread 的能力。用户 profile 只能在该安全上限内缩小 Agent 能力，引用越界能力的 profile 必须在 Host 配置校验时被拒绝，不能静默裁剪后继续运行。
+
+派发时的实际能力集合按以下交集计算：
+
+```text
+effective capabilities
+    = GraphX non-configurable safety ceiling
+    ∩ user-selected Host profile
+    ∩ capabilities actually available on the Host
+```
+
+Run 启动时必须把所选 profile ID、规范化 profile snapshot 和 profile hash 冻结到该 Run 的 Host binding；运行中的 Host 配置变化只影响后续 Run，不能改变当前 Run。每个 attempt 仍记录实际 capability snapshot 和 enforcement result，以便恢复和审计。`task` 可以要求或建议使用某个 Skill，但不能扩大 effective capabilities；profile 中允许的 Skill 若有传递依赖，Host 必须在派发前校验依赖闭包，缺少必需依赖时按 required policy 进入 `BLOCKED`。
+
+初始 Codex App 集成不假设平台已经支持逐 task Skill allowlist。若 Host 没有该能力，GraphX 只保证 Agent 不能通过合法 NodeResult 绕过 Graph、Verifier、Gate 和 Terminal，不保证 Agent 从未读取或遵循其他可见 Skill。需要独立状态、独立 attempt 或独立 Codex task 的内部工作必须提升为显式 GraphX Node，或使用第 12 节的受控 child workflow。
+
 ### 3.5 CodeGraph 支持边界
 
 CodeGraph 是 Codex 工作环境中的代码导航能力，不是 GraphX Core 的子系统。是否为仓库创建 `.codegraph/` 索引由用户决定；仓库未建立索引时，GraphX 不自动初始化索引，也不改变 Agent 的普通文件导航行为。
@@ -249,6 +298,8 @@ workspace mutation
 ```
 
 示例不是内置流程。GraphX 不包含 `develop-material-system` 的业务逻辑。
+
+Agent Node 的 `task` 保持非空、有界的自由文本，不增加 `skills`、`strategy`、动态 Runner 或 GraphX fallback 字段。用户或 Workflow 模板可以在其中引用 Skill 和写明 fallback；正式完成条件仍通过结构化 `outputs`、独立 `verifier`、`gate` 和 `terminal` 表达。Agent 自报使用或未使用某个 Skill 只可作为诊断或候选 evidence，不能成为未经独立检查的成功依据。
 
 ### 4.2 数据层次
 
@@ -385,13 +436,15 @@ CANCELLED
 ```text
 PENDING -> READY
 READY -> DISPATCHING
+READY -> BLOCKED                required pre-dispatch Host policy cannot be enforced
 DISPATCHING -> RUNNING
 RUNNING -> VERIFYING
 VERIFYING -> SUCCEEDED | FAILED | BLOCKED | AMBIGUOUS
 FAILED -> READY                  only through a new attempt
+BLOCKED -> READY                 only through explicit resume after revalidation
 ```
 
-状态不能由 Agent task 直接写入。
+`READY -> BLOCKED` 是派发前能力策略失败的专用转换，发生在 attempt 创建和 mutation lease 获取之前。Agent 在运行中发现必需 Skill 不可用时，仍提交结构化结果并经 `RUNNING -> VERIFYING -> BLOCKED`；GraphX Core 不解析 `task` 来预判 Skill 可用性。状态不能由 Agent task 直接写入，所有转换都由 Transition Service 提交。
 
 ### 6.2 RunState
 
@@ -485,6 +538,7 @@ Agent task 获得：
 
 - 当前 node ID 和 attempt ID；
 - 节点目标；
+- Config 中原样冻结的用户执行指引，包括可选 Skill、必需 Skill 或 fallback 说明；
 - 声明输入；
 - workspace 路径和基线 revision；
 - side-effect class；
@@ -493,6 +547,8 @@ Agent task 获得：
 - retry/timeout 信息。
 
 不自动注入整个 Workflow 对话历史。Codex 自己负责单个 task 的上下文管理。
+
+Host Adapter 可以给 Task Contract 增加 GraphX 所需的身份、结果格式和“不允许推进 Graph”的固定边界说明，但不能改写 Config 声明的任务目标、Skill 要求或 fallback。Task Contract 必须包含当前 Run 冻结的 profile ID/hash 以及当前 task 的实际 capability snapshot；`task` 中的 Skill 引用不能扩大该 snapshot。若 Host 不能实施 capability policy，必须把约束标为 soft/best-effort，不能伪装成安全边界。
 
 ### 8.3 NodeResult
 
@@ -518,6 +574,7 @@ GraphX 必须验证身份、状态、Schema 和 revision 后才能提交。
 ```text
 workflows
 runs
+run_host_bindings
 run_nodes
 attempts
 execution_handles
@@ -531,6 +588,7 @@ idempotency_keys
 
 - SQLite 是运行状态权威；
 - Workflow IR 以规范 JSON 和内容哈希保存；
+- `run_host_bindings` 以规范化 snapshot 和 hash 保存 Run 启动时选定的 Host profile，创建后不可变；
 - Codex 对话是执行记录，不是 Graph 状态权威；
 - task 标题只用于展示；
 - thread ID 用于恢复和对账；
@@ -723,7 +781,9 @@ Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
 - 独立 Codex task 创建、bind、等待和结果提交协议；
 - inspect/resume/cancel 用户流程；
 - 在用户引导下通过模板把已批准 Superpowers Spec/Plan 映射为候选 Workflow Config、显示映射结果、调用校验并等待用户显式确认；
-- Task Contract 中 task-local 方法与隐藏顶层执行控制器的边界；
+- Task Contract 中不透明用户执行指引、可选 Skill/fallback、task-local 方法与隐藏顶层执行控制器的边界；
+- 用户或 workspace 管理员拥有的具名 Host capability profile、显式默认 profile、Run 启动选择与不可变 profile ID/snapshot/hash binding；
+- GraphX 不可配置的控制面安全上限、effective capability 交集、Skill 传递依赖校验、attempt 元数据记录，以及 required policy 无法实施时在 mutation 前阻止派发；
 - 保持节点实际 workspace、项目指令和原生工具环境，不自动初始化或管理 CodeGraph。
 
 完成条件：一个多节点 Workflow 能在 Codex App 中为每个 Agent attempt 显示独立任务，并严格串行推进 mutation。
@@ -770,6 +830,16 @@ Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
 - 每个 Agent attempt 对应独立 Codex task；
 - 缺失或非法 verifier check spec 在创建 RunState 前被拒绝；
 - Agent task-local 自检不能替代 Config 声明的正式 Verifier；
+- Agent Node 的自由文本 `task` 可以引用任意 Skill 名称而不会触发 Core 动态加载、导入或 Skill 解析；
+- 可选 Skill 不存在时，只有 Config 已声明的 fallback 可以继续执行，且 Graph 调度语义不变；
+- 未显式选择 profile 时只使用用户 Host 配置中显式声明的默认 profile，绝不隐式使用 unrestricted；
+- 用户 profile 引用 GraphX 控制面能力时校验失败，不能通过配置放宽不可变安全上限；
+- effective capabilities 等于安全上限、用户 profile 和 Host 实际能力的交集，`task` 引用不能扩权；
+- Run 冻结 profile ID/snapshot/hash，运行中修改 Host 配置不会改变现有 Run，恢复后仍使用相同 binding；
+- 允许 Skill 的必需传递依赖缺失时在派发前被发现并按 policy 处理；
+- required Host capability policy 无法实施时在 mutation 和 lease 获取前进入 `BLOCKED`；
+- best-effort capability 降级会留下诊断且不会被报告为硬隔离成功；
+- Skill 使用或未使用的 Agent 自报不能替代正式 Verifier、Gate 或 Terminal；
 - Verification Evidence 的 check ID/hash 和 workspace revision 绑定，以及 stale evidence 拒绝；
 - tracked 修改、删除和权威 untracked 新文件会改变 revision，派生索引变化不会；
 - 通用 Command Node 失败会阻止其依赖节点，且不需要 CodeGraph 专属逻辑。
