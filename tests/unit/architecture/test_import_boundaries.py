@@ -4,6 +4,8 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).parents[3]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 GRAPHX_ROOT = SOURCE_ROOT / "graphx"
@@ -84,6 +86,24 @@ def test_plan_10_4_protocol_may_import_a_protocol_sibling() -> None:
     record = ImportRecord(GRAPHX_ROOT / "protocol" / "workflow_v1.py", "graphx.protocol.common_v1")
 
     assert _boundary_violation(record) is None
+
+
+@pytest.mark.parametrize(
+    ("relative_importer", "imported_module"),
+    [
+        ("graphx/protocol/workflow_v1.py", "graphx.core.config.models"),
+        ("graphx/core/runtime/models.py", "graphx.adapters.store.sqlite.store"),
+        ("graphx/application/service.py", "graphx.adapters.store.sqlite.store"),
+        ("graphx/adapters/host/main.py", "graphx.core.runtime.models"),
+        ("graphx/bootstrap.py", "graphx.adapters.host.main"),
+    ],
+)
+def test_plan_10_4_guard_detects_each_forbidden_dependency(
+    relative_importer: str, imported_module: str
+) -> None:
+    record = ImportRecord(SOURCE_ROOT / relative_importer, imported_module)
+
+    assert _boundary_violation(record) is not None
 
 
 def test_plan_10_4_only_sqlite_adapter_imports_sqlite3() -> None:
