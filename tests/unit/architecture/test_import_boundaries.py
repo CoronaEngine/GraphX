@@ -42,7 +42,9 @@ def _boundary_violation(record: ImportRecord) -> str | None:
     module = record.imported_module
     importer = record.importer
 
-    if _is_within(importer, "graphx/protocol") and module.startswith("graphx."):
+    if _is_within(importer, "graphx/protocol") and module.startswith(
+        ("graphx.core", "graphx.application", "graphx.adapters")
+    ):
         return "protocol cannot import another GraphX layer"
     if _is_within(importer, "graphx/core") and module.startswith(
         ("graphx.application", "graphx.adapters")
@@ -76,6 +78,12 @@ def test_plan_10_4_layer_imports_follow_dependency_direction() -> None:
         if (reason := _boundary_violation(record)) is not None
     )
     assert violations == ()
+
+
+def test_plan_10_4_protocol_may_import_a_protocol_sibling() -> None:
+    record = ImportRecord(GRAPHX_ROOT / "protocol" / "workflow_v1.py", "graphx.protocol.common_v1")
+
+    assert _boundary_violation(record) is None
 
 
 def test_plan_10_4_only_sqlite_adapter_imports_sqlite3() -> None:
