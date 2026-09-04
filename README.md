@@ -12,7 +12,9 @@ Codex tasks perform semantic work.
 
 ## Status
 
-GraphX is in early implementation design. [plan.md](plan.md) is the single authority for product scope, execution semantics, implementation order, and release gates.
+GraphX Phase 1 (semantic freeze and Python project skeleton) is implemented. The repository now contains strict closed v1 boundary models, immutable Config/IR/RunState types, canonicalization golden vectors, and executable architecture guards. Compiler, scheduler, persistence, MCP serving, and Host execution remain scheduled for later phases.
+
+[plan.md](plan.md) remains the single authority for product scope, execution semantics, implementation order, and release gates. The detailed Phase 1 construction record is available in [English](docs/superpowers/plans/2026-09-05-phase-1-semantics-and-scaffold.md) and [Chinese](docs/superpowers/plans/2026-09-05-phase-1-semantics-and-scaffold.zh-CN.md).
 
 ## What GraphX does
 

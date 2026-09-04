@@ -12,7 +12,9 @@ Codex tasks perform semantic work.
 
 ## 状态
 
-GraphX 正处于早期实施设计阶段。[plan.md](plan.md) 是产品范围、执行语义、实施顺序和发布门禁的唯一权威。
+GraphX Phase 1（语义冻结与 Python 工程骨架）已经实现。仓库现已包含严格封闭的 v1 边界模型、不可变 Config/IR/RunState 类型、canonicalization golden vectors 和可执行架构守卫。Compiler、Scheduler、持久化、MCP Server 与 Host 执行仍按后续阶段实施。
+
+[plan.md](plan.md) 仍是产品范围、执行语义、实施顺序和发布门禁的唯一权威。Phase 1 的详细施工记录提供[英文版](docs/superpowers/plans/2026-09-05-phase-1-semantics-and-scaffold.md)和[中文版](docs/superpowers/plans/2026-09-05-phase-1-semantics-and-scaffold.zh-CN.md)。
 
 ## GraphX 做什么
 
