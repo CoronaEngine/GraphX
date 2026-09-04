@@ -431,29 +431,32 @@ workspace revision 只描述 Workflow 声明的权威项目内容，不能把缓
 
 ### 8.1 Codex ExecutionHandle
 
-```text
-ExecutionHandle
-    run_id
-    node_id
-    attempt_id
-    dispatch_token
-    host_kind = codex
-    thread_id
-    host_id
-    workspace_id
-    activated_at
-    created_at
+```python
+@dataclass(frozen=True, slots=True)
+class ExecutionHandle:
+    run_id: RunId
+    node_id: NodeId
+    attempt_id: AttemptId
+    task_binding_token: TaskBindingToken
+    host_kind: HostKind
+    thread_id: ThreadId
+    host_id: HostId
+    workspace_id: WorkspaceId
+    activated_at: datetime | None
+    created_at: datetime
 ```
+
+`host_kind` 在初始版本中固定为 `HostKind.CODEX`。ExecutionHandle 只在 bind 成功后创建，因此 `thread_id` 非空；`activated_at` 在 activate 成功前为 `None`。
 
 Agent 派发使用两阶段协议：
 
-1. GraphX 先持久化 attempt、dispatch intent 和不可猜测的 dispatch token；
-2. Host 创建只包含 attempt identity 和 dispatch token 的 bootstrap task，不发送语义 Task Contract；
-3. Host 调用 `bind(attempt_id, dispatch_token, host_id, thread_id)`；GraphX 在一个 transaction 中校验当前 attempt、token 和 bootstrap identity，强制 `(host_id, thread_id)` 唯一，然后创建不可变 ExecutionHandle；内容完全相同的重复 bind 才幂等成功；
+1. GraphX 先持久化 attempt 和 dispatch intent，并生成一个仅属于该 attempt 的随机任务绑定令牌 `task_binding_token`；
+2. Host 创建只包含 attempt identity 和 `task_binding_token` 的 bootstrap task，不发送语义 Task Contract；
+3. Host 调用 `bind(attempt_id, task_binding_token, host_id, thread_id)`；GraphX 在一个 transaction 中校验当前 attempt、任务绑定令牌和 bootstrap identity，强制 `(host_id, thread_id)` 唯一，然后创建不可变 ExecutionHandle；内容完全相同的重复 bind 才幂等成功；
 4. Host 调用 activate；GraphX 在一个 transaction 中重新验证 attempt、thread、适用时的 lease、workspace revision 和执行隔离，持久化冻结的 Task Contract 与 activation event，将节点转换为 `running`，然后返回 Task Contract；
 5. Host 把 Task Contract 发送给已绑定 task。重复 activate 返回完全相同的 Contract，不产生第二次状态转换。
 
-task 创建后、bind 前发生故障时，恢复流程使用 dispatch token 对账 bootstrap task。无法唯一确认 task identity 时，node 和 Run 都进入 `ambiguous`，且不得创建新 attempt；mutation attempt 继续保留 lease。只有在找回并绑定原 task，或证明原 task 未创建/已终止后，才能按第 6.1 节继续或失败后 retry。activate 提交后、Contract 发送前发生故障时，Host 从 GraphX 重新取得同一份冻结 Contract 并幂等重发。标题只用于展示，不能参与对账。
+task 创建后、bind 前发生故障时，恢复流程使用 `task_binding_token` 对账 bootstrap task。无法唯一确认 task identity 时，node 和 Run 都进入 `ambiguous`，且不得创建新 attempt；mutation attempt 继续保留 lease。只有在找回并绑定原 task，或证明原 task 未创建/已终止后，才能按第 6.1 节继续或失败后 retry。activate 提交后、Contract 发送前发生故障时，Host 从 GraphX 重新取得同一份冻结 Contract 并幂等重发。标题只用于展示，不能参与对账。
 
 ### 8.2 Task Contract
 
@@ -491,7 +494,7 @@ CommonNodeResult
 AgentNodeResult
     kind = agent
     common
-    dispatch_token
+    task_binding_token
     thread_id
 
 MechanicalNodeResult
@@ -636,20 +639,32 @@ graphx_resume_run
 graphx_cancel_run
 ```
 
-### 11.1 Host 循环
+### 11.1 Agent 节点的 Host 调用流程
+
+下面描述的是 Host 调用 GraphX 和 Codex 的先后顺序，不是 Workflow 节点之间的依赖关系。
+
+启动一次 Run 时只执行一次：
 
 ```text
-start/resume
-    -> next
-    -> receive NodeDispatch
-    -> create bootstrap Codex task when node.type == agent
-    -> bind thread ID
-    -> activate and receive Task Contract
-    -> execute or wait
-    -> submit NodeResult
-    -> next
-    -> repeat until terminal
+Host 调用 graphx_validate_workflow
+    -> Host 调用 graphx_start_run
 ```
+
+随后，每个 Agent 节点执行一次下面的循环：
+
+```text
+Host 调用 graphx_next
+    -> GraphX 返回 Agent NodeDispatch
+    -> Host 创建 bootstrap Codex task，并取得 thread ID
+    -> Host 调用 graphx_bind_task，登记 thread ID
+    -> Host 调用 graphx_activate_task，取得 Task Contract
+    -> Host 把 Task Contract 发送给已绑定的 Codex task
+    -> Host 等待 Codex 返回 NodeResult
+    -> Host 调用 graphx_submit_result
+    -> 回到 graphx_next，询问下一个节点
+```
+
+Run 从 `blocked` 恢复时，Host 先调用 `graphx_resume_run`，然后回到 `graphx_next`。Command 和 Verifier 节点不创建 Codex task，也不调用 bind/activate；Host 执行声明的机械动作后直接提交结构化结果。
 
 Host Adapter 不能请求跳过 mandatory node，也不能提交不是当前 attempt 的结果。
 
@@ -746,7 +761,7 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 - 每个合法和非法状态转换；
 - `gate` 和 `terminal` 只由 Core Condition Evaluator 求值，Host 提交对应控制结果会被拒绝；
 - attempt 上限；
-- dispatch token 唯一性和错误 token 拒绝；
+- `task_binding_token` 唯一性和错误任务绑定令牌拒绝；
 - bind 前 attempt 可持久化且不要求 ExecutionHandle；bind 后 thread ID 非空且不可变；
 - thread bind 幂等性、并发冲突，以及跨 attempt 复用 `(host_id, thread_id)` 被拒绝；
 - activate-before-bind、重复 activate 和错误 thread activate；
