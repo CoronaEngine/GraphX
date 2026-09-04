@@ -47,7 +47,7 @@ GraphX 不负责：
 8. 前一个 mutation 未完成、未失败或未裁决前，后一个 mutation 不能开始。
 9. NodeResult 必须经过运行时校验，不能依赖类型注解或 Agent 自报。
 10. 重复请求和重复结果提交必须幂等。
-11. 不确定的 mutation 进入 `AMBIGUOUS`，不能自动重放。
+11. 不确定的 mutation 进入 `ambiguous`，不能自动重放。
 12. 只有 terminal node 可以提交 Workflow 最终结果。
 13. `gate`、`terminal` 和所有控制条件只能由 GraphX Core 求值。
 14. Codex task 和 Host Adapter 只能通过 GraphX 的结构化接口访问运行状态，不能直接读取或写入 SQLite。
@@ -59,7 +59,7 @@ GraphX 不负责：
 - Python 3.12 本地进程中的 Config 校验、immutable IR 和纯 Core Executor；
 - `agent`、`command`、`verifier`、`gate`、`terminal` 节点及确定性串行调度；
 - Codex Skill、短事务 MCP 协议，以及每个 Agent attempt 对应的独立 Codex task；
-- SQLite 权威状态、幂等事务、mutation lease、恢复与 `AMBIGUOUS` 裁决；
+- SQLite 权威状态、幂等事务、mutation lease、恢复与 `ambiguous` 裁决；
 - 运行时边界校验、故障注入测试和发布门禁。
 
 ### 2.2 不包含
@@ -94,7 +94,7 @@ GraphX Python Process
     ├── Graph Analyzer
     ├── Deterministic Scheduler
     ├── Condition Evaluator
-    ├── Transition Service
+    ├── StateCommitter
     └── Store -> private SQLite
 ```
 
@@ -125,7 +125,7 @@ Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记
 
 ### 3.3 机械节点
 
-`command` 和 `verifier` 不要求独立对话。Host Adapter 只执行 IR 已经声明的外部动作并返回结构化事实；它不能解释依赖、条件或完成语义。`gate` 和 `terminal` 不离开 GraphX Python Process，由 Condition Evaluator 和 Transition Service 根据不可变 IR 与权威 RunState 求值。
+`command` 和 `verifier` 不要求独立对话。Host Adapter 只执行 IR 已经声明的外部动作并返回结构化事实；它不能解释依赖、条件或完成语义。`gate` 和 `terminal` 不离开 GraphX Python Process，由 Condition Evaluator 根据不可变 IR 与权威 RunState 求值，再由 StateCommitter 提交状态。
 
 ### 3.4 状态访问与执行隔离
 
@@ -133,13 +133,13 @@ Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记
 
 Codex 总控任务、Agent task 和 Host Adapter 都是不可信的外部参与者，只能调用 GraphX 暴露的结构化 MCP 操作。MCP 不提供原始 SQL、数据库连接、数据库文件路径、任意表查询或通用状态写入操作。
 
-只有 Store 模块可以打开 SQLite 连接。Application Service 将读取交给只读 Query Service，将状态修改交给 Transition Service；其他模块不得绕过这两个服务访问 Store。Transition Service 在同一 transaction 中完成前置状态检查、约束校验、事件写入和状态提交。
+只有 Store 模块可以打开 SQLite 连接。Application Service 将读取交给只读 Query Service，将状态修改交给 StateCommitter；其他模块不得绕过这两个入口访问 Store。StateCommitter 在同一 transaction 中完成前置状态检查、约束校验、事件写入和状态提交。
 
 #### 3.4.2 Host 执行隔离
 
 SQLite 文件必须位于所有 Codex workspace 之外，并且不能挂载或暴露给总控任务、Agent task 或 Host Adapter 的执行环境。Host 启动 Run 时必须验证固定的执行隔离要求；无法保证状态目录隔离时，不得派发 Agent 节点。GraphX 不通过 prompt 中的行为要求声称实现数据库隔离。
 
-GraphX Core 不实现通用 sandbox。文件系统隔离由 Host 提供，但“GraphX 私有状态目录对 Agent 不可见”是 Agent 执行的硬前置条件，而不是可降级选项。Run 必须冻结 Host identity、workspace identity、隔离模式和对应的规范化 snapshot/hash，恢复时重新验证；不一致时进入 `BLOCKED`，不能继续派发。
+GraphX Core 不实现通用 sandbox。文件系统隔离由 Host 提供，但“GraphX 私有状态目录对 Agent 不可见”是 Agent 执行的硬前置条件，而不是可降级选项。Run 必须冻结 Host identity、workspace identity、隔离模式和对应的规范化 snapshot/hash，恢复时重新验证；不一致时进入 `blocked`，不能继续派发。
 
 ## 4. Workflow Config 与 IR
 
@@ -276,7 +276,7 @@ Immutable WorkflowIR
 - request/result 幂等键唯一；
 - 每个 workspace 至多一个 mutation lease；
 - 每个 attempt 至多一个 ExecutionHandle，且 `(host_id, thread_id)` 在所有 Codex handle 中唯一；
-- 已绑定 ExecutionHandle 的 thread ID 非空且不可变；未绑定的 `DISPATCHING` attempt 可以暂时没有 ExecutionHandle；
+- 已绑定 ExecutionHandle 的 thread ID 非空且不可变；未绑定的 `dispatching` attempt 可以暂时没有 ExecutionHandle；
 - 所有状态变化在单个事务中提交。
 
 ### 5.5 验证权威和保证边界
@@ -299,81 +299,81 @@ GraphX 只保证声明的验证步骤被正确调度、执行、绑定和记录�
 ### 6.1 NodeState
 
 ```text
-PENDING
-READY
-DISPATCHING
-RUNNING
-VERIFYING
-SUCCEEDED
-FAILED
-SKIPPED
-BLOCKED
-AMBIGUOUS
-CANCELLED
+pending
+ready
+dispatching
+running
+verifying
+succeeded
+failed
+skipped
+blocked
+ambiguous
+cancelled
 ```
 
 完整合法转换如下；未列出的转换一律拒绝：
 
 | From | To | Guard / effect |
 |---|---|---|
-| `PENDING` | `READY` | 依赖成功且 Config 声明的适用条件成立 |
-| `PENDING` | `SKIPPED` | 适用条件为假且节点允许跳过 |
-| `PENDING` | `CANCELLED` | Run 取消，且节点尚未派发 |
-| `READY` | `DISPATCHING` | 外部执行节点；原子创建 attempt/dispatch intent，mutation 同时获取 lease |
-| `READY` | `VERIFYING` | Core 内部求值 `gate` 或 `terminal`，不创建 Host execution |
-| `READY` | `BLOCKED` | 固定执行隔离或必需外部前置条件在派发前不满足，不创建 attempt/lease |
-| `READY` | `CANCELLED` | Run 取消，且没有外部执行 |
-| `DISPATCHING` | `RUNNING` | command 已确认启动，或 Agent activate 已提交 |
-| `DISPATCHING` | `FAILED` | 已证明外部执行没有开始且本 attempt 创建失败 |
-| `DISPATCHING` | `AMBIGUOUS` | 无法唯一确认 task identity 或外部执行是否开始；mutation lease 保留 |
-| `DISPATCHING` | `CANCELLED` | 已证明执行没有开始且 Run 取消 |
-| `RUNNING` | `VERIFYING` | 收到结果、失败、blocked 或取消证据，交由 Core 校验 |
-| `RUNNING` | `AMBIGUOUS` | Host 丢失且无法确定执行或 mutation 结果；mutation lease 保留 |
-| `VERIFYING` | `SUCCEEDED` | 身份、Schema、输出、revision 和 evidence 全部通过 |
-| `VERIFYING` | `FAILED` | 已验证的失败，或成功结果不能满足声明的输出契约 |
-| `VERIFYING` | `BLOCKED` | 已验证的外部前置条件缺失 |
-| `VERIFYING` | `AMBIGUOUS` | mutation 结果或 workspace revision 无法对账 |
-| `VERIFYING` | `CANCELLED` | 取消已经确认，且 mutation 已证明未发生或已完成对账 |
-| `FAILED` | `READY` | retry policy 允许；下一次派发创建新 attempt |
-| `BLOCKED` | `READY` | 显式 resume，并重新验证依赖、隔离和外部前置条件 |
-| `AMBIGUOUS` | `DISPATCHING` | 找回唯一 bootstrap task，但尚未 activate |
-| `AMBIGUOUS` | `RUNNING` | 找回并确认仍在执行的 attempt |
-| `AMBIGUOUS` | `VERIFYING` | 找回结果或用户提供裁决证据，必须继续正常结果校验 |
-| `AMBIGUOUS` | `FAILED` | 已证明执行未开始或失败；按第 7.3 节处理 lease |
-| `AMBIGUOUS` | `CANCELLED` | 用户裁决取消，且按第 7.3 节完成 mutation 对账 |
+| `pending` | `ready` | 依赖成功且 Config 声明的适用条件成立 |
+| `pending` | `skipped` | 适用条件为假且节点允许跳过 |
+| `pending` | `cancelled` | Run 取消，且节点尚未派发 |
+| `ready` | `dispatching` | 外部执行节点；原子创建 attempt/dispatch intent，mutation 同时获取 lease |
+| `ready` | `verifying` | Core 内部求值 `gate` 或 `terminal`，不创建 Host execution |
+| `ready` | `blocked` | 固定执行隔离或必需外部前置条件在派发前不满足，不创建 attempt/lease |
+| `ready` | `cancelled` | Run 取消，且没有外部执行 |
+| `dispatching` | `running` | command 已确认启动，或 Agent activate 已提交 |
+| `dispatching` | `failed` | 已证明外部执行没有开始且本 attempt 创建失败 |
+| `dispatching` | `ambiguous` | 无法唯一确认 task identity 或外部执行是否开始；mutation lease 保留 |
+| `dispatching` | `cancelled` | 已证明执行没有开始且 Run 取消 |
+| `running` | `verifying` | 收到结果、失败、blocked 或取消证据，交由 Core 校验 |
+| `running` | `ambiguous` | Host 丢失且无法确定执行或 mutation 结果；mutation lease 保留 |
+| `verifying` | `succeeded` | 身份、Schema、输出、revision 和 evidence 全部通过 |
+| `verifying` | `failed` | 已验证的失败，或成功结果不能满足声明的输出契约 |
+| `verifying` | `blocked` | 已验证的外部前置条件缺失 |
+| `verifying` | `ambiguous` | mutation 结果或 workspace revision 无法对账 |
+| `verifying` | `cancelled` | 取消已经确认，且 mutation 已证明未发生或已完成对账 |
+| `failed` | `ready` | retry policy 允许；下一次派发创建新 attempt |
+| `blocked` | `ready` | 显式 resume，并重新验证依赖、隔离和外部前置条件 |
+| `ambiguous` | `dispatching` | 找回唯一 bootstrap task，但尚未 activate |
+| `ambiguous` | `running` | 找回并确认仍在执行的 attempt |
+| `ambiguous` | `verifying` | 找回结果或用户提供裁决证据，必须继续正常结果校验 |
+| `ambiguous` | `failed` | 已证明执行未开始或失败；按第 7.3 节处理 lease |
+| `ambiguous` | `cancelled` | 用户裁决取消，且按第 7.3 节完成 mutation 对账 |
 
-`SUCCEEDED`、`SKIPPED` 和 `CANCELLED` 没有后续转换。所有转换只由 Transition Service 提交；Agent task、Host Adapter 和 Scheduler 只能提出结构化请求。
+`succeeded`、`skipped` 和 `cancelled` 没有后续转换。所有转换只由 StateCommitter 提交；Agent task、Host Adapter 和 Scheduler 只能提出结构化请求。
 
 ### 6.2 RunState
 
 ```text
-VALIDATED
-RUNNING
-SUCCEEDED
-FAILED
-BLOCKED
-AMBIGUOUS
-CANCELLED
+validated
+running
+succeeded
+failed
+blocked
+ambiguous
+cancelled
 ```
 
 完整合法转换如下：
 
 | From | To | Guard / effect |
 |---|---|---|
-| `VALIDATED` | `RUNNING` | 显式 start，Host binding 与恢复前置检查通过 |
-| `VALIDATED` | `CANCELLED` | Run 在首次调度前取消 |
-| `RUNNING` | `SUCCEEDED` | 仅 success terminal node 可以提交 |
-| `RUNNING` | `FAILED` | failure terminal 提交，或 mandatory failure 使所有 terminal 不可达且 retry 已耗尽 |
-| `RUNNING` | `BLOCKED` | 没有可调度节点，且至少一个必要节点为 `BLOCKED` |
-| `RUNNING` | `AMBIGUOUS` | 存在未裁决的 ambiguous attempt |
-| `RUNNING` | `CANCELLED` | 取消已提交，且所有活动 attempt 已完成安全对账 |
-| `BLOCKED` | `RUNNING` | 显式 resume，所有阻塞前置条件重新验证通过 |
-| `BLOCKED` | `CANCELLED` | 用户取消且没有未裁决 mutation |
-| `AMBIGUOUS` | `RUNNING` | 所有 ambiguous attempt 已裁决且 Workflow 仍可继续 |
-| `AMBIGUOUS` | `FAILED` | 裁决后 terminal 不可达且 retry 已耗尽 |
-| `AMBIGUOUS` | `CANCELLED` | 所有 mutation 已裁决后用户取消 |
+| `validated` | `running` | 显式 start，Host binding 与恢复前置检查通过 |
+| `validated` | `cancelled` | Run 在首次调度前取消 |
+| `running` | `succeeded` | 仅 success terminal node 可以提交 |
+| `running` | `failed` | failure terminal 提交，或 mandatory failure 使所有 terminal 不可达且 retry 已耗尽 |
+| `running` | `blocked` | 没有可调度节点，且至少一个必要节点为 `blocked` |
+| `running` | `ambiguous` | 存在未裁决的 ambiguous attempt |
+| `running` | `cancelled` | 取消已提交，且所有活动 attempt 已完成安全对账 |
+| `blocked` | `running` | 显式 resume，所有阻塞前置条件重新验证通过 |
+| `blocked` | `cancelled` | 用户取消且没有未裁决 mutation |
+| `ambiguous` | `running` | 所有 ambiguous attempt 已裁决且 Workflow 仍可继续 |
+| `ambiguous` | `failed` | 裁决后 terminal 不可达且 retry 已耗尽 |
+| `ambiguous` | `cancelled` | 所有 mutation 已裁决后用户取消 |
 
-只有 Config 成功编译并持久化为 immutable IR 后才创建初始状态为 `VALIDATED` 的 Run；非法 Workflow 不产生 RunState。`SUCCEEDED`、`FAILED` 和 `CANCELLED` 是 Run terminal state，没有后续转换。所有 RunState 转换只由 Transition Service 提交。
+只有 Config 成功编译并持久化为 immutable IR 后才创建初始状态为 `validated` 的 Run；非法 Workflow 不产生 RunState。`succeeded`、`failed` 和 `cancelled` 是 Run terminal state，没有后续转换。所有 RunState 转换只由 StateCommitter 提交。
 
 ### 6.3 确定性调度
 
@@ -402,12 +402,12 @@ workspace
 
 单个 SQLite transaction 完成：
 
-1. 验证 node 为 `READY`；
+1. 验证 node 为 `ready`；
 2. 验证 workspace 没有 lease；
 3. 创建 attempt；
 4. 写入 dispatch intent；
 5. 获取 lease；
-6. 将 node 转换为 `DISPATCHING`；
+6. 将 node 转换为 `dispatching`；
 7. 提交事务。
 
 Host Adapter 只有在该事务成功后才能创建 Codex task 或执行 mutation。
@@ -416,9 +416,9 @@ Host Adapter 只有在该事务成功后才能创建 Codex task 或执行 mutati
 
 只有以下情况可以释放：
 
-- NodeResult 已校验并提交为 `SUCCEEDED`；
+- NodeResult 已校验并提交为 `succeeded`；
 - attempt 明确失败且 mutation 结果已经对账；
-- 用户明确裁决 `AMBIGUOUS`；
+- 用户明确裁决 `ambiguous`；
 - mutation 被证明没有开始。
 
 进程重启或超时本身不能释放 lease。
@@ -450,10 +450,10 @@ Agent 派发使用两阶段协议：
 1. GraphX 先持久化 attempt、dispatch intent 和不可猜测的 dispatch token；
 2. Host 创建只包含 attempt identity 和 dispatch token 的 bootstrap task，不发送语义 Task Contract；
 3. Host 调用 `bind(attempt_id, dispatch_token, host_id, thread_id)`；GraphX 在一个 transaction 中校验当前 attempt、token 和 bootstrap identity，强制 `(host_id, thread_id)` 唯一，然后创建不可变 ExecutionHandle；内容完全相同的重复 bind 才幂等成功；
-4. Host 调用 activate；GraphX 在一个 transaction 中重新验证 attempt、thread、适用时的 lease、workspace revision 和执行隔离，持久化冻结的 Task Contract 与 activation event，将节点转换为 `RUNNING`，然后返回 Task Contract；
+4. Host 调用 activate；GraphX 在一个 transaction 中重新验证 attempt、thread、适用时的 lease、workspace revision 和执行隔离，持久化冻结的 Task Contract 与 activation event，将节点转换为 `running`，然后返回 Task Contract；
 5. Host 把 Task Contract 发送给已绑定 task。重复 activate 返回完全相同的 Contract，不产生第二次状态转换。
 
-task 创建后、bind 前发生故障时，恢复流程使用 dispatch token 对账 bootstrap task。无法唯一确认 task identity 时，node 和 Run 都进入 `AMBIGUOUS`，且不得创建新 attempt；mutation attempt 继续保留 lease。只有在找回并绑定原 task，或证明原 task 未创建/已终止后，才能按第 6.1 节继续或失败后 retry。activate 提交后、Contract 发送前发生故障时，Host 从 GraphX 重新取得同一份冻结 Contract 并幂等重发。标题只用于展示，不能参与对账。
+task 创建后、bind 前发生故障时，恢复流程使用 dispatch token 对账 bootstrap task。无法唯一确认 task identity 时，node 和 Run 都进入 `ambiguous`，且不得创建新 attempt；mutation attempt 继续保留 lease。只有在找回并绑定原 task，或证明原 task 未创建/已终止后，才能按第 6.1 节继续或失败后 retry。activate 提交后、Contract 发送前发生故障时，Host 从 GraphX 重新取得同一份冻结 Contract 并幂等重发。标题只用于展示，不能参与对账。
 
 ### 8.2 Task Contract
 
@@ -597,7 +597,7 @@ src/graphx/
     runtime/
         models.py
         transitions.py
-        transition_service.py
+        state_committer.py
     store/
         schema.py
         sqlite.py
@@ -614,7 +614,7 @@ tests/
     integration/
 ```
 
-Application Service、Query Service、编译、Graph 分析、状态转换、存储和 Host Adapter 必须保持独立。Store 是唯一数据库边界，Condition Evaluator 和 Transition Service 是唯一控制求值边界。
+Application Service、Query Service、编译、Graph 分析、状态转换、存储和 Host Adapter 必须保持独立。Store 是唯一数据库边界，Condition Evaluator 是唯一条件求值边界，StateCommitter 是唯一状态提交边界。
 
 ## 11. MCP 操作
 
@@ -715,7 +715,7 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 
 - 第 7.4 节的 workspace revision policy 和结果绑定；
 - 第 7.1–7.3 节的 mutation lease、激活复检和释放规则；
-- mutation 故障对账、`AMBIGUOUS` 和显式裁决流程。
+- mutation 故障对账、`ambiguous` 和显式裁决流程。
 
 完成条件：在所有故障注入点都不会并行 mutation、自动重放不确定 mutation 或提前释放 lease；后续 mutation 在前一个 attempt 得到权威裁决前始终被阻止。
 
@@ -757,7 +757,7 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 - 多个 mutation node 永不并行；
 - mutation task 激活前重新校验 lease、workspace revision 和执行隔离；
 - transaction 前后进程终止；
-- 未确认 mutation 进入 `AMBIGUOUS`；
+- 未确认 mutation 进入 `ambiguous`；
 - Agent 自报完成但 terminal 条件不满足；
 - 恢复前后得到相同调度决定；
 - 每个 Agent attempt 对应独立 Codex task；
@@ -765,9 +765,9 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 - Agent task-local 自检不能替代 Config 声明的正式 Verifier；
 - 只有 Store 模块能够创建 SQLite connection、执行 SQL 或取得数据库路径；
 - MCP Schema、Task Contract、NodeDispatch、inspect 和错误响应都不会泄露数据库路径或内部 Store 标识；
-- SQLite 状态目录位于所有 Codex workspace 外且不对总控任务、Agent task 或 Host Adapter 暴露，隔离验证失败时在 attempt 和 lease 创建前进入 `BLOCKED`；
+- SQLite 状态目录位于所有 Codex workspace 外且不对总控任务、Agent task 或 Host Adapter 暴露，隔离验证失败时在 attempt 和 lease 创建前进入 `blocked`；
 - Host binding 的 identity、workspace 和隔离 snapshot/hash 在 Run 中不可变，恢复时不一致会阻止派发；
-- MCP、Host Adapter、Scheduler、Codex task 和其他 Core 模块不能绕过 Query/Transition Service 访问 Store；
+- MCP、Host Adapter、Scheduler、Codex task 和其他 Core 模块不能绕过 Query Service/StateCommitter 访问 Store；
 - Verification Evidence 的 check ID/hash 和 workspace revision 绑定，以及 stale evidence 拒绝；
 - tracked 修改、删除和权威 untracked 新文件会改变 revision，派生索引变化不会；
 - 通用 Command Node 失败会阻止其依赖节点，且 Core 不包含外部工具专属逻辑。

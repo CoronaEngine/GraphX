@@ -9,7 +9,7 @@
 - Keep `WorkflowConfig`, immutable `WorkflowIR`, and `RunState` as separate types. Only the Compiler may construct a valid IR, and an IR must not change during a run.
 - In core code, do not use unvalidated `Any`, `dict[str, Any]`, `cast()` as validation, unexplained type-ignore comments, `eval`, `exec`, monkey patching, dynamic Runner imports, pickle protocols, or dynamic state mutation with `setattr()`.
 - Use enums, tagged frozen dataclasses, immutable containers, strong ID types, and `assert_never()` for state unions. Do not use bare strings for node or run states.
-- Only the transition service may commit NodeState or RunState changes. Host adapters and Codex tasks return structured requests or results and never write state directly.
+- Only `StateCommitter` may commit NodeState or RunState changes. Host adapters and Codex tasks return structured requests or results and never write state directly.
 - Persist authoritative run state in SQLite. Enforce keys, references, uniqueness, mutation leases, and idempotency with database constraints and transactions, not Python checks alone.
 - The initial scheduler dispatches one node at a time in stable node-ID order. Every `workspaceMutation` node must hold the single workspace-scoped mutation lease.
 - Never release a mutation lease merely because of timeout, process exit, or restart. Reconcile the attempt; unresolved mutation becomes `AMBIGUOUS` and blocks later mutation.
