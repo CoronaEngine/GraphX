@@ -49,23 +49,18 @@ GraphX 不负责：
 10. 重复请求和重复结果提交必须幂等。
 11. 不确定的 mutation 进入 `AMBIGUOUS`，不能自动重放。
 12. 只有 terminal node 可以提交 Workflow 最终结果。
+13. `gate`、`terminal` 和所有控制条件只能由 GraphX Core 求值。
+14. Codex task 和 Host Adapter 只能通过 GraphX 的结构化接口访问运行状态，不能直接读取或写入 SQLite。
 
 ## 2. 初始范围
 
 ### 2.1 包含
 
-- Python 3.12 本地进程；
-- JSON Workflow Config 和 JSON Schema；
-- Config 到不可变 Workflow IR 的编译；
-- DAG 引用、类型、环、可达性和 terminal 校验；
-- 稳定、确定性的串行节点调度；
-- `agent`、`command`、`verifier`、`gate`、`terminal` 节点；
-- Codex Skill + MCP Host Adapter；
-- 每个 Agent attempt 一个独立 Codex task；
-- SQLite RunState、attempt、thread 映射和 mutation lease；
-- 有界 retry、blocked、cancel 和 ambiguous 语义；
-- `validate`、`start`、`next`、`inspect`、`resume`、`cancel` 操作；
-- 状态机、事务、恢复和端到端测试。
+- Python 3.12 本地进程中的 Config 校验、immutable IR 和纯 Core Executor；
+- `agent`、`command`、`verifier`、`gate`、`terminal` 节点及确定性串行调度；
+- Codex Skill、短事务 MCP 协议，以及每个 Agent attempt 对应的独立 Codex task；
+- SQLite 权威状态、幂等事务、mutation lease、恢复与 `AMBIGUOUS` 裁决；
+- 运行时边界校验、故障注入测试和发布门禁。
 
 ### 2.2 不包含
 
@@ -78,6 +73,7 @@ GraphX 不负责：
 - 任意 `eval`、动态 Python 控制表达式或动态 Runner 导入；
 - 通用插件系统；
 - 自动产生未经配置授权的业务流程。
+- 受控 child workflow；
 
 ## 3. 总体架构
 
@@ -90,16 +86,19 @@ Codex Host Adapter
     |
     | short MCP calls
     v
-GraphX Python Core
+GraphX Python Process
+    ├── MCP Boundary
+    ├── Application / Query Service
     ├── Config Validator
     ├── Workflow Compiler
     ├── Graph Analyzer
     ├── Deterministic Scheduler
-    ├── Transition Engine
-    └── SQLite Store
+    ├── Condition Evaluator
+    ├── Transition Service
+    └── Store -> private SQLite
 ```
 
-Codex App 是用户界面和 Agent Host。GraphX Python Core 是无 UI 的 Graph 权威。
+Codex App 是用户界面和 Agent Host。GraphX Python Core 是无 UI 的 Graph 权威；SQLite 的访问与隔离规则见第 3.4 节。
 
 ### 3.1 总控任务
 
@@ -126,110 +125,21 @@ Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记
 
 ### 3.3 机械节点
 
-`command`、`verifier`、`gate` 和 `terminal` 不要求独立对话。Host Adapter 按 NodeDispatch 执行或解释它们，并将结构化结果返回 GraphX。
+`command` 和 `verifier` 不要求独立对话。Host Adapter 只执行 IR 已经声明的外部动作并返回结构化事实；它不能解释依赖、条件或完成语义。`gate` 和 `terminal` 不离开 GraphX Python Process，由 Condition Evaluator 和 Transition Service 根据不可变 IR 与权威 RunState 求值。
 
-### 3.4 与 Superpowers 的职责边界和交接
+### 3.4 状态访问与执行隔离
 
-Superpowers 与 GraphX 处于不同层次：Superpowers 提供需求澄清、工程计划和单个任务内的软件工程方法；GraphX 提供跨节点的控制权、持久化状态、调度、恢复和完成门。二者的标准交接点是 Superpowers 的 implementation plan 已经获得用户批准之后、`executing-plans` 或 `subagent-driven-development` 开始之前。
+#### 3.4.1 状态数据库边界
 
-```text
-Superpowers brainstorming
-    -> approved Spec
-    -> Superpowers writing-plans
-    -> approved Implementation Plan
-    -> GraphX Skill drafts Workflow Config
-    -> graphx_validate_workflow
-    -> user confirms the compiled graph
-    -> graphx_start_run
-```
+Codex 总控任务、Agent task 和 Host Adapter 都是不可信的外部参与者，只能调用 GraphX 暴露的结构化 MCP 操作。MCP 不提供原始 SQL、数据库连接、数据库文件路径、任意表查询或通用状态写入操作。
 
-交接遵循以下规则：
+只有 Store 模块可以打开 SQLite 连接。Application Service 将读取交给只读 Query Service，将状态修改交给 Transition Service；其他模块不得绕过这两个服务访问 Store。Transition Service 在同一 transaction 中完成前置状态检查、约束校验、事件写入和状态提交。
 
-- GraphX Skill 可以读取已批准的 Spec 和 Implementation Plan，辅助生成候选 Workflow Config；该 Config 仍是不可信输入，必须经过正常 Schema 和 Graph 编译校验，且不能未经用户确认自动启动。
-- Implementation Plan 中的两到五分钟步骤通常进入 Agent Node 的 Task Contract，不要求每一步都成为 GraphX Node。只有需要独立状态、独立 attempt、独立审查、显式依赖或恢复边界的交付单元才成为 Node。
-- GraphX 开始控制 Run 后，Agent Node 不能在内部再启动 `executing-plans`、`subagent-driven-development` 等顶层执行控制器，避免产生 GraphX 无法观察、恢复和裁决的隐藏子工作流。
-- Agent Node 可以在环境提供时使用 task-local Superpowers 方法，例如 `test-driven-development`、`systematic-debugging` 和 `verification-before-completion`；这些方法不能修改 Workflow IR、RunState 或绕过后续 Verifier/Gate。
-- 正式的测试、独立代码审查和用户批准若影响终态，必须在 Workflow Config 中表现为显式 `command`、`verifier`、独立 `agent` 或 `gate` 节点。Agent 内部自检只能作为提前反馈。
-- Superpowers 风格的实现、测试、审查和修复流程可以作为可复用 Workflow 模板或 GraphX Skill 资产提供，但不能硬编码进 GraphX Core。
+#### 3.4.2 Host 执行隔离
 
-如果一个 Agent Node 需要在内部运行完整的多任务执行计划，通常说明该 Node 过大；应在 Run 启动前继续拆分 Config，或在后续版本使用第 12 节的受控 child workflow。
+SQLite 文件必须位于所有 Codex workspace 之外，并且不能挂载或暴露给总控任务、Agent task 或 Host Adapter 的执行环境。Host 启动 Run 时必须验证固定的执行隔离要求；无法保证状态目录隔离时，不得派发 Agent 节点。GraphX 不通过 prompt 中的行为要求声称实现数据库隔离。
 
-Superpowers 是可选集成而不是 GraphX 的运行时依赖；未安装 Superpowers 时，合法 Workflow 仍可由普通 Codex task 执行。
-
-#### 3.4.1 Agent 内部执行方法与 Skill 边界
-
-Agent Node 内部不再引入一个由 GraphX Core 实现的二级编排器。节点的 `task` 是 Workflow Config 声明的、不透明的用户执行指引；它可以要求普通提示词流程、引用一个或多个当前 Host 可用的 Skill，或声明 Skill 不可用时的 fallback。GraphX Core 只校验该字段的结构和边界、将其编译进不可变 IR，并原样交给 Host Adapter，不解析 Skill 名称、不选择方法论、不加载 Skill，也不提供内置 Superpowers runtime。
-
-例如，一个 Agent Node 可以声明：
-
-```json
-{
-    "id": "implement-auth",
-    "type": "agent",
-    "sideEffect": "workspaceMutation",
-    "task": "Implement authentication. If superpowers:test-driven-development is available, use it. Otherwise write a failing test, confirm the expected failure, implement the minimal change, rerun the relevant tests, and report the commands and results. Work only on this node; do not invoke executing-plans or subagent-driven-development.",
-    "outputs": {
-        "result": "agentResult"
-    },
-    "retry": {
-        "maxAttempts": 2
-    }
-}
-```
-
-Skill 使用遵循以下规则：
-
-- `task` 中引用 Skill 是执行指导，不改变 Graph 结构、NodeState、重试、lease、Verifier、Gate 或 Terminal 语义；相同 IR 和 RunState 的调度决定不能依赖 Skill 是否安装。
-- Skill 可选时，fallback 必须由 Workflow Config 或其模板写进 `task`；GraphX Core 不生成、推断或维护 fallback。
-- Skill 必需但不可用时，Agent 或 Host Adapter 必须提交结构化的 capability failure/blocked 请求，由 Transition Service 决定合法状态转换；不得静默换用别的方法并声称满足要求。
-- `test-driven-development`、`systematic-debugging`、`verification-before-completion` 等 task-local 方法可以在当前 task/thread 内使用；`executing-plans`、`subagent-driven-development` 等会建立第二套顶层控制流的方法不得在运行中的 Agent Node 内启动。
-- Prompt 中的“不得调用其他 Skill”只是行为约束，不构成硬隔离保证。只有 Host 原生提供的逐 task Skill/tool capability allowlist 才能提供能力层限制；应使用 allowlist，而不是维护易漏项的 denylist。
-- 如果 Host 支持逐 task capability policy，Host Adapter 可以应用一个 Host 侧的静态 allowlist policy，禁止 task/thread 创建与管理能力；成功实施后，把 policy ID、policy hash、实际 capability snapshot 和 enforcement result 记录到 attempt 元数据。该 policy 由 Host 执行，不进入 Scheduler、Transition Engine 或 GraphX Core 的 Skill 语义。
-- 对要求硬隔离的 policy，Host 无法实施时必须在 attempt 创建、mutation lease 获取和任何 workspace mutation 开始前阻止派发，记录 node 诊断，并通过 Transition Service 执行 `READY -> BLOCKED`；best-effort policy 只能记录明确的降级诊断，不能声称其他 Skill 已被禁止。
-- GraphX 不得通过卸载 Skill、移动 Skill 文件、修改用户全局 Codex 配置或自行实现 Skill loader/sandbox 来制造隔离。
-
-白名单的所有权属于用户或 workspace 管理员，而不是 GraphX Core。用户在 Host/工作区配置中定义具名 Skill/capability profile，例如不暴露可选 Skill 的 `strict` profile，或只暴露 TDD、调试和完成前验证等 task-local Skill 的 `coding-safe` profile；Host 配置必须显式指定默认 profile，不能隐式退化为 unrestricted。初始版本在 Run 启动时由用户选择一个 profile，未显式选择时使用该 Host 配置的默认 profile；不在 Agent Node JSON 中增加 Skill 列表，避免把 Host 安装状态和产品特定 Skill 名称写入 Workflow IR。
-
-GraphX 同时定义一个不可由用户放宽的控制面安全上限：Agent Node 永远不能获得提交状态转换、管理 mutation lease、改写 IR、绕过 Verifier/Gate/Terminal，或创建和管理隐藏 task/thread 的能力。用户 profile 只能在该安全上限内缩小 Agent 能力，引用越界能力的 profile 必须在 Host 配置校验时被拒绝，不能静默裁剪后继续运行。
-
-派发时的实际能力集合按以下交集计算：
-
-```text
-effective capabilities
-    = GraphX non-configurable safety ceiling
-    ∩ user-selected Host profile
-    ∩ capabilities actually available on the Host
-```
-
-Run 启动时必须把所选 profile ID、规范化 profile snapshot 和 profile hash 冻结到该 Run 的 Host binding；运行中的 Host 配置变化只影响后续 Run，不能改变当前 Run。每个 attempt 仍记录实际 capability snapshot 和 enforcement result，以便恢复和审计。`task` 可以要求或建议使用某个 Skill，但不能扩大 effective capabilities；profile 中允许的 Skill 若有传递依赖，Host 必须在派发前校验依赖闭包，缺少必需依赖时按 required policy 进入 `BLOCKED`。
-
-初始 Codex App 集成不假设平台已经支持逐 task Skill allowlist。若 Host 没有该能力，GraphX 只保证 Agent 不能通过合法 NodeResult 绕过 Graph、Verifier、Gate 和 Terminal，不保证 Agent 从未读取或遵循其他可见 Skill。需要独立状态、独立 attempt 或独立 Codex task 的内部工作必须提升为显式 GraphX Node，或使用第 12 节的受控 child workflow。
-
-### 3.5 CodeGraph 支持边界
-
-CodeGraph 是 Codex 工作环境中的代码导航能力，不是 GraphX Core 的子系统。是否为仓库创建 `.codegraph/` 索引由用户决定；仓库未建立索引时，GraphX 不自动初始化索引，也不改变 Agent 的普通文件导航行为。
-
-默认更新流程完全由 CodeGraph 管理：
-
-```text
-source changes --------> watcher / debounced incremental sync --+
-                                                               +-> refreshed graph
-MCP start or reconnect -> stat/hash catch-up -------------------+
-```
-
-GraphX 不实现文件 watcher、不解析 CodeGraph 数据库、不维护 CodeGraph 新鲜度状态，也不增加专用 `CodeGraphNode`。Codex 是否优先使用 CodeGraph，由仓库 `AGENTS.md` 等项目指令和可用工具决定；Host Adapter 只需保证 Agent Node 在其声明的 workspace 中运行，并获得该环境原本可用的指令和工具。没有显式 CodeGraph Command Node 时，CodeGraph 不可用不得成为 GraphX Run 的隐式失败条件。
-
-普通代码导航不需要额外 Workflow Node。只有后续节点对“刚完成 mutation 后的最新代码图”存在明确的强一致性前置条件时，Workflow Config 才显式加入一个普通 Command Node：
-
-```text
-workspace mutation
-    -> command: codegraph sync --quiet
-    -> graph-dependent analysis or verification
-```
-
-该节点只是用户配置的通用命令和依赖屏障。GraphX 只执行命令、记录退出状态和推进 Graph，不理解命令语义；Host Adapter 必须把命令工作目录设置为 Node 声明的 workspace，不能继承 Adapter 进程自己的当前目录。同步失败时后续依赖节点不得运行。禁止通过固定 `sleep` 猜测 watcher 已经完成。强制全量索引属于 CodeGraph 的异常恢复行为，不是每次节点执行的常规步骤。
-
-每个 checkout 或 worktree 必须使用与 Agent 实际 workspace 对应的 CodeGraph 根和索引。索引的并发、锁和数据库恢复由 CodeGraph 自己负责。
+GraphX Core 不实现通用 sandbox。文件系统隔离由 Host 提供，但“GraphX 私有状态目录对 Agent 不可见”是 Agent 执行的硬前置条件，而不是可降级选项。Run 必须冻结 Host identity、workspace identity、隔离模式和对应的规范化 snapshot/hash，恢复时重新验证；不一致时进入 `BLOCKED`，不能继续派发。
 
 ## 4. Workflow Config 与 IR
 
@@ -237,69 +147,51 @@ workspace mutation
 
 ```json
 {
-    "version": 1,
-    "workflow": {
-        "id": "pt-renderer",
-        "nodes": [
-            {
-                "id": "develop-material-system",
-                "type": "agent",
-                "sideEffect": "workspaceMutation",
-                "task": "Develop the material system",
-                "outputs": {
-                    "result": "agentResult"
-                },
-                "retry": {
-                    "maxAttempts": 2
-                }
-            },
-            {
-                "id": "verify-material-system",
-                "type": "verifier",
-                "dependsOn": [
-                    "develop-material-system"
-                ],
-                "check": {
-                    "id": "material-system-tests",
-                    "kind": "command",
-                    "argv": ["pytest", "tests/material_system"],
-                    "successExitCodes": [0]
-                },
-                "inputs": {
-                    "candidate": {
-                        "from": "develop-material-system.result"
-                    }
-                },
-                "outputs": {
-                    "evidence": "verificationEvidence"
-                }
-            },
-            {
-                "id": "done",
-                "type": "terminal",
-                "dependsOn": [
-                    "verify-material-system"
-                ],
-                "condition": {
-                    "eq": [
-                        {
-                            "from": "verify-material-system.evidence.status"
-                        },
-                        {
-                            "literal": "passed"
-                        }
-                    ]
-                },
-                "outcome": "success"
-            }
-        ]
-    }
+  "version": 1,
+  "workflow": {
+    "id": "pt-renderer",
+    "nodes": [
+      {
+        "id": "develop-material-system",
+        "type": "agent",
+        "sideEffect": "workspaceMutation",
+        "task": "Develop the material system",
+        "outputs": {"result": "agentResult"},
+        "retry": {"maxAttempts": 2}
+      },
+      {
+        "id": "verify-material-system",
+        "type": "verifier",
+        "dependsOn": ["develop-material-system"],
+        "check": {
+          "id": "material-system-tests",
+          "kind": "command",
+          "argv": ["pytest", "tests/material_system"],
+          "successExitCodes": [0]
+        },
+        "inputs": {"candidate": {"from": "develop-material-system.result"}},
+        "outputs": {"evidence": "verificationEvidence"}
+      },
+      {
+        "id": "done",
+        "type": "terminal",
+        "dependsOn": ["verify-material-system"],
+        "condition": {
+          "eq": [
+            {"from": "verify-material-system.evidence.status"},
+            {"literal": "passed"}
+          ]
+        },
+        "outcome": "success"
+      }
+    ]
+  }
 }
 ```
 
 示例不是内置流程。GraphX 不包含 `develop-material-system` 的业务逻辑。
 
-Agent Node 的 `task` 保持非空、有界的自由文本，不增加 `skills`、`strategy`、动态 Runner 或 GraphX fallback 字段。用户或 Workflow 模板可以在其中引用 Skill 和写明 fallback；正式完成条件仍通过结构化 `outputs`、独立 `verifier`、`gate` 和 `terminal` 表达。Agent 自报使用或未使用某个 Skill 只可作为诊断或候选 evidence，不能成为未经独立检查的成功依据。
+Agent Node 的 `task` 保持非空、有界的自由文本。GraphX Core 不从自然语言中推断依赖、分支、重试或完成条件；影响控制流的要求必须由结构化 `outputs`、显式节点、受限条件和 terminal 表达。Agent 的自然语言完成声明只能作为诊断，不能成为未经独立检查的成功依据。
 
 ### 4.2 数据层次
 
@@ -372,7 +264,7 @@ Immutable WorkflowIR
 ### 5.3 状态转换校验
 
 - 当前状态允许目标转换；
-- attempt ID 和 thread ID 匹配；
+- attempt ID 与结果类型对应的 execution identity 匹配；
 - NodeResult 属于当前派发；
 - retry 没有超过上限；
 - terminal 的依赖和条件已经满足。
@@ -383,35 +275,24 @@ Immutable WorkflowIR
 - node attempt 唯一编号；
 - request/result 幂等键唯一；
 - 每个 workspace 至多一个 mutation lease；
-- 必填状态和 thread 映射非空；
+- 每个 attempt 至多一个 ExecutionHandle，且 `(host_id, thread_id)` 在所有 Codex handle 中唯一；
+- 已绑定 ExecutionHandle 的 thread ID 非空且不可变；未绑定的 `DISPATCHING` attempt 可以暂时没有 ExecutionHandle；
 - 所有状态变化在单个事务中提交。
 
 ### 5.5 验证权威和保证边界
 
-Agent Node 内部运行的测试、自审或 Superpowers verification 属于 Agent 提供的候选证据，不具有独立的机械执行保证。是否要求正式 Verifier、独立 Review 或 Human Gate 由 Workflow Config 决定；Agent 自检不能冒充或替代 Config 已声明的这些节点。GraphX 必须区分“候选产物已经生成”和“Workflow 按其 Config 验收了该产物”。
-
-```text
-Agent Node
-    -> candidate output + workspace revision + claimed evidence
-    -> optional Host-executed Command/Verifier
-    -> optional independent Review Agent
-    -> optional Human Gate
-    -> Terminal condition
-```
-
-各层保证如下：
+GraphX 必须区分“候选产物已经生成”和“Workflow 按 Config 验收了该产物”。验证层级由 Workflow Config 显式声明：
 
 | 层级 | 作用 | 权威性 |
 |---|---|---|
 | Agent task-local 自检 | 尽早发现缺陷并降低返工 | Agent 提供的证据；不能冒充已声明的 Host Verifier |
 | Host 执行的 `command` / `verifier` | 执行 IR 中固定的检查并采集退出码和输出 | 对“声明的检查确实在绑定 revision 上执行”提供机械证据 |
 | 独立 Review Agent | 检查需求符合性和代码质量 | 独立但仍是概率性的语义判断 |
-| Human Gate | 记录需要人工负责的批准或裁决 | 对批准事件权威，不自动证明技术正确性 |
 | Terminal | 汇总 Graph 中声明的必要条件 | 只有所有依赖和条件满足后才能提交 Run 成功 |
 
 正式 Verifier 的 tagged check spec 来自 Workflow Config；Compiler 必须校验其 kind-specific 字段，并在不可变 Workflow IR 中保存稳定 check ID 和规范化 check hash，不能由被验证 Agent 在结果中临时指定。Verification Evidence 必须绑定 run、node、attempt、被验证 workspace revision、check ID/hash 和结构化结果；stale revision、错误身份、check hash 不匹配或仅有自然语言成功声明都必须拒绝。
 
-GraphX 能机械保证 Config 声明的验证步骤被正确调度、执行、绑定和记录，但不能证明测试覆盖了全部需求、测试本身正确或 Agent 的语义判断必然正确。需要更高置信度时，Config 应组合受保护的验收命令、独立 Review Agent 和 Human Gate，而不是扩大 GraphX Core 的业务判断能力。
+GraphX 只保证声明的验证步骤被正确调度、执行、绑定和记录，不证明其语义完备性。
 
 ## 6. 节点和状态
 
@@ -431,25 +312,41 @@ AMBIGUOUS
 CANCELLED
 ```
 
-关键转换：
+完整合法转换如下；未列出的转换一律拒绝：
 
-```text
-PENDING -> READY
-READY -> DISPATCHING
-READY -> BLOCKED                required pre-dispatch Host policy cannot be enforced
-DISPATCHING -> RUNNING
-RUNNING -> VERIFYING
-VERIFYING -> SUCCEEDED | FAILED | BLOCKED | AMBIGUOUS
-FAILED -> READY                  only through a new attempt
-BLOCKED -> READY                 only through explicit resume after revalidation
-```
+| From | To | Guard / effect |
+|---|---|---|
+| `PENDING` | `READY` | 依赖成功且 Config 声明的适用条件成立 |
+| `PENDING` | `SKIPPED` | 适用条件为假且节点允许跳过 |
+| `PENDING` | `CANCELLED` | Run 取消，且节点尚未派发 |
+| `READY` | `DISPATCHING` | 外部执行节点；原子创建 attempt/dispatch intent，mutation 同时获取 lease |
+| `READY` | `VERIFYING` | Core 内部求值 `gate` 或 `terminal`，不创建 Host execution |
+| `READY` | `BLOCKED` | 固定执行隔离或必需外部前置条件在派发前不满足，不创建 attempt/lease |
+| `READY` | `CANCELLED` | Run 取消，且没有外部执行 |
+| `DISPATCHING` | `RUNNING` | command 已确认启动，或 Agent activate 已提交 |
+| `DISPATCHING` | `FAILED` | 已证明外部执行没有开始且本 attempt 创建失败 |
+| `DISPATCHING` | `AMBIGUOUS` | 无法唯一确认 task identity 或外部执行是否开始；mutation lease 保留 |
+| `DISPATCHING` | `CANCELLED` | 已证明执行没有开始且 Run 取消 |
+| `RUNNING` | `VERIFYING` | 收到结果、失败、blocked 或取消证据，交由 Core 校验 |
+| `RUNNING` | `AMBIGUOUS` | Host 丢失且无法确定执行或 mutation 结果；mutation lease 保留 |
+| `VERIFYING` | `SUCCEEDED` | 身份、Schema、输出、revision 和 evidence 全部通过 |
+| `VERIFYING` | `FAILED` | 已验证的失败，或成功结果不能满足声明的输出契约 |
+| `VERIFYING` | `BLOCKED` | 已验证的外部前置条件缺失 |
+| `VERIFYING` | `AMBIGUOUS` | mutation 结果或 workspace revision 无法对账 |
+| `VERIFYING` | `CANCELLED` | 取消已经确认，且 mutation 已证明未发生或已完成对账 |
+| `FAILED` | `READY` | retry policy 允许；下一次派发创建新 attempt |
+| `BLOCKED` | `READY` | 显式 resume，并重新验证依赖、隔离和外部前置条件 |
+| `AMBIGUOUS` | `DISPATCHING` | 找回唯一 bootstrap task，但尚未 activate |
+| `AMBIGUOUS` | `RUNNING` | 找回并确认仍在执行的 attempt |
+| `AMBIGUOUS` | `VERIFYING` | 找回结果或用户提供裁决证据，必须继续正常结果校验 |
+| `AMBIGUOUS` | `FAILED` | 已证明执行未开始或失败；按第 7.3 节处理 lease |
+| `AMBIGUOUS` | `CANCELLED` | 用户裁决取消，且按第 7.3 节完成 mutation 对账 |
 
-`READY -> BLOCKED` 是派发前能力策略失败的专用转换，发生在 attempt 创建和 mutation lease 获取之前。Agent 在运行中发现必需 Skill 不可用时，仍提交结构化结果并经 `RUNNING -> VERIFYING -> BLOCKED`；GraphX Core 不解析 `task` 来预判 Skill 可用性。状态不能由 Agent task 直接写入，所有转换都由 Transition Service 提交。
+`SUCCEEDED`、`SKIPPED` 和 `CANCELLED` 没有后续转换。所有转换只由 Transition Service 提交；Agent task、Host Adapter 和 Scheduler 只能提出结构化请求。
 
 ### 6.2 RunState
 
 ```text
-CREATED
 VALIDATED
 RUNNING
 SUCCEEDED
@@ -459,7 +356,24 @@ AMBIGUOUS
 CANCELLED
 ```
 
-只有 terminal node 可以把 `RUNNING` 转换为 `SUCCEEDED`。
+完整合法转换如下：
+
+| From | To | Guard / effect |
+|---|---|---|
+| `VALIDATED` | `RUNNING` | 显式 start，Host binding 与恢复前置检查通过 |
+| `VALIDATED` | `CANCELLED` | Run 在首次调度前取消 |
+| `RUNNING` | `SUCCEEDED` | 仅 success terminal node 可以提交 |
+| `RUNNING` | `FAILED` | failure terminal 提交，或 mandatory failure 使所有 terminal 不可达且 retry 已耗尽 |
+| `RUNNING` | `BLOCKED` | 没有可调度节点，且至少一个必要节点为 `BLOCKED` |
+| `RUNNING` | `AMBIGUOUS` | 存在未裁决的 ambiguous attempt |
+| `RUNNING` | `CANCELLED` | 取消已提交，且所有活动 attempt 已完成安全对账 |
+| `BLOCKED` | `RUNNING` | 显式 resume，所有阻塞前置条件重新验证通过 |
+| `BLOCKED` | `CANCELLED` | 用户取消且没有未裁决 mutation |
+| `AMBIGUOUS` | `RUNNING` | 所有 ambiguous attempt 已裁决且 Workflow 仍可继续 |
+| `AMBIGUOUS` | `FAILED` | 裁决后 terminal 不可达且 retry 已耗尽 |
+| `AMBIGUOUS` | `CANCELLED` | 所有 mutation 已裁决后用户取消 |
+
+只有 Config 成功编译并持久化为 immutable IR 后才创建初始状态为 `VALIDATED` 的 Run；非法 Workflow 不产生 RunState。`SUCCEEDED`、`FAILED` 和 `CANCELLED` 是 Run terminal state，没有后续转换。所有 RunState 转换只由 Transition Service 提交。
 
 ### 6.3 确定性调度
 
@@ -471,6 +385,7 @@ same WorkflowIR + same RunState
 ```
 
 这避免把并发顺序、共享工作区和多 Agent 竞态引入初始实现。
+串行 Scheduler 是 MVP 的吞吐策略，不能替代第 7 节由 SQLite 强制的持久化 mutation safety。
 
 ## 7. Mutation 串行语义
 
@@ -510,27 +425,35 @@ Host Adapter 只有在该事务成功后才能创建 Codex task 或执行 mutati
 
 ### 7.4 权威 workspace revision 与派生数据
 
-workspace revision 只描述 Workflow 声明的权威项目内容，不能把缓存、索引、日志或其他派生元数据的变化当成源码 mutation。revision provider 不得简单依赖 workspace 目录时间或无差别哈希所有文件；它必须覆盖 tracked 文件的修改和删除，以及 revision policy 声明为权威的 untracked 新文件，同时排除该 policy 声明的派生路径。revision policy 在 Run 开始前固定并随 IR 保存。
-
-`.codegraph/` 是派生索引的一个例子。CodeGraph watcher 或显式 `codegraph sync` 对该目录的写入不得改变权威源码 revision，也不得单独触发 mutation 对账失败。排除规则必须通过通用 revision policy 实现，不能在 GraphX Core 中写入 CodeGraph 专属状态逻辑。
+workspace revision 只描述 Workflow 声明的权威项目内容，不能把缓存、索引、日志或其他派生元数据的变化当成源码 mutation。revision provider 不得简单依赖 workspace 目录时间或无差别哈希所有文件；它必须覆盖 tracked 文件的修改和删除，以及 revision policy 声明为权威的 untracked 新文件，同时排除该 policy 声明的派生路径。revision policy 在 Run 开始前固定并随 IR 保存。GraphX 不理解任何具体派生工具；需要强一致性刷新时，由 Workflow Config 使用普通 Command Node 表达。
 
 ## 8. Codex task 映射
 
-### 8.1 ExecutionHandle
+### 8.1 Codex ExecutionHandle
 
 ```text
 ExecutionHandle
     run_id
     node_id
     attempt_id
+    dispatch_token
     host_kind = codex
     thread_id
     host_id
     workspace_id
+    activated_at
     created_at
 ```
 
-Host Adapter 创建 task 后，必须先调用 bind 操作保存 thread ID，再开始节点工作。重复 bind 只有在内容完全相同时才幂等成功。
+Agent 派发使用两阶段协议：
+
+1. GraphX 先持久化 attempt、dispatch intent 和不可猜测的 dispatch token；
+2. Host 创建只包含 attempt identity 和 dispatch token 的 bootstrap task，不发送语义 Task Contract；
+3. Host 调用 `bind(attempt_id, dispatch_token, host_id, thread_id)`；GraphX 在一个 transaction 中校验当前 attempt、token 和 bootstrap identity，强制 `(host_id, thread_id)` 唯一，然后创建不可变 ExecutionHandle；内容完全相同的重复 bind 才幂等成功；
+4. Host 调用 activate；GraphX 在一个 transaction 中重新验证 attempt、thread、适用时的 lease、workspace revision 和执行隔离，持久化冻结的 Task Contract 与 activation event，将节点转换为 `RUNNING`，然后返回 Task Contract；
+5. Host 把 Task Contract 发送给已绑定 task。重复 activate 返回完全相同的 Contract，不产生第二次状态转换。
+
+task 创建后、bind 前发生故障时，恢复流程使用 dispatch token 对账 bootstrap task。无法唯一确认 task identity 时，node 和 Run 都进入 `AMBIGUOUS`，且不得创建新 attempt；mutation attempt 继续保留 lease。只有在找回并绑定原 task，或证明原 task 未创建/已终止后，才能按第 6.1 节继续或失败后 retry。activate 提交后、Contract 发送前发生故障时，Host 从 GraphX 重新取得同一份冻结 Contract 并幂等重发。标题只用于展示，不能参与对账。
 
 ### 8.2 Task Contract
 
@@ -538,7 +461,7 @@ Agent task 获得：
 
 - 当前 node ID 和 attempt ID；
 - 节点目标；
-- Config 中原样冻结的用户执行指引，包括可选 Skill、必需 Skill 或 fallback 说明；
+- Config 中原样冻结的用户执行指引；
 - 声明输入；
 - workspace 路径和基线 revision；
 - side-effect class；
@@ -548,24 +471,36 @@ Agent task 获得：
 
 不自动注入整个 Workflow 对话历史。Codex 自己负责单个 task 的上下文管理。
 
-Host Adapter 可以给 Task Contract 增加 GraphX 所需的身份、结果格式和“不允许推进 Graph”的固定边界说明，但不能改写 Config 声明的任务目标、Skill 要求或 fallback。Task Contract 必须包含当前 Run 冻结的 profile ID/hash 以及当前 task 的实际 capability snapshot；`task` 中的 Skill 引用不能扩大该 snapshot。若 Host 不能实施 capability policy，必须把约束标为 soft/best-effort，不能伪装成安全边界。
+Host Adapter 可以给 Task Contract 增加 GraphX 所需的身份、结果格式和“不允许推进 Graph”的固定边界说明，但不能改写 Config 声明的任务目标。Task Contract 必须包含当前 Run 冻结的 Host binding ID/hash 和执行隔离摘要，但不得包含 GraphX 状态目录、数据库路径、数据库凭证或内部 Store 标识。
 
 ### 8.3 NodeResult
 
 ```text
-NodeResult
+NodeResult = AgentNodeResult | MechanicalNodeResult
+
+CommonNodeResult
     run_id
     node_id
     attempt_id
-    thread_id
     status
     outputs
     evidence
     workspace_revision
     diagnostics
+
+AgentNodeResult
+    kind = agent
+    common
+    dispatch_token
+    thread_id
+
+MechanicalNodeResult
+    kind = mechanical
+    common
+    execution_id
 ```
 
-GraphX 必须验证身份、状态、Schema 和 revision 后才能提交。
+Agent result 必须匹配已绑定 Codex ExecutionHandle；`command` 和 `verifier` result 必须匹配 GraphX 派发并持久化的 mechanical execution ID，不需要 thread。`gate` 和 `terminal` 不接收外部 NodeResult。所有结果必须通过第 5.1–5.5 节的身份、状态、输出、revision 和 evidence 校验后才能 commit。
 
 ## 9. SQLite 权威状态
 
@@ -578,6 +513,7 @@ run_host_bindings
 run_nodes
 attempts
 execution_handles
+mechanical_executions
 node_outputs
 events
 mutation_leases
@@ -588,10 +524,8 @@ idempotency_keys
 
 - SQLite 是运行状态权威；
 - Workflow IR 以规范 JSON 和内容哈希保存；
-- `run_host_bindings` 以规范化 snapshot 和 hash 保存 Run 启动时选定的 Host profile，创建后不可变；
-- Codex 对话是执行记录，不是 Graph 状态权威；
-- task 标题只用于展示；
-- thread ID 用于恢复和对账；
+- `run_host_bindings` 以规范化 snapshot 和 hash 保存 Host identity、workspace identity 和固定执行隔离要求，创建后不可变；
+- Codex 对话不是状态权威；task 标题只用于展示，thread ID 用于恢复和对账；
 - 日志可以丢失，已提交状态不能依赖日志恢复。
 
 ### 9.2 事务规则
@@ -600,7 +534,7 @@ idempotency_keys
 - 读取当前状态与写入新状态必须处于同一 transaction；
 - 每个提交带 expected previous state；
 - 重复 request 通过 idempotency key 返回原结果；
-- 不允许模块绕过 Store 直接写数据库。
+- 数据库访问和模块依赖必须遵守第 3.4 节，任何越层访问都属于实现错误。
 
 ## 10. Python 实施规范
 
@@ -646,6 +580,9 @@ idempotency_keys
 
 ```text
 src/graphx/
+    application/
+        service.py
+        query.py
     config/
         models.py
         schema.py
@@ -660,7 +597,7 @@ src/graphx/
     runtime/
         models.py
         transitions.py
-        service.py
+        transition_service.py
     store/
         schema.py
         sqlite.py
@@ -677,7 +614,7 @@ tests/
     integration/
 ```
 
-编译、Graph 分析、状态转换、存储和 Host Adapter 必须保持独立。
+Application Service、Query Service、编译、Graph 分析、状态转换、存储和 Host Adapter 必须保持独立。Store 是唯一数据库边界，Condition Evaluator 和 Transition Service 是唯一控制求值边界。
 
 ## 11. MCP 操作
 
@@ -690,8 +627,10 @@ graphx_validate_workflow
 graphx_start_run
 graphx_next
 graphx_bind_task
+graphx_activate_task
 graphx_submit_result
 graphx_fail_attempt
+graphx_reconcile_attempt
 graphx_inspect_run
 graphx_resume_run
 graphx_cancel_run
@@ -703,8 +642,9 @@ graphx_cancel_run
 start/resume
     -> next
     -> receive NodeDispatch
-    -> create visible Codex task when node.type == agent
+    -> create bootstrap Codex task when node.type == agent
     -> bind thread ID
+    -> activate and receive Task Contract
     -> execute or wait
     -> submit NodeResult
     -> next
@@ -715,98 +655,84 @@ Host Adapter 不能请求跳过 mandatory node，也不能提交不是当前 att
 
 ## 12. 受控任务拆分
 
-初始版本允许 Agent 在自己的 Codex task 内部拆分实施步骤，但这些步骤不成为 GraphX Node。
+MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，但这些步骤不成为 GraphX Node。
 
-需要让子任务分别拥有独立对话时，使用后续的受控 child workflow：
-
-- 只有 Config 明确允许的节点可以请求 child workflow；
-- Agent 只能提出 child Workflow Config；
-- GraphX 完整校验后生成独立、不可变的 child IR；
-- parent node 等待 child run terminal；
-- child 中的 Agent attempt 继续一一映射到独立 Codex task；
-- 不允许原地修改正在执行的 parent IR。
-
-Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
+后续 child workflow 只能由 Config 显式授权，并编译为独立、不可变的 child IR；parent IR 不得修改，parent node 等待 child terminal，child 中每个 Agent attempt 仍对应独立 Codex task。
 
 ## 13. 实施阶段
 
-### Phase 1：Python 骨架和 Workflow Compiler
+前六个阶段构成初始 MVP。每个阶段都必须产生一条可执行、可测试的纵向链路，不能把本阶段依赖的安全语义推迟到后续阶段补充。
+
+### Phase 1：语义冻结和工程骨架
 
 交付：
 
-- `pyproject.toml`；
-- Pyright/Ruff/pytest 配置；
-- Config Schema 和严格边界模型；
-- immutable IR；
-- Graph 引用、类型、环、可达性和 terminal 校验；
-- verifier tagged check spec、check identity/hash 和成功条件校验；
-- workspace revision policy 的规范化和校验；
-- 稳定 IR 序列化和哈希。
+- 第 10 节定义的 Python 包骨架和工具配置；
+- Workflow Config、Workflow IR、RunState 的独立严格模型，以及完整状态转换表；
+- MCP 请求、NodeDispatch、NodeResult 和错误响应的版本化 Schema；
+- 第 3.4 节的模块依赖与固定执行隔离边界。
 
-完成条件：任何非法 Workflow 在创建 RunState 前被拒绝。
+完成条件：所有公开数据结构、状态转换和模块所有权没有未决语义；边界测试能够拒绝未知字段、非法枚举和越层数据库访问。
 
-### Phase 2：纯状态机和确定性 Scheduler
+### Phase 2：纯 Core Executor
 
 交付：
 
-- NodeState/RunState；
-- 显式 transition function；
-- ready 计算；
-- 稳定串行调度；
-- retry、blocked、cancel 和 terminal；
-- NodeDispatch/NodeResult 模型。
+- 第 4 节及第 5.1–5.3 节的 Config 校验、immutable IR Compiler 和 Graph 语义分析；
+- verifier check identity/hash、稳定 IR 序列化和内容哈希；
+- 第 6 节的 Condition Evaluator、显式 transition function 和状态语义；
+- ready 计算和稳定串行 Scheduler。
 
-完成条件：纯内存测试覆盖所有合法和非法转换。
+完成条件：纯内存测试覆盖全部转换并满足第 6.3 节确定性；Host 无法参与 `gate` 或 `terminal` 求值。
 
-### Phase 3：SQLite Store 和 Mutation Lease
+### Phase 3：持久化机械工作流
 
 交付：
 
-- 数据库 Schema；
-- transaction API；
-- attempt 和 event；
-- idempotency key；
-- workspace mutation lease；
-- 启动恢复和一致性检查。
+- 第 9 节的 SQLite Schema、migration、Store transaction API 和持久化实体；
+- Application Service、只读 Query Service 和结构化 MCP tools；
+- 符合第 3.3–3.4 节边界的 `command -> verifier -> gate -> terminal` 链路；
+- 每个 transaction 边界的启动恢复和一致性检查。
 
-完成条件：进程在每个 transaction 边界终止后，恢复结果保持一致，mutation 不会重复派发。
+完成条件：机械 Workflow 能在进程重启后继续；第 3.4.1 节的状态数据库边界全部成立。
 
-### Phase 4：Codex Skill 和 MCP Host Adapter
+### Phase 4：只读 Codex Agent 链路
 
 交付：
 
-- MCP tools；
-- 总控 Skill；
-- Agent NodeDispatch；
-- 独立 Codex task 创建、bind、等待和结果提交协议；
-- inspect/resume/cancel 用户流程；
-- 在用户引导下通过模板把已批准 Superpowers Spec/Plan 映射为候选 Workflow Config、显示映射结果、调用校验并等待用户显式确认；
-- Task Contract 中不透明用户执行指引、可选 Skill/fallback、task-local 方法与隐藏顶层执行控制器的边界；
-- 用户或 workspace 管理员拥有的具名 Host capability profile、显式默认 profile、Run 启动选择与不可变 profile ID/snapshot/hash binding；
-- GraphX 不可配置的控制面安全上限、effective capability 交集、Skill 传递依赖校验、attempt 元数据记录，以及 required policy 无法实施时在 mutation 前阻止派发；
-- 保持节点实际 workspace、项目指令和原生工具环境，不自动初始化或管理 CodeGraph。
+- GraphX Skill、Codex Host Adapter，以及第 3.4.2 节的不可变 Run Host binding；
+- Agent NodeDispatch 和第 8 节的两阶段 task 协议；
+- 第 5 节的 NodeResult 校验；
+- task 生命周期故障对账及 inspect、resume、cancel 用户流程。
 
-完成条件：一个多节点 Workflow 能在 Codex App 中为每个 Agent attempt 显示独立任务，并严格串行推进 mutation。
+本阶段只允许非 mutation Agent 节点。这样可以先验证 task 生命周期和恢复协议，而不在尚未完成 mutation 对账前暴露 workspace 写入。
 
-### Phase 5：验证和端到端故障测试
+完成条件：每个 Agent attempt 对应一个可恢复、可见、身份明确的 Codex task；GraphX 在 bind 和 activate 完成前不发送语义 Task Contract；Agent 执行环境无法访问 GraphX 私有状态目录。
+
+### Phase 5：安全 Workspace Mutation
 
 交付：
 
-- NodeResult Schema 校验；
-- workspace revision 对账；
-- stale/duplicate result 拒绝；
-- task 丢失、超时和 ambiguous 恢复；
-- 参考 PT Renderer Workflow；
-- 端到端测试和操作文档；
-- Host 执行的 Verification Evidence 及其 check ID/hash 和 workspace revision 绑定；
-- 权威 workspace revision policy 与派生数据排除；
-- 通用 Command Node 可表达外部新鲜度屏障，无需专用集成节点。
+- 第 7.4 节的 workspace revision policy 和结果绑定；
+- 第 7.1–7.3 节的 mutation lease、激活复检和释放规则；
+- mutation 故障对账、`AMBIGUOUS` 和显式裁决流程。
 
-完成条件：故障注入不会绕过节点、重复 mutation 或提前提交 terminal。
+完成条件：在所有故障注入点都不会并行 mutation、自动重放不确定 mutation 或提前释放 lease；后续 mutation 在前一个 attempt 得到权威裁决前始终被阻止。
 
-### Phase 6：受控 Child Workflow
+### Phase 6：MVP 加固和发布
 
-在基础版本稳定后实现第 12 节定义的嵌套拆分，不修改 parent IR。
+交付：
+
+- 第 5.5 节的 Verification Evidence 绑定和拒绝路径；
+- 普通 Command Node 表达外部刷新屏障；
+- 参考 Workflow、端到端故障矩阵、操作文档和恢复手册；
+- 第 14 节发布门禁。
+
+完成条件：参考 Workflow 在正常执行、进程重启、重复请求、Host 故障和 mutation 不确定场景下都满足第 1.2 节不变量，全部发布门禁通过。
+
+### Phase 7：受控 Child Workflow（非 MVP）
+
+仅在基础 Executor 稳定后实现第 12 节定义的嵌套拆分，不修改 parent IR，也不阻塞 MVP 发布。
 
 ## 14. 测试门槛
 
@@ -818,11 +744,18 @@ Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
 - 环、不可达节点和不可达 terminal；
 - ready-node 稳定排序；
 - 每个合法和非法状态转换；
+- `gate` 和 `terminal` 只由 Core Condition Evaluator 求值，Host 提交对应控制结果会被拒绝；
 - attempt 上限；
-- thread bind 幂等性和冲突；
-- stale、重复和错误身份的 NodeResult；
+- dispatch token 唯一性和错误 token 拒绝；
+- bind 前 attempt 可持久化且不要求 ExecutionHandle；bind 后 thread ID 非空且不可变；
+- thread bind 幂等性、并发冲突，以及跨 attempt 复用 `(host_id, thread_id)` 被拒绝；
+- activate-before-bind、重复 activate 和错误 thread activate；
+- Task Contract 在 bind/activate 前不会发送；
+- task 创建响应丢失和 bind 前重启的对账，包括非 mutation attempt 不得自动重建 task；
+- Agent 与 mechanical NodeResult 的 tagged identity、stale、重复和错误身份拒绝；
 - mutation lease 唯一性；
 - 多个 mutation node 永不并行；
+- mutation task 激活前重新校验 lease、workspace revision 和执行隔离；
 - transaction 前后进程终止；
 - 未确认 mutation 进入 `AMBIGUOUS`；
 - Agent 自报完成但 terminal 条件不满足；
@@ -830,19 +763,14 @@ Child workflow 在基础 Executor 稳定后实现，不阻塞初始版本。
 - 每个 Agent attempt 对应独立 Codex task；
 - 缺失或非法 verifier check spec 在创建 RunState 前被拒绝；
 - Agent task-local 自检不能替代 Config 声明的正式 Verifier；
-- Agent Node 的自由文本 `task` 可以引用任意 Skill 名称而不会触发 Core 动态加载、导入或 Skill 解析；
-- 可选 Skill 不存在时，只有 Config 已声明的 fallback 可以继续执行，且 Graph 调度语义不变；
-- 未显式选择 profile 时只使用用户 Host 配置中显式声明的默认 profile，绝不隐式使用 unrestricted；
-- 用户 profile 引用 GraphX 控制面能力时校验失败，不能通过配置放宽不可变安全上限；
-- effective capabilities 等于安全上限、用户 profile 和 Host 实际能力的交集，`task` 引用不能扩权；
-- Run 冻结 profile ID/snapshot/hash，运行中修改 Host 配置不会改变现有 Run，恢复后仍使用相同 binding；
-- 允许 Skill 的必需传递依赖缺失时在派发前被发现并按 policy 处理；
-- required Host capability policy 无法实施时在 mutation 和 lease 获取前进入 `BLOCKED`；
-- best-effort capability 降级会留下诊断且不会被报告为硬隔离成功；
-- Skill 使用或未使用的 Agent 自报不能替代正式 Verifier、Gate 或 Terminal；
+- 只有 Store 模块能够创建 SQLite connection、执行 SQL 或取得数据库路径；
+- MCP Schema、Task Contract、NodeDispatch、inspect 和错误响应都不会泄露数据库路径或内部 Store 标识；
+- SQLite 状态目录位于所有 Codex workspace 外且不对总控任务、Agent task 或 Host Adapter 暴露，隔离验证失败时在 attempt 和 lease 创建前进入 `BLOCKED`；
+- Host binding 的 identity、workspace 和隔离 snapshot/hash 在 Run 中不可变，恢复时不一致会阻止派发；
+- MCP、Host Adapter、Scheduler、Codex task 和其他 Core 模块不能绕过 Query/Transition Service 访问 Store；
 - Verification Evidence 的 check ID/hash 和 workspace revision 绑定，以及 stale evidence 拒绝；
 - tracked 修改、删除和权威 untracked 新文件会改变 revision，派生索引变化不会；
-- 通用 Command Node 失败会阻止其依赖节点，且不需要 CodeGraph 专属逻辑。
+- 通用 Command Node 失败会阻止其依赖节点，且 Core 不包含外部工具专属逻辑。
 
 发布门禁：
 
@@ -854,11 +782,3 @@ pytest
 ```
 
 全部必须成功。
-
-## 15. 最终产品边界
-
-GraphX 不是另一个 Coding Agent，也不是上下文管理器。
-
-它是一个小型 Python Graph authority：严格校验并推进声明式 Workflow，把每个语义 Agent attempt 交给独立、可见的 Codex task，并通过 SQLite 事务确保状态、幂等性和 mutation 串行。
-
-Superpowers 交接、task-local 工程方法和 CodeGraph 导航都位于 Skill、Workflow Config 或 Host 环境边界；它们可以增强 GraphX 的可用性，但不改变 GraphX Core 作为通用 Graph authority 的职责。
