@@ -132,6 +132,18 @@ Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记
 
 `command` 和 `verifier` 不要求独立对话。Host Adapter 只执行 IR 已经声明的外部动作并返回结构化事实；它不能解释依赖、条件或完成语义。`gate` 和 `terminal` 不离开 GraphX Python Service，由 Condition Evaluator 根据不可变 IR 与权威 RunState 求值，再由 StateCommitter 提交状态。
 
+#### 3.3.1 判定节点的职责与确定性边界
+
+`verifier`、`gate` 和 `terminal` 的 GraphX 判定语义都是确定的：给定相同的不可变 Workflow IR、已验证的权威 RunState 快照和所需的已验证外部输入，Pure Core 必须产生相同的判定。这里的确定性是 GraphX 对输入的判定确定性，不是对外部环境每次都返回相同观测值的承诺。
+
+| 节点 | 事实或条件来源 | GraphX 中的确定性语义 | 控制效果 |
+|---|---|---|---|
+| `verifier` | Host 执行 Config 声明并在 IR 中冻结的 tagged check spec，提交结构化结果 | 外部检查可能因环境、时间或 flaky test 产生不同结果；但给定相同的已验证结果、IR 和 RunState，证据校验与状态转换必须相同 | 产生正式 Verification Evidence，表示声明的检查在绑定 revision 上的结果；不提交 Run 最终结果 |
+| `gate` | Pure Core 对已持久化输出和状态求值受限条件 AST | 不执行 I/O，不接收 Host NodeResult；相同 IR 和 RunState 必须得到相同的中间判定 | 表达 Config 声明的中间准入、分支或共享复合条件；不提交 Run 最终结果 |
+| `terminal` | Pure Core 对已持久化输出、依赖和状态求值受限条件 AST | 不执行 I/O，不接收 Host NodeResult；相同 IR 和 RunState 必须得到相同的最终判定 | 是唯一可以提交 Config 声明的 Workflow 最终结果的节点；不产生新的外部事实 |
+
+`verifier` 产生事实，`gate` 作出中间决策，`terminal` 提交最终裁决。Gate 不应只重复前置节点的成功状态或 Terminal 已能直接表达的最终条件；它只用于 Workflow Config 需要显式命名、审计或复用的中间控制判定。
+
 ### 3.4 状态访问与执行隔离
 
 #### 3.4.1 状态数据库边界
@@ -830,6 +842,7 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 - ready-node 稳定排序；
 - 每个合法和非法状态转换；
 - `gate` 和 `terminal` 只由 Pure Core Condition Evaluator 求值，Host 提交对应控制结果会被拒绝；
+- 对相同的 immutable IR、已验证 RunState 快照和相同的已验证外部输入重复求值时，verifier 证据校验、gate 中间判定和 terminal 最终判定产生相同的 TransitionDecision；外部检查返回不同的结构化结果不得被误判为 GraphX 调度不确定；
 - attempt 上限；
 - `task_binding_token` 唯一性和错误任务绑定令牌拒绝；
 - bind 前 attempt 可持久化且不要求 ExecutionHandle；bind 后 thread ID 非空且不可变；
