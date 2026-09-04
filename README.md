@@ -22,10 +22,10 @@ GraphX:
 - compiles it into an immutable typed Workflow IR;
 - calculates the next ready node deterministically;
 - dispatches nodes and validates structured results;
-- maps every Agent attempt to an independent, visible Codex task;
+- maps every bound Agent attempt to exactly one independent, visible Codex task;
 - serializes every workspace mutation;
 - persists run state, attempts, thread IDs, and mutation leases in SQLite;
-- finishes only through a validated terminal node.
+- commits a business outcome only through a validated terminal node; an operational failure or cancellation may end the run without one.
 
 GraphX does not:
 
@@ -42,21 +42,22 @@ Codex controller task
     -> GraphX Skill
     -> short MCP call
     -> Python Graph Executor
-    -> NodeDispatch
-    -> independent visible Codex task for an Agent attempt
+    -> durable DispatchReservation
+    -> independent visible Codex task
+    -> bound AgentAttempt and activated Task Contract
     -> validated NodeResult
     -> next graph transition
 ```
 
-The Codex controller task shows overall graph progress. Every `agent` attempt has its own Codex task and persisted thread ID. Retries create new attempts and new tasks.
+The Codex controller task shows overall graph progress. GraphX persists a dispatch reservation before asking the Host to create an external task. A successful bind atomically creates the `AgentAttempt` and its immutable task handle; semantic work starts only after activation. Retries create new reservations, attempts, and tasks.
 
-Mechanical nodes such as `command`, `verifier`, `gate`, and `terminal` do not require their own conversation.
+External mechanical nodes such as `command` and `verifier` use persisted mechanical attempts and execution handles, without a Codex conversation. Pure `gate` and `terminal` conditions are evaluated internally.
 
 ## Mutation rule
 
-Any node declared as `workspaceMutation` must acquire a durable workspace-scoped mutation lease. The initial executor dispatches one node at a time, so mutating Agents and commands can never overlap.
+Any node declared as `workspaceMutation` must acquire a durable workspace-scoped mutation lease. The initial executor permits at most one active external execution per run; within one GraphX coordination domain backed by a shared SQLite control store, it permits at most one mutation lease per canonical workspace identity. This does not lock out writers that bypass GraphX.
 
-The next mutation cannot begin until the previous attempt is committed, proven not to have run, or explicitly resolved. An uncertain mutation becomes `AMBIGUOUS` and is never replayed automatically.
+The next mutation cannot begin until the prior execution is quiescent (or strongly proven never to have existed), its workspace revision is reconciled, and the configured settlement requirement is satisfied by valid normal or equivalent recovery evidence. A mutation node may therefore be successful while its lease remains held for settlement. An uncertain mutation becomes `ambiguous` and is never replayed automatically.
 
 ## Runtime validation
 

@@ -22,10 +22,10 @@ GraphX 负责：
 - 编译不可变、带类型的 Workflow IR；
 - 确定性地计算下一个 ready node；
 - 派发节点并校验结构化结果；
-- 将每个 Agent attempt 映射到独立、可见的 Codex task；
+- 将每个已绑定的 Agent attempt 精确映射到一个独立、可见的 Codex task；
 - 串行执行所有 workspace mutation；
 - 在 SQLite 中持久化运行状态、attempt、thread ID 和 mutation lease；
-- 只通过经过校验的 terminal node 结束运行。
+- 只通过经过校验的 terminal node 提交业务结果；运行也可能因操作性失败或取消而在没有业务结果时结束。
 
 GraphX 不负责：
 
@@ -42,21 +42,22 @@ Codex 总控任务
     -> GraphX Skill
     -> 短事务 MCP 调用
     -> Python Graph Executor
-    -> NodeDispatch
-    -> Agent attempt 的独立可见 Codex task
+    -> 持久化 DispatchReservation
+    -> 独立可见 Codex task
+    -> 已绑定的 AgentAttempt 与已激活的 Task Contract
     -> 经过校验的 NodeResult
     -> 下一次 Graph 状态转换
 ```
 
-Codex 总控任务展示 Graph 总体进度。每个 `agent` attempt 都有自己的 Codex task 和持久化 thread ID。Retry 会创建新的 attempt 和新的 task。
+Codex 总控任务展示 Graph 总体进度。GraphX 会先持久化 dispatch reservation，再要求 Host 创建外部 task；绑定成功时原子创建 `AgentAttempt` 及其不可变 task handle，激活后才开始语义工作。Retry 会创建新的 reservation、attempt 和 task。
 
-`command`、`verifier`、`gate`、`terminal` 等机械节点不要求独立对话。
+`command`、`verifier` 等外部机械节点使用持久化 mechanical attempt 和 execution handle，不需要 Codex 对话。纯 `gate` 与 `terminal` 条件由 GraphX 内部求值。
 
 ## Mutation 规则
 
-任何声明为 `workspaceMutation` 的节点都必须取得持久化、workspace-scoped mutation lease。初始 Executor 每次只派发一个节点，因此 mutation Agent 和命令永远不会重叠。
+任何声明为 `workspaceMutation` 的节点都必须取得持久化、workspace-scoped mutation lease。初始 Executor 对每个 Run 同时最多允许一个外部执行；在共享同一 SQLite 控制存储的 GraphX 协调域内，每个规范化 workspace identity 同时最多允许一个 mutation lease。这不会阻止绕过 GraphX 的外部写入者。
 
-前一个 mutation 未提交、未被证明没有执行或未得到明确裁决前，下一个 mutation 不能开始。不确定的 mutation 进入 `AMBIGUOUS`，绝不自动重放。
+前一个 mutation 未确认执行已静止（或被强证明从未存在）、未完成 workspace revision 对账，或配置的 settlement 要求尚未由合法的正常证据或等价恢复证据满足时，下一个 mutation 不能开始。因此 mutation node 可以已经成功，但其 lease 仍为等待结算而保留。不确定的 mutation 进入 `ambiguous`，绝不自动重放。
 
 ## 运行时校验
 
