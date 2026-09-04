@@ -1,0 +1,27 @@
+{
+  "profile": "graphx-canonical-json-v1",
+  "vectors": [
+    {
+      "name": "utf8-key-order",
+      "value": {"b": 2, "a": "é"},
+      "canonicalHex": "7b2261223a22c3a9222c2262223a327d",
+      "domain": "graphx-ir-v1",
+      "digest": "a16dc324de0bdf7e014d5b557cdd679a7b329d40e625be2291e76a4116c2213f"
+    },
+    {
+      "name": "request-domain-separation",
+      "value": {"b": 2, "a": "é"},
+      "canonicalHex": "7b2261223a22c3a9222c2262223a327d",
+      "domain": "graphx-request-v1",
+      "digest": "b68d6467b04e99ec85ecd9c9b465fb6cfac9e4b96616900c9e935ac7b89c63dc"
+    },
+    {
+      "name": "empty-object",
+      "value": {},
+      "canonicalHex": "7b7d",
+      "domain": "graphx-ir-v1",
+      "digest": "a45b164fc2f2414bc034dd020414ffaf5d5462f7fbf9f4fd0126e7434c99b119"
+    }
+  ]
+}
+
