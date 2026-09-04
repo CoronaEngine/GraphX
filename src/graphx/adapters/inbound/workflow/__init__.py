@@ -1,0 +1,1 @@
+"""Workflow configuration input adapter."""

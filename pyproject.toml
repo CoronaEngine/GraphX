@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "graphx-task-executor"
+version = "0.1.0"
+description = "A strict local Task Graph Executor for Codex"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2,<3"]
+
+[project.optional-dependencies]
+dev = [
+    "pyright>=1,<2",
+    "pytest>=8,<10",
+    "ruff>=0.9,<1",
+]
+
+[project.scripts]
+graphx-service = "graphx.bootstrap:main"
+graphx-host = "graphx.adapters.host.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/graphx"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-config", "--strict-markers"]
+
