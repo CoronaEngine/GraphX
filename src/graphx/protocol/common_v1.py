@@ -2,7 +2,6 @@
 
 import unicodedata
 from typing import Annotated, Literal
-from uuid import UUID
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, StringConstraints
 
@@ -14,7 +13,12 @@ def _validate_wire_version(value: object) -> object:
 
 
 WireVersion = Annotated[Literal[1], BeforeValidator(_validate_wire_version)]
-RequestIdText = UUID
+RequestIdText = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    ),
+]
 DigestHexText = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
