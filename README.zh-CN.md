@@ -81,7 +81,7 @@ GraphX 使用四层防线：
 - 标准库 SQLite；
 - Python MCP server 和 Codex Skill。
 
-核心代码禁止未经校验的 `Any`、不安全 cast、任意表达式执行、动态 Runner 导入、可变 IR，以及绕过 Store 直接写数据库。
+Python 包分为纯 `core`、负责编排用例的 `application`、不包含业务依赖的 wire `protocol` 和连接外部系统的 `adapters`。Service 依赖只能指向内层：Core 不执行 I/O，Application 不导入具体 Adapter，外部 Host 只依赖版本化 Protocol，只有 SQLite Adapter 可以打开连接或执行 SQL。
 
 ## 初始节点类型
 

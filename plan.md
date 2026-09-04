@@ -40,7 +40,7 @@ GraphX 不负责：
 1. Config 决定控制流，GraphX 不发明业务流程。
 2. Workflow 在执行前完成结构和语义校验。
 3. Workflow IR 在一次运行期间不可变。
-4. 只有 GraphX 可以提交 NodeState 和 RunState 转换。
+4. 只有 Application StateCommitter 可以授权和编排 NodeState、RunState 提交；Pure Core 只决定合法转换，SQLite Adapter 只执行物理持久化。
 5. 一个 Agent attempt 对应一个独立、可见的 Codex task。
 6. Codex task 以持久化的 thread ID 标识，标题不是身份。
 7. 同一 workspace 同时最多有一个 mutation attempt。
@@ -49,14 +49,14 @@ GraphX 不负责：
 10. 重复请求和重复结果提交必须幂等。
 11. 不确定的 mutation 进入 `ambiguous`，不能自动重放。
 12. 只有 terminal node 可以提交 Workflow 最终结果。
-13. `gate`、`terminal` 和所有控制条件只能由 GraphX Core 求值。
+13. `gate`、`terminal` 和所有控制条件只能由 Pure Core 求值。
 14. Codex task 和 Host Adapter 只能通过 GraphX 的结构化接口访问运行状态，不能直接读取或写入 SQLite。
 
 ## 2. 初始范围
 
 ### 2.1 包含
 
-- Python 3.12 本地进程中的 Config 校验、immutable IR 和纯 Core Executor；
+- Python 3.12 本地进程中的边界 Schema 校验、Application 用例编排、immutable IR 和 Pure Core Executor；
 - `agent`、`command`、`verifier`、`gate`、`terminal` 节点及确定性串行调度；
 - Codex Skill、短事务 MCP 协议，以及每个 Agent attempt 对应的独立 Codex task；
 - SQLite 权威状态、幂等事务、mutation lease、恢复与 `ambiguous` 裁决；
@@ -86,19 +86,24 @@ Codex Host Adapter
     |
     | short MCP calls
     v
-GraphX Python Process
-    ├── MCP Boundary
-    ├── Application / Query Service
-    ├── Config Validator
-    ├── Workflow Compiler
-    ├── Graph Analyzer
-    ├── Deterministic Scheduler
-    ├── Condition Evaluator
-    ├── StateCommitter
-    └── Store -> private SQLite
+GraphX Python Service
+    ├── Inbound Adapters
+    │   ├── MCP
+    │   └── CLI
+    ├── Application
+    │   ├── Application Service
+    │   ├── Query Service
+    │   ├── StateCommitter
+    │   └── Store Ports
+    ├── Pure Core
+    │   ├── Config / immutable IR
+    │   ├── Compiler / Graph Analyzer
+    │   ├── Scheduler / Condition Evaluator
+    │   └── Transition / Result Validation
+    └── SQLite Adapter -> private SQLite
 ```
 
-Codex App 是用户界面和 Agent Host。GraphX Python Core 是无 UI 的 Graph 权威；SQLite 的访问与隔离规则见第 3.4 节。
+Codex App 是用户界面和 Agent Host。GraphX Python Service 是无 UI 的 Graph 权威；其中 `core/` 只包含确定性规则，`application/` 负责编排用例和事务，Service 内的 Adapter 连接 MCP、CLI 与 SQLite。`adapters/host/` 虽与 Service 代码位于同一 Python package，但在 Host 环境中独立运行，只通过 MCP 与 Service 通信。源码依赖只能指向内层；SQLite 的访问与隔离规则见第 3.4 节。
 
 ### 3.1 总控任务
 
@@ -125,7 +130,7 @@ Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记
 
 ### 3.3 机械节点
 
-`command` 和 `verifier` 不要求独立对话。Host Adapter 只执行 IR 已经声明的外部动作并返回结构化事实；它不能解释依赖、条件或完成语义。`gate` 和 `terminal` 不离开 GraphX Python Process，由 Condition Evaluator 根据不可变 IR 与权威 RunState 求值，再由 StateCommitter 提交状态。
+`command` 和 `verifier` 不要求独立对话。Host Adapter 只执行 IR 已经声明的外部动作并返回结构化事实；它不能解释依赖、条件或完成语义。`gate` 和 `terminal` 不离开 GraphX Python Service，由 Condition Evaluator 根据不可变 IR 与权威 RunState 求值，再由 StateCommitter 提交状态。
 
 ### 3.4 状态访问与执行隔离
 
@@ -133,13 +138,15 @@ Retry 创建新的 attempt 和新的 Codex task。失败 task 保留为审计记
 
 Codex 总控任务、Agent task 和 Host Adapter 都是不可信的外部参与者，只能调用 GraphX 暴露的结构化 MCP 操作。MCP 不提供原始 SQL、数据库连接、数据库文件路径、任意表查询或通用状态写入操作。
 
-只有 Store 模块可以打开 SQLite 连接。Application Service 将读取交给只读 Query Service，将状态修改交给 StateCommitter；其他模块不得绕过这两个入口访问 Store。StateCommitter 在同一 transaction 中完成前置状态检查、约束校验、事件写入和状态提交。
+只有 Service `bootstrap.py` 可以为装配接收私有数据库路径，并且必须直接交给 SQLite Store Adapter，不能继续暴露。只有 SQLite Store Adapter 可以导入 `sqlite3`、打开连接或执行 SQL。`application/ports/` 定义由使用方拥有的窄接口：Query Service 只获得只读能力；StateCommitter 获得受限的事务内读写能力，以便在同一快照中读取 IR、RunState、attempt、lease 和 idempotency record，调用 Core 决策后原子写入。状态修改用例禁止先通过 Query Service 读取、再另开事务提交。Application Service 将只读请求交给 Query Service，将状态修改交给 StateCommitter；Pure Core、MCP/CLI Adapter 和 Host Adapter 都不能访问具体 Store。具体 SQLite Adapter 只能执行 StateCommitter 发起的事务协议，不能决定状态语义。
 
 #### 3.4.2 Host 执行隔离
 
 SQLite 文件必须位于所有 Codex workspace 之外，并且不能挂载或暴露给总控任务、Agent task 或 Host Adapter 的执行环境。Host 启动 Run 时必须验证固定的执行隔离要求；无法保证状态目录隔离时，不得派发 Agent 节点。GraphX 不通过 prompt 中的行为要求声称实现数据库隔离。
 
-GraphX Core 不实现通用 sandbox。文件系统隔离由 Host 提供，但“GraphX 私有状态目录对 Agent 不可见”是 Agent 执行的硬前置条件，而不是可降级选项。Run 必须冻结 Host identity、workspace identity、隔离模式和对应的规范化 snapshot/hash，恢复时重新验证；不一致时进入 `blocked`，不能继续派发。
+GraphX Python Service 不实现通用 sandbox。文件系统隔离由 Host 提供，但“GraphX 私有状态目录对 Agent 不可见”是 Agent 执行的硬前置条件，而不是可降级选项。Host Adapter 只负责观察并报告环境事实；Inbound Adapter 校验报告，Pure Core 比较固定隔离规则，Application StateCommitter 提交 `blocked` 或允许派发。Run 必须冻结 Host identity、workspace identity、隔离模式和对应的规范化 snapshot/hash，恢复时重新验证；不一致时进入 `blocked`，不能继续派发。
+
+Host Adapter 对 Graph 控制和状态提交没有信任权限，但初始本地版本必须信任已冻结 Host binding 对外部执行与 workspace 的测量。GraphX 会校验报告的 Schema、身份、revision 和 evidence 绑定，却不能仅靠 Schema 识别恶意 Host 的虚假测量；不信任 Host 测量时需要独立 attestation，这不在 MVP 范围内。私有状态目录隔离必须由进程权限和挂载边界实际强制，不能依赖 Host 自报。
 
 ## 4. Workflow Config 与 IR
 
@@ -191,18 +198,22 @@ GraphX Core 不实现通用 sandbox。文件系统隔离由 Host 提供，但“
 
 示例不是内置流程。GraphX 不包含 `develop-material-system` 的业务逻辑。
 
-Agent Node 的 `task` 保持非空、有界的自由文本。GraphX Core 不从自然语言中推断依赖、分支、重试或完成条件；影响控制流的要求必须由结构化 `outputs`、显式节点、受限条件和 terminal 表达。Agent 的自然语言完成声明只能作为诊断，不能成为未经独立检查的成功依据。
+Agent Node 的 `task` 保持非空、有界的自由文本。Pure Core 不从自然语言中推断依赖、分支、重试或完成条件；影响控制流的要求必须由结构化 `outputs`、显式节点、受限条件和 terminal 表达。Agent 的自然语言完成声明只能作为诊断，不能成为未经独立检查的成功依据。
 
 ### 4.2 数据层次
 
 ```text
 Untrusted JSON
-    -> Runtime Schema Validation
+    -> Inbound Adapter Schema Validation
 Validated WorkflowConfig
-    -> Semantic Compilation
+    -> Pure Core Semantic Compilation
 Immutable WorkflowIR
-    + RunState from SQLite
-    -> Deterministic Scheduling Decision
+    + Validated RunState Snapshot
+        <- Application
+        <- SQLite Adapter Row Validation
+        <- SQLite Rows
+    -> Pure Core Deterministic Scheduling Decision
+    -> Application / StateCommitter
 ```
 
 三类数据必须分开：
@@ -238,9 +249,11 @@ Immutable WorkflowIR
 - 恢复时读取的状态；
 - workspace revision 和文件路径。
 
-校验分为四层：
+校验分为四层，并且每层有固定所有者：
 
 ### 5.1 Schema 校验
+
+Inbound Adapter 负责 Workflow、MCP 和 CLI 的 transport Schema；SQLite Adapter 的 row codec 负责持久化 row 的 Schema。任何原始对象在转换为严格领域模型前都不能进入 Application 或 Pure Core。
 
 - 版本受支持；
 - 必填字段存在；
@@ -248,9 +261,11 @@ Immutable WorkflowIR
 - 枚举、整数和字符串格式正确；
 - retry 和 timeout 有界；
 - verifier check spec 的 kind-specific 字段、命令参数和成功条件合法；
-- NodeResult 与节点输出 Schema 匹配。
+- NodeResult 的 wire version、tag、字段形状和大小限制正确。
 
 ### 5.2 Graph 语义校验
+
+Pure Core 负责 Workflow 编译后的 Graph 与条件语义校验，不读取文件、MCP 或数据库。
 
 - node ID 唯一；
 - 依赖和输出引用存在；
@@ -263,13 +278,18 @@ Immutable WorkflowIR
 
 ### 5.3 状态转换校验
 
+Pure Core 根据不可变 IR 和已验证状态快照返回 TransitionDecision；Application StateCommitter 在同一事务快照中重新验证并提交，Pure Core 本身不执行 I/O。
+
 - 当前状态允许目标转换；
 - attempt ID 与结果类型对应的 execution identity 匹配；
 - NodeResult 属于当前派发；
+- NodeResult outputs 与 immutable IR 声明的节点输出 Schema 匹配；
 - retry 没有超过上限；
 - terminal 的依赖和条件已经满足。
 
 ### 5.4 数据库约束
+
+SQLite Adapter 负责下列物理约束和事务原子性，但不能自行发明状态转换：
 
 - 主键和外键；
 - node attempt 唯一编号；
@@ -320,14 +340,14 @@ cancelled
 | `pending` | `skipped` | 适用条件为假且节点允许跳过 |
 | `pending` | `cancelled` | Run 取消，且节点尚未派发 |
 | `ready` | `dispatching` | 外部执行节点；原子创建 attempt/dispatch intent，mutation 同时获取 lease |
-| `ready` | `verifying` | Core 内部求值 `gate` 或 `terminal`，不创建 Host execution |
+| `ready` | `verifying` | Application 调用 Pure Core 求值 `gate` 或 `terminal`，不创建 Host execution |
 | `ready` | `blocked` | 固定执行隔离或必需外部前置条件在派发前不满足，不创建 attempt/lease |
 | `ready` | `cancelled` | Run 取消，且没有外部执行 |
 | `dispatching` | `running` | command 已确认启动，或 Agent activate 已提交 |
 | `dispatching` | `failed` | 已证明外部执行没有开始且本 attempt 创建失败 |
 | `dispatching` | `ambiguous` | 无法唯一确认 task identity 或外部执行是否开始；mutation lease 保留 |
 | `dispatching` | `cancelled` | 已证明执行没有开始且 Run 取消 |
-| `running` | `verifying` | 收到结果、失败、blocked 或取消证据，交由 Core 校验 |
+| `running` | `verifying` | Application 收到结果、失败、blocked 或取消证据，交由 Pure Core 校验 |
 | `running` | `ambiguous` | Host 丢失且无法确定执行或 mutation 结果；mutation lease 保留 |
 | `verifying` | `succeeded` | 身份、Schema、输出、revision 和 evidence 全部通过 |
 | `verifying` | `failed` | 已验证的失败，或成功结果不能满足声明的输出契约 |
@@ -342,7 +362,7 @@ cancelled
 | `ambiguous` | `failed` | 已证明执行未开始或失败；按第 7.3 节处理 lease |
 | `ambiguous` | `cancelled` | 用户裁决取消，且按第 7.3 节完成 mutation 对账 |
 
-`succeeded`、`skipped` 和 `cancelled` 没有后续转换。所有转换只由 StateCommitter 提交；Agent task、Host Adapter 和 Scheduler 只能提出结构化请求。
+`succeeded`、`skipped` 和 `cancelled` 没有后续转换。`core/runtime/transitions.py` 只返回 TransitionDecision；所有转换只由 `application/state_committer.py` 提交。Agent task、Host Adapter 和 Scheduler 只能提出结构化请求或纯决定。
 
 ### 6.2 RunState
 
@@ -373,7 +393,7 @@ cancelled
 | `ambiguous` | `failed` | 裁决后 terminal 不可达且 retry 已耗尽 |
 | `ambiguous` | `cancelled` | 所有 mutation 已裁决后用户取消 |
 
-只有 Config 成功编译并持久化为 immutable IR 后才创建初始状态为 `validated` 的 Run；非法 Workflow 不产生 RunState。`succeeded`、`failed` 和 `cancelled` 是 Run terminal state，没有后续转换。所有 RunState 转换只由 StateCommitter 提交。
+只有 Config 成功编译并持久化为 immutable IR 后才创建初始状态为 `validated` 的 Run；非法 Workflow 不产生 RunState。`succeeded`、`failed` 和 `cancelled` 是 Run terminal state，没有后续转换。Pure Core 只决定合法转换，所有 RunState 转换只由 Application StateCommitter 提交。
 
 ### 6.3 确定性调度
 
@@ -385,7 +405,7 @@ same WorkflowIR + same RunState
 ```
 
 这避免把并发顺序、共享工作区和多 Agent 竞态引入初始实现。
-串行 Scheduler 是 MVP 的吞吐策略，不能替代第 7 节由 SQLite 强制的持久化 mutation safety。
+串行 Scheduler 是 MVP 的吞吐策略，不能替代第 7 节由 Pure Core 规则、StateCommitter 事务编排和 SQLite 约束共同保证的持久化 mutation safety。
 
 ## 7. Mutation 串行语义
 
@@ -400,7 +420,7 @@ workspace
 
 ### 7.2 获取 lease
 
-单个 SQLite transaction 完成：
+StateCommitter 通过 `CommitTransaction` Port 发起一次原子提交，SQLite Adapter 必须用单个 SQLite transaction 完成：
 
 1. 验证 node 为 `ready`；
 2. 验证 workspace 没有 lease；
@@ -425,7 +445,7 @@ Host Adapter 只有在该事务成功后才能创建 Codex task 或执行 mutati
 
 ### 7.4 权威 workspace revision 与派生数据
 
-workspace revision 只描述 Workflow 声明的权威项目内容，不能把缓存、索引、日志或其他派生元数据的变化当成源码 mutation。revision provider 不得简单依赖 workspace 目录时间或无差别哈希所有文件；它必须覆盖 tracked 文件的修改和删除，以及 revision policy 声明为权威的 untracked 新文件，同时排除该 policy 声明的派生路径。revision policy 在 Run 开始前固定并随 IR 保存。GraphX 不理解任何具体派生工具；需要强一致性刷新时，由 Workflow Config 使用普通 Command Node 表达。
+workspace revision 只描述 Workflow 声明的权威项目内容，不能把缓存、索引、日志或其他派生元数据的变化当成源码 mutation。revision policy 在 Run 开始前固定并随 IR 保存；Pure Core 只比较 policy 与已校验 revision value，不访问文件系统。`adapters/host/workspace.py` 负责观察 workspace，并通过版本化 MCP Contract 返回结构化 revision；它不得简单依赖 workspace 目录时间或无差别哈希所有文件，必须覆盖 tracked 文件的修改和删除，以及 policy 声明为权威的 untracked 新文件，同时排除该 policy 声明的派生路径。GraphX 不理解任何具体派生工具；需要强一致性刷新时，由 Workflow Config 使用普通 Command Node 表达。
 
 ## 8. Codex task 映射
 
@@ -456,6 +476,8 @@ Agent 派发使用两阶段协议：
 4. Host 调用 activate；GraphX 在一个 transaction 中重新验证 attempt、thread、适用时的 lease、workspace revision 和执行隔离，持久化冻结的 Task Contract 与 activation event，将节点转换为 `running`，然后返回 Task Contract；
 5. Host 把 Task Contract 发送给已绑定 task。重复 activate 返回完全相同的 Contract，不产生第二次状态转换。
 
+bind 和 activate 请求都先由 Inbound MCP Adapter 校验，再进入 Application；涉及状态的读取、决定与写入由 StateCommitter 通过 Store Port 在一个 SQLite transaction 中提交。MCP handler 和 Host Adapter 都不能直接调用 Core transition 或 SQLite Adapter。
+
 task 创建后、bind 前发生故障时，恢复流程使用 `task_binding_token` 对账 bootstrap task。无法唯一确认 task identity 时，node 和 Run 都进入 `ambiguous`，且不得创建新 attempt；mutation attempt 继续保留 lease。只有在找回并绑定原 task，或证明原 task 未创建/已终止后，才能按第 6.1 节继续或失败后 retry。activate 提交后、Contract 发送前发生故障时，Host 从 GraphX 重新取得同一份冻结 Contract 并幂等重发。标题只用于展示，不能参与对账。
 
 ### 8.2 Task Contract
@@ -474,7 +496,7 @@ Agent task 获得：
 
 不自动注入整个 Workflow 对话历史。Codex 自己负责单个 task 的上下文管理。
 
-Host Adapter 可以给 Task Contract 增加 GraphX 所需的身份、结果格式和“不允许推进 Graph”的固定边界说明，但不能改写 Config 声明的任务目标。Task Contract 必须包含当前 Run 冻结的 Host binding ID/hash 和执行隔离摘要，但不得包含 GraphX 状态目录、数据库路径、数据库凭证或内部 Store 标识。
+Application 根据 immutable IR、当前 attempt 和版本化固定模板构造完整、规范化的 Task Contract；内容包括 GraphX 所需的身份、结果格式和“不允许推进 Graph”的边界说明。StateCommitter 在 activate transaction 中冻结 Contract 及其 hash。Host Adapter 只能原样传输这个 Contract，不能增加、删除或改写语义字段；transport envelope 不属于 Contract 且不能影响其 hash。Task Contract 必须包含当前 Run 冻结的 Host binding ID/hash 和执行隔离摘要，但不得包含 GraphX 状态目录、数据库路径、数据库凭证或内部 Store 标识。
 
 ### 8.3 NodeResult
 
@@ -503,11 +525,11 @@ MechanicalNodeResult
     execution_id
 ```
 
-Agent result 必须匹配已绑定 Codex ExecutionHandle；`command` 和 `verifier` result 必须匹配 GraphX 派发并持久化的 mechanical execution ID，不需要 thread。`gate` 和 `terminal` 不接收外部 NodeResult。所有结果必须通过第 5.1–5.5 节的身份、状态、输出、revision 和 evidence 校验后才能 commit。
+Agent result 必须匹配已绑定 Codex ExecutionHandle；`command` 和 `verifier` result 必须匹配 GraphX 派发并持久化的 mechanical execution ID，不需要 thread。`gate` 和 `terminal` 不接收外部 NodeResult。Inbound Adapter 先把外部 DTO 校验并转换为严格模型，Pure Core 再检查身份、状态、输出、revision 和 evidence 语义，最后只能由 StateCommitter commit。
 
 ## 9. SQLite 权威状态
 
-建议表：
+这些表由 `adapters/store/sqlite/` 拥有；Pure Core 和 Application 只看领域模型与 Store Port，不看 SQLite row。建议表：
 
 ```text
 workflows
@@ -526,6 +548,7 @@ idempotency_keys
 ### 9.1 权威关系
 
 - SQLite 是运行状态权威；
+- SQLite Adapter 负责物理事务和数据库约束，StateCommitter 负责决定并校验状态语义；两者都不能越过对方的边界；
 - Workflow IR 以规范 JSON 和内容哈希保存；
 - `run_host_bindings` 以规范化 snapshot 和 hash 保存 Host identity、workspace identity 和固定执行隔离要求，创建后不可变；
 - Codex 对话不是状态权威；task 标题只用于展示，thread ID 用于恢复和对账；
@@ -550,11 +573,11 @@ idempotency_keys
 - pytest 负责测试；
 - Pydantic strict model 或等价 JSON Schema validator 负责外部输入；
 - 标准库 `sqlite3` 负责权威状态；
-- Python MCP server 提供 Codex Host Adapter 工具。
+- Python MCP server 实现 Inbound MCP Adapter，向 Codex Host Adapter 提供结构化操作。
 
 ### 10.2 类型规则
 
-核心目录：
+所有生产目录：
 
 - 禁止 `Any` 和 `dict[str, Any]`；
 - 禁止用 `cast()` 代替校验；
@@ -579,49 +602,91 @@ idempotency_keys
 - 通过异常文本猜测状态；
 - 把未校验 JSON cast 成领域模型。
 
-### 10.4 建议包结构
+### 10.4 初始代码目录与依赖边界
 
 ```text
 src/graphx/
+    __init__.py
+    protocol/
+        mcp_v1.py
+    core/
+        config/
+            models.py
+            semantic_validation.py
+        ir/
+            models.py
+            compiler.py
+        graph/
+            analysis.py
+            condition_evaluator.py
+            scheduler.py
+        runtime/
+            models.py
+            transitions.py
+            result_validation.py
     application/
+        ports/
+            run_reader.py
+            commit_transaction.py
         service.py
-        query.py
-    config/
-        models.py
-        schema.py
-        loader.py
-    ir/
-        models.py
-        compiler.py
-        conditions.py
-    graph/
-        validation.py
-        scheduler.py
-    runtime/
-        models.py
-        transitions.py
         state_committer.py
-    store/
-        schema.py
-        sqlite.py
-        migrations.py
-    host/
-        protocol.py
-        codex.py
-    mcp/
-        server.py
-        tools.py
-    cli.py
+        query_service.py
+    adapters/
+        inbound/
+            workflow/
+                loader.py
+                schemas.py
+            mcp/
+                tools.py
+                server.py
+            cli.py
+        store/
+            sqlite/
+                store.py
+                schema.py
+                migrations.py
+                row_codec.py
+        host/
+            codex.py
+            command.py
+            workspace.py
+            main.py
+    bootstrap.py
 tests/
     unit/
+        protocol/
+        core/
+        application/
+        adapters/
     integration/
 ```
 
-Application Service、Query Service、编译、Graph 分析、状态转换、存储和 Host Adapter 必须保持独立。Store 是唯一数据库边界，Condition Evaluator 是唯一条件求值边界，StateCommitter 是唯一状态提交边界。
+子目录中的 `__init__.py` 在图中省略。
+
+依赖方向必须固定为：
+
+```text
+adapters/host --versioned MCP--> adapters/inbound/mcp -> application -> core
+      |                                  |
+      +---- imports protocol/mcp_v1 -----+
+
+application -> application/ports <- adapters/store/sqlite
+bootstrap.py -> adapters/inbound + application + adapters/store/sqlite
+```
+
+- `protocol/` 只定义 Host 与 Service 共同使用的版本化 wire DTO，不包含业务规则，也不能导入 `core/`、`application/` 或 `adapters/`。Host 与 Inbound MCP Adapter 必须使用同一份 Contract，禁止各自复制 Schema。
+- `core/` 只包含领域模型和确定性规则，不执行 I/O，也不能导入 `application/` 或 `adapters/`。时间、随机值、外部结果和持久化状态必须作为已校验的显式输入传入。
+- `application/` 编排用例和事务，只能依赖 `core/` 与自己定义的窄 Port，不能导入任何具体 Adapter。StateCommitter 位于这一层并拥有唯一状态提交权；纯状态转换函数仍位于 `core/runtime/transitions.py`。
+- `adapters/inbound/` 使用 `protocol/` 校验外部 Workflow、MCP 和 CLI 输入，再映射为 Application 请求；它不能自行推进 Graph。
+- `adapters/store/sqlite/` 实现 Application 定义的 Store Ports，是唯一允许导入 `sqlite3`、打开连接和执行 SQL 的目录；`bootstrap.py` 只能为装配传入私有数据库路径，不能读取数据库或把路径传给其他组件。数据库约束不能被内存实现替代。
+- `adapters/host/` 在 Host 执行环境中连接 Codex、命令和 workspace revision，只能依赖 `protocol/` 与所需外部 API，并通过版本化 MCP Contract 与 GraphX Service 交互；它不能导入 `core/`、`application/`、Inbound Adapter、Store Adapter 或状态转换实现。`adapters/host/main.py` 是独立 Host 入口。
+- `bootstrap.py` 是 GraphX Service 的唯一装配入口，只负责把 Inbound Adapter 和 SQLite Adapter 注入 Application；它不能导入或启动 Host Adapter。除这两个明确入口外，任何内层模块都不能反向导入具体实现。
+
+Application Service、Query Service、编译、Graph 分析、状态转换、存储和 Host Adapter 必须保持独立。SQLite Adapter 是唯一数据库边界，Condition Evaluator 是唯一条件求值边界，StateCommitter 是唯一状态提交边界。
 
 ## 11. MCP 操作
 
-每次 MCP 调用应短小、事务化，不提供一个阻塞数小时的 `run` tool。
+每次 MCP 调用只映射到一个短小的 Application use case，不提供阻塞数小时的 `run` tool。MCP handler 不拥有事务；需要修改状态时，由 StateCommitter 通过 Store Port 开启并完成短事务。
 
 初始操作：
 
@@ -638,6 +703,8 @@ graphx_inspect_run
 graphx_resume_run
 graphx_cancel_run
 ```
+
+`graphx_inspect_run` 是只读操作，只能通过 Query Service 使用只读 Port。`graphx_next` 虽然名称包含“next”，但它可能创建 attempt、dispatch intent 和 mutation lease，因此不是查询；它和其他状态修改操作都必须由 Application Service 交给 StateCommitter，在一个 transaction 中完成读取、决策校验和提交。
 
 ### 11.1 Agent 节点的 Host 调用流程
 
@@ -683,6 +750,7 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 交付：
 
 - 第 10 节定义的 Python 包骨架和工具配置；
+- Service-side `inbound adapters -> application -> core`、SQLite Store Port 和外部 Host 只依赖 `protocol/` 的依赖守卫，以及两个独立入口；
 - Workflow Config、Workflow IR、RunState 的独立严格模型，以及完整状态转换表；
 - MCP 请求、NodeDispatch、NodeResult 和错误响应的版本化 Schema；
 - 第 3.4 节的模块依赖与固定执行隔离边界。
@@ -693,19 +761,20 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 
 交付：
 
-- 第 4 节及第 5.1–5.3 节的 Config 校验、immutable IR Compiler 和 Graph 语义分析；
+- Core WorkflowConfig 领域模型、第 4 节及第 5.2–5.3 节的 immutable IR Compiler、Graph 语义和状态转换校验；
 - verifier check identity/hash、稳定 IR 序列化和内容哈希；
 - 第 6 节的 Condition Evaluator、显式 transition function 和状态语义；
 - ready 计算和稳定串行 Scheduler。
 
-完成条件：纯内存测试覆盖全部转换并满足第 6.3 节确定性；Host 无法参与 `gate` 或 `terminal` 求值。
+完成条件：纯内存测试覆盖全部转换并满足第 6.3 节确定性；`core/` 不导入 MCP、SQLite、文件系统或 Codex 实现，Host 无法参与 `gate` 或 `terminal` 求值。
 
 ### Phase 3：持久化机械工作流
 
 交付：
 
-- 第 9 节的 SQLite Schema、migration、Store transaction API 和持久化实体；
-- Application Service、只读 Query Service 和结构化 MCP tools；
+- 第 9 节的 Store Ports、SQLite Adapter、Schema、migration 和持久化实体；
+- Application Service、StateCommitter、只读 Query Service 和 Inbound MCP Adapter；
+- 用于 `command`、`verifier` 的机械 Host Adapter 或等价集成测试驱动；
 - 符合第 3.3–3.4 节边界的 `command -> verifier -> gate -> terminal` 链路；
 - 每个 transaction 边界的启动恢复和一致性检查。
 
@@ -715,7 +784,7 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 
 交付：
 
-- GraphX Skill、Codex Host Adapter，以及第 3.4.2 节的不可变 Run Host binding；
+- GraphX Skill、独立运行的 Codex Host Adapter，以及第 3.4.2 节的不可变 Run Host binding；
 - Agent NodeDispatch 和第 8 节的两阶段 task 协议；
 - 第 5 节的 NodeResult 校验；
 - task 生命周期故障对账及 inspect、resume、cancel 用户流程。
@@ -730,6 +799,7 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 
 - 第 7.4 节的 workspace revision policy 和结果绑定；
 - 第 7.1–7.3 节的 mutation lease、激活复检和释放规则；
+- Pure Core mutation 决策、StateCommitter 事务编排、SQLite 唯一性约束与 Host 外部执行之间的边界；
 - mutation 故障对账、`ambiguous` 和显式裁决流程。
 
 完成条件：在所有故障注入点都不会并行 mutation、自动重放不确定 mutation 或提前释放 lease；后续 mutation 在前一个 attempt 得到权威裁决前始终被阻止。
@@ -759,7 +829,7 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 - 环、不可达节点和不可达 terminal；
 - ready-node 稳定排序；
 - 每个合法和非法状态转换；
-- `gate` 和 `terminal` 只由 Core Condition Evaluator 求值，Host 提交对应控制结果会被拒绝；
+- `gate` 和 `terminal` 只由 Pure Core Condition Evaluator 求值，Host 提交对应控制结果会被拒绝；
 - attempt 上限；
 - `task_binding_token` 唯一性和错误任务绑定令牌拒绝；
 - bind 前 attempt 可持久化且不要求 ExecutionHandle；bind 后 thread ID 非空且不可变；
@@ -778,14 +848,22 @@ MVP 不包含 child workflow。Agent 可以在自己的 task 内拆分步骤，�
 - 每个 Agent attempt 对应独立 Codex task；
 - 缺失或非法 verifier check spec 在创建 RunState 前被拒绝；
 - Agent task-local 自检不能替代 Config 声明的正式 Verifier；
-- 只有 Store 模块能够创建 SQLite connection、执行 SQL 或取得数据库路径；
+- 只有 `adapters/store/sqlite/` 能够导入 `sqlite3`、创建 connection 或执行 SQL；`bootstrap.py` 只能为装配传递私有数据库路径，其他组件不得取得该路径；
+- SQLite row codec 会拒绝损坏、未知版本或非法状态的 row，不把原始 row 传入 Application；
 - MCP Schema、Task Contract、NodeDispatch、inspect 和错误响应都不会泄露数据库路径或内部 Store 标识；
 - SQLite 状态目录位于所有 Codex workspace 外且不对总控任务、Agent task 或 Host Adapter 暴露，隔离验证失败时在 attempt 和 lease 创建前进入 `blocked`；
 - Host binding 的 identity、workspace 和隔离 snapshot/hash 在 Run 中不可变，恢复时不一致会阻止派发；
-- MCP、Host Adapter、Scheduler、Codex task 和其他 Core 模块不能绕过 Query Service/StateCommitter 访问 Store；
+- `core/` 不导入 `application/` 或 `adapters/`，Application 不导入具体 Adapter，MCP/CLI Adapter 和 Codex task 不能绕过 Query Service/StateCommitter 访问 SQLite Adapter；
+- `protocol/` 不导入任何内层或 Adapter，Host Adapter 只能导入相同的版本化 wire Contract 与外部 API，不能导入 Core、Application、Inbound 或 Store Adapter；
+- Service `bootstrap.py` 与 `adapters/host/main.py` 分别装配并启动 Service 和 Host，二者不会互相导入具体实现；
+- Query Service 只获得只读 Port，不能提交状态或返回原始 SQLite row；
+- `graphx_next` 的 scheduling decision、attempt/dispatch intent、可选 lease 和 NodeState 更新在同一 transaction 中完成，任一步失败都完整回滚；
+- MCP handler 只负责 Schema 与错误映射，不直接调用 Scheduler、Condition Evaluator 或 SQLite Adapter；
+- Task Contract 由 Application 规范化并冻结，Host 传输时增删或改写字段会被拒绝；
+- workspace revision provider 位于 Host Adapter，Pure Core 只比较显式 policy 与已校验 revision value；
 - Verification Evidence 的 check ID/hash 和 workspace revision 绑定，以及 stale evidence 拒绝；
 - tracked 修改、删除和权威 untracked 新文件会改变 revision，派生索引变化不会；
-- 通用 Command Node 失败会阻止其依赖节点，且 Core 不包含外部工具专属逻辑。
+- 通用 Command Node 失败会阻止其依赖节点，且 Pure Core 不包含外部工具专属逻辑。
 
 发布门禁：
 

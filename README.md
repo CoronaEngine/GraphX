@@ -81,7 +81,7 @@ The initial implementation uses:
 - standard-library SQLite;
 - a Python MCP server and a Codex Skill.
 
-Core code forbids unvalidated `Any`, unsafe casts, arbitrary evaluation, dynamic Runner imports, mutable IR, and direct database writes outside the Store.
+The Python package is split into pure `core`, use-case-oriented `application`, dependency-neutral wire `protocol`, and external `adapters`. Service dependencies point inward; Core performs no I/O, Application does not import concrete adapters, the external Host depends only on versioned protocol contracts, and only the SQLite adapter opens connections or executes SQL.
 
 ## Initial node types
 
