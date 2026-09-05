@@ -64,6 +64,15 @@ Windows 使用 `.venv\Scripts\python.exe` 替代 `.venv/bin/python`。
 
 原生 pytest 始终可用，CI 可直接使用它，无需中文报告入口。
 
+## 三平台 CI
+
+[GitHub Actions CI](https://github.com/CoronaEngine/GraphX/actions/workflows/ci.yml)
+在推送到 `main`、创建或更新 Pull Request、手动触发时运行。
+Linux、macOS 和 Windows 分别创建 Python 3.12 虚拟环境、安装 `.[dev]`，
+执行 Pyright strict、Ruff、格式检查，再通过根目录 `run_tests.py` 执行全部测试。
+各平台独立执行，单个平台失败不会取消其他平台的检查；同一分支的新运行会取消旧运行。
+CI 显式使用 UTF-8，确保 Windows 上的中文报告与子进程输出可正确解析。
+
 ## 新增测试
 
 - 按被测层放入 `unit/core`、`unit/protocol`、`unit/adapters` 或 `unit/architecture`。

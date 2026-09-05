@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: ${{ matrix.platform }} / Python 3.12
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux
+            os: ubuntu-latest
+            python: .venv/bin/python
+          - platform: macOS
+            os: macos-latest
+            python: .venv/bin/python
+          - platform: Windows
+            os: windows-latest
+            python: .venv/Scripts/python.exe
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Create project virtual environment
+        run: python -m venv .venv
+
+      - name: Install project and development dependencies
+        run: ${{ matrix.python }} -m pip install -e '.[dev]'
+
+      - name: Check types
+        run: ${{ matrix.python }} -m pyright
+
+      - name: Lint
+        run: ${{ matrix.python }} -m ruff check .
+
+      - name: Check formatting
+        run: ${{ matrix.python }} -m ruff format --check .
+
+      - name: Run all tests through the one-click entry point
+        run: python run_tests.py
