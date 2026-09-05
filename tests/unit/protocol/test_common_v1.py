@@ -32,6 +32,7 @@ def valid_probe() -> dict[str, object]:
 
 
 def test_plan_4_4_strict_wire_model_is_closed_and_frozen() -> None:
+    """协议模型拒绝未知字段和创建后的字段修改。"""
     probe = CommonProbe.model_validate(valid_probe())
 
     with pytest.raises(ValidationError, match="frozen"):
@@ -52,8 +53,19 @@ def test_plan_4_4_strict_wire_model_is_closed_and_frozen() -> None:
         ("idempotency_key", "contains\x00nul"),
         ("diagnostics", "x" * 65_537),
     ],
+    ids=[
+        "unknown-version",
+        "boolean-version",
+        "uppercase-digest",
+        "short-digest",
+        "empty-id",
+        "non-nfc-id",
+        "nul-idempotency-key",
+        "diagnostics-too-long",
+    ],
 )
 def test_plan_4_4_common_wire_types_reject_invalid_values(field: str, value: object) -> None:
+    """公共协议字段拒绝非法版本、标识和超长诊断。"""
     candidate = valid_probe()
     candidate[field] = value
 
@@ -62,6 +74,7 @@ def test_plan_4_4_common_wire_types_reject_invalid_values(field: str, value: obj
 
 
 def test_plan_4_4_diagnostic_limit_counts_utf8_bytes() -> None:
+    """诊断文本按 UTF-8 字节数执行长度边界检查。"""
     candidate = valid_probe()
     candidate["diagnostics"] = "é" * 32_768
 

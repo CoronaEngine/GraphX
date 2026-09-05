@@ -27,6 +27,7 @@ HOST = HostPrincipal(PrincipalId("host-principal-1"), HostId("host-1"), "capabil
     ],
 )
 def test_auth_01_controller_operations_are_closed(operation: McpOperationV1) -> None:
+    """Controller 操作允许总控调用，并拒绝 Host 越权。"""
     assert authorize(CONTROLLER, operation) is AuthorizationDecision.ALLOWED
     assert authorize(HOST, operation) is AuthorizationDecision.FORBIDDEN
 
@@ -44,11 +45,13 @@ def test_auth_01_controller_operations_are_closed(operation: McpOperationV1) -> 
     ],
 )
 def test_auth_01_host_operations_are_closed(operation: McpOperationV1) -> None:
+    """Host 操作允许宿主调用，并拒绝 Controller 越权。"""
     assert authorize(HOST, operation) is AuthorizationDecision.ALLOWED
     assert authorize(CONTROLLER, operation) is AuthorizationDecision.FORBIDDEN
 
 
 def test_auth_01_resolve_mutation_authority_depends_on_action() -> None:
+    """Mutation 处置按具体动作校验调用者权限。"""
     assert (
         authorize(
             CONTROLLER,

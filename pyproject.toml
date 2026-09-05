@@ -27,7 +27,7 @@ packages = ["src/graphx"]
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
-include = ["src", "tests"]
+include = ["src", "tests", "run_tests.py"]
 venvPath = "."
 venv = ".venv"
 
@@ -37,8 +37,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# Chinese scenario descriptions and reports intentionally use Chinese punctuation.
+allowed-confusables = ["，", "：", "；"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-config", "--strict-markers"]
-

@@ -108,6 +108,7 @@ def make_run_state(
 
 
 def test_state_01_runtime_records_are_frozen() -> None:
+    """派发预留记录创建后不可修改。"""
     reservation = make_reservation()
 
     with pytest.raises(FrozenInstanceError):
@@ -115,6 +116,7 @@ def test_state_01_runtime_records_are_frozen() -> None:
 
 
 def test_state_01_node_and_run_state_enums_are_closed() -> None:
+    """节点状态和运行状态限定在已声明集合内。"""
     assert {state.value for state in NodeState} == {
         "pending",
         "ready",
@@ -155,6 +157,7 @@ def test_state_01_node_and_run_state_enums_are_closed() -> None:
 def test_outcome_01_accepts_only_legal_status_outcome_combinations(
     status: RunStatus, outcome: WorkflowOutcome | None
 ) -> None:
+    """运行状态接受合法的业务结果组合。"""
     assert make_run_state(status=status, outcome=outcome).outcome is outcome
 
 
@@ -170,16 +173,19 @@ def test_outcome_01_accepts_only_legal_status_outcome_combinations(
 def test_outcome_01_rejects_illegal_status_outcome_combinations(
     status: RunStatus, outcome: WorkflowOutcome | None
 ) -> None:
+    """运行状态拒绝矛盾或缺失的业务结果。"""
     with pytest.raises(InvalidRunAggregate, match="outcome"):
         make_run_state(status=status, outcome=outcome)
 
 
 def test_state_01_rejects_verifying_as_a_stable_node_state() -> None:
+    """verifying 不能作为稳定节点状态保存。"""
     with pytest.raises(InvalidRunAggregate, match="verifying"):
         make_run_state(node_state=NodeState.VERIFYING)
 
 
 def test_outcome_01_terminal_run_rejects_active_slot_operation_or_lease() -> None:
+    """终态运行不能遗留活跃执行、外部操作或 mutation lease。"""
     owner = AgentAttemptOwner(ATTEMPT_ID)
     slot = ActiveExecutionSlot(RUN_ID, owner)
     operation = ExternalOperation(
@@ -218,6 +224,7 @@ def test_outcome_01_terminal_run_rejects_active_slot_operation_or_lease() -> Non
 
 
 def test_task_01_agent_attempt_requires_exactly_one_execution_handle() -> None:
+    """Agent attempt 缺少执行 handle 时被拒绝。"""
     attempt = AgentAttempt(ATTEMPT_ID, RESERVATION_ID, RUN_ID, NODE_ID, 1)
 
     with pytest.raises(InvalidRunAggregate, match="ExecutionHandle"):
@@ -225,6 +232,7 @@ def test_task_01_agent_attempt_requires_exactly_one_execution_handle() -> None:
 
 
 def test_task_01_agent_attempt_rejects_multiple_activations() -> None:
+    """同一个 Agent attempt 不能重复激活合同。"""
     attempt = AgentAttempt(ATTEMPT_ID, RESERVATION_ID, RUN_ID, NODE_ID, 1)
     handle = ExecutionHandle(
         reservation_id=RESERVATION_ID,
@@ -262,6 +270,7 @@ def test_task_01_agent_attempt_rejects_multiple_activations() -> None:
 
 
 def test_state_01_cancellation_intent_is_an_immutable_record() -> None:
+    """取消意图记录保存对应的运行标识。"""
     intent = CancellationIntent("cancel-1", RUN_ID, "controller-1", NOW)
 
     assert intent.run_id == RUN_ID

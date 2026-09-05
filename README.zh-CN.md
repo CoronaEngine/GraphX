@@ -16,6 +16,31 @@ GraphX Phase 1（语义冻结与 Python 工程骨架）已经实现。仓库现�
 
 [plan.md](plan.md) 仍是产品范围、执行语义、实施顺序和发布门禁的唯一权威。Phase 1 的详细施工记录提供[英文版](docs/superpowers/plans/2026-09-05-phase-1-semantics-and-scaffold.md)和[中文版](docs/superpowers/plans/2026-09-05-phase-1-semantics-and-scaffold.zh-CN.md)。
 
+## 手动运行测试
+
+**VS Code 一键运行：**打开根目录的 [run_tests.py](run_tests.py)，点击右上角的“运行 Python 文件”按钮。入口自动使用项目 `.venv`，无需手动激活环境或切换目录，运行结果显示在终端。
+
+在仓库根目录运行：
+
+```bash
+.venv/bin/python tests/run_tests.py
+```
+
+入口按文件分组，显示中文场景、简短参数名、PASS/FAIL、耗时和中文汇总。失败时保留 pytest 的断言详情、堆栈和退出码。
+
+```bash
+# 只运行 Phase 1 验收
+.venv/bin/python tests/run_tests.py tests/unit/test_phase1_acceptance.py
+
+# 按测试名称或参数名筛选
+.venv/bin/python tests/run_tests.py -k task-too-long
+
+# 原生 pytest 简洁模式
+.venv/bin/python -m pytest -q
+```
+
+首次安装依赖、完整质量检查及新增用例约定见 [tests/README.md](tests/README.md)。激活虚拟环境后，也可直接使用 `python tests/run_tests.py`。目前测试验证 Phase 1 模型、协议和架构约束；完整工作流执行按后续阶段实现。
+
 ## GraphX 做什么
 
 GraphX 负责：

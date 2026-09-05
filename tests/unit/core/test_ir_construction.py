@@ -17,6 +17,7 @@ from graphx.core.ir.models import (
 
 
 def test_ctrl_03_workflow_ir_rejects_construction_without_compiler_token() -> None:
+    """缺少 Compiler token 时不能构造 Workflow IR。"""
     with pytest.raises(TypeError):
         WorkflowIR(  # type: ignore[call-arg]
             workflow_id=WorkflowId("workflow"),
@@ -30,6 +31,7 @@ def test_ctrl_03_workflow_ir_rejects_construction_without_compiler_token() -> No
 
 
 def test_ctrl_03_compiler_token_constructs_a_frozen_ir_snapshot() -> None:
+    """使用 Compiler token 构造的 IR 快照不可修改。"""
     node = IRNode(NodeId("done"), IRNodeKind.TERMINAL, (), None)
     ir = WorkflowIR(
         _COMPILER_TOKEN,

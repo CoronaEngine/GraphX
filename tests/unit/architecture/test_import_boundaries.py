@@ -64,6 +64,7 @@ def _boundary_violation(record: ImportRecord) -> str | None:
 
 
 def test_plan_10_4_package_skeleton_exists() -> None:
+    """工程骨架包含 Service 与 Host 的独立入口。"""
     required_files = {
         REPOSITORY_ROOT / "pyproject.toml",
         GRAPHX_ROOT / "__init__.py",
@@ -74,6 +75,7 @@ def test_plan_10_4_package_skeleton_exists() -> None:
 
 
 def test_plan_10_4_layer_imports_follow_dependency_direction() -> None:
+    """源码导入遵守从外层指向内层的依赖边界。"""
     violations = tuple(
         f"{_module_name(record.importer)} imports {record.imported_module}: {reason}"
         for record in _graphx_imports(GRAPHX_ROOT)
@@ -83,6 +85,7 @@ def test_plan_10_4_layer_imports_follow_dependency_direction() -> None:
 
 
 def test_plan_10_4_protocol_may_import_a_protocol_sibling() -> None:
+    """Protocol 允许引用同层协议模块。"""
     record = ImportRecord(GRAPHX_ROOT / "protocol" / "workflow_v1.py", "graphx.protocol.common_v1")
 
     assert _boundary_violation(record) is None
@@ -101,12 +104,14 @@ def test_plan_10_4_protocol_may_import_a_protocol_sibling() -> None:
 def test_plan_10_4_guard_detects_each_forbidden_dependency(
     relative_importer: str, imported_module: str
 ) -> None:
+    """架构守卫识别各类禁止的跨层依赖。"""
     record = ImportRecord(SOURCE_ROOT / relative_importer, imported_module)
 
     assert _boundary_violation(record) is not None
 
 
 def test_plan_10_4_only_sqlite_adapter_imports_sqlite3() -> None:
+    """只有 SQLite Adapter 可以导入 sqlite3。"""
     offenders = tuple(
         _module_name(record.importer)
         for record in _graphx_imports(GRAPHX_ROOT)

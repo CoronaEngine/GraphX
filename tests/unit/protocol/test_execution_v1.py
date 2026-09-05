@@ -65,6 +65,7 @@ def agent_result(outcome: str = "completed") -> JsonObject:
 
 
 def test_auth_01_agent_completion_rejects_host_only_fields() -> None:
+    """Agent 完成结果不能伪造 Host 专属字段。"""
     for forbidden in (
         "hostId",
         "provider",
@@ -77,11 +78,13 @@ def test_auth_01_agent_completion_rejects_host_only_fields() -> None:
 
 
 def test_auth_01_public_host_observation_rejects_host_id() -> None:
+    """公开 Host 观测载荷不能自行指定 Host 身份。"""
     with pytest.raises(ValidationError):
         HostObservationEnvelopeV1.model_validate({**host_observation(), "hostId": "forged"})
 
 
 def test_result_01_accepts_completed_agent_result() -> None:
+    """身份和观测完整的 Agent 完成结果通过校验。"""
     parsed = NodeResultV1Adapter.validate_python(agent_result())
 
     assert parsed.kind == "agent"
@@ -90,6 +93,7 @@ def test_result_01_accepts_completed_agent_result() -> None:
 
 @pytest.mark.parametrize("outcome", ["execution_failed", "precondition_blocked", "cancelled"])
 def test_result_01_noncompleted_agent_result_rejects_outputs(outcome: str) -> None:
+    """未完成的 Agent 结果不能携带成功输出。"""
     payload = agent_result(outcome)
     agent_completion = payload["agentCompletion"]
     assert isinstance(agent_completion, dict)
@@ -101,6 +105,7 @@ def test_result_01_noncompleted_agent_result_rejects_outputs(outcome: str) -> No
 
 @pytest.mark.parametrize("disposition", ["running", "unknown"])
 def test_result_01_node_result_rejects_nonterminal_disposition(disposition: str) -> None:
+    """节点结果拒绝仍运行或处置未知的外部执行。"""
     payload = agent_result()
     payload["hostObservation"] = host_observation(disposition)
 
@@ -109,6 +114,7 @@ def test_result_01_node_result_rejects_nonterminal_disposition(disposition: str)
 
 
 def test_result_01_completed_result_requires_succeeded_disposition() -> None:
+    """完成结果必须对应成功的外部执行观测。"""
     payload = agent_result()
     payload["hostObservation"] = host_observation("failed")
 
@@ -117,6 +123,7 @@ def test_result_01_completed_result_requires_succeeded_disposition() -> None:
 
 
 def test_rev_01_verification_evidence_requires_complete_identity() -> None:
+    """验证证据必须包含绑定执行的身份字段。"""
     evidence = {
         "runId": "run-1",
         "nodeId": "verify",
@@ -143,6 +150,7 @@ def test_rev_01_verification_evidence_requires_complete_identity() -> None:
 
 
 def test_result_01_rejects_payload_larger_than_one_mib() -> None:
+    """节点结果超过 1 MiB 时被拒绝。"""
     payload = agent_result()
     payload["agentCompletion"] = completion({"summary": "x" * 1_048_576})
 

@@ -16,6 +16,31 @@ GraphX Phase 1 (semantic freeze and Python project skeleton) is implemented. The
 
 [plan.md](plan.md) remains the single authority for product scope, execution semantics, implementation order, and release gates. The detailed Phase 1 construction record is available in [English](docs/superpowers/plans/2026-09-05-phase-1-semantics-and-scaffold.md) and [Chinese](docs/superpowers/plans/2026-09-05-phase-1-semantics-and-scaffold.zh-CN.md).
 
+## Running tests
+
+**One click in VS Code:** open the root [run_tests.py](run_tests.py) and click **Run Python File**. It uses the project's `.venv` automatically and shows the results in the terminal, without requiring manual environment activation or directory changes.
+
+From the repository root:
+
+```bash
+.venv/bin/python tests/run_tests.py
+```
+
+The entry point groups tests by file and shows Chinese scenario descriptions, short parameter IDs, outcomes, timings, and a summary. Pytest still owns execution, failure details, tracebacks, and exit codes.
+
+```bash
+# Phase 1 acceptance only
+.venv/bin/python tests/run_tests.py tests/unit/test_phase1_acceptance.py
+
+# Select a test or parameter by name
+.venv/bin/python tests/run_tests.py -k task-too-long
+
+# Standard pytest output
+.venv/bin/python -m pytest -q
+```
+
+See [tests/README.md](tests/README.md) for setup, quality checks, and test conventions. After activating the virtual environment, `python tests/run_tests.py` also works. Current tests cover Phase 1 models, protocols, and architecture; full workflow execution follows in later phases.
+
 ## What GraphX does
 
 GraphX:

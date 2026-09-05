@@ -38,6 +38,7 @@ def _golden_vectors() -> GoldenVectors:
 
 
 def test_canon_01_matches_checked_in_golden_vectors() -> None:
+    """规范 JSON 字节与摘要匹配固定 golden vectors。"""
     fixture = _golden_vectors()
 
     assert fixture.profile == "graphx-canonical-json-v1"
@@ -48,6 +49,7 @@ def test_canon_01_matches_checked_in_golden_vectors() -> None:
 
 
 def test_canon_01_preserves_array_order_and_json_scalar_spelling() -> None:
+    """规范 JSON 保留数组顺序和标准标量表示。"""
     value = (True, False, None, -7, "line\nfeed")
 
     assert canonical_json_bytes(value) == b'[true,false,null,-7,"line\\nfeed"]'
@@ -55,11 +57,13 @@ def test_canon_01_preserves_array_order_and_json_scalar_spelling() -> None:
 
 @pytest.mark.parametrize("value", [-(2**63), 2**63 - 1])
 def test_canon_01_accepts_signed_64_bit_boundaries(value: int) -> None:
+    """规范 JSON 接受有符号 64 位整数的两个边界。"""
     assert canonical_json_bytes(value) == str(value).encode("ascii")
 
 
 @pytest.mark.parametrize("value", [-(2**63) - 1, 2**63])
 def test_canon_01_rejects_integer_outside_signed_64_bit(value: int) -> None:
+    """规范 JSON 拒绝超出有符号 64 位范围的整数。"""
     with pytest.raises(CanonicalizationError, match="signed 64-bit"):
         canonical_json_bytes(value)
 
@@ -75,10 +79,12 @@ def test_canon_01_rejects_integer_outside_signed_64_bit(value: int) -> None:
     ],
 )
 def test_canon_01_rejects_values_outside_the_closed_profile(value: object, message: str) -> None:
+    """规范 JSON 拒绝非法类型、Unicode 和对象键。"""
     with pytest.raises(CanonicalizationError, match=message):
         canonical_json_bytes(value)
 
 
 def test_canon_01_rejects_unknown_digest_domain() -> None:
+    """摘要计算拒绝未知 domain。"""
     with pytest.raises(CanonicalizationError, match="digest domain"):
         domain_digest("graphx-unknown-v1", {})
