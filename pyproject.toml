@@ -28,6 +28,7 @@ packages = ["src/graphx"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 include = ["src", "tests", "run_tests.py"]
+extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
 
